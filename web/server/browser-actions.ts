@@ -1,4 +1,5 @@
 import { worktreeAction } from './worktree-actions.ts';
+import { copyAction, copyReadActions } from './copy-actions.ts';
 import { publicId } from './herdr.ts';
 import { ManagementError } from './machine-management.ts';
 
@@ -8,6 +9,7 @@ const text = (value: unknown, max = 256): string => {
 };
 export function browserAction(value: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
   const method = String(value.action);
+  if (copyReadActions.has(method) || method === 'pane.scroll') return copyAction(value);
   if (method.startsWith('worktree.')) return worktreeAction(value);
   const id = () => publicId(value.id);
   switch (method) {

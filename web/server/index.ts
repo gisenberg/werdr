@@ -16,6 +16,7 @@ import { Fleet } from './fleet.ts';
 import { MachineManagement, ManagementError } from './machine-management.ts';
 import { browserLayout } from './layout.ts';
 import { browserAction } from './browser-actions.ts';
+import { copyContext, copyReadActions } from './copy-actions.ts';
 import { pluginAction } from './plugin-actions.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
@@ -161,6 +162,7 @@ const handler: RequestListener = async (req, res) => {
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req);
+        if (value.action === 'pane.copy_context') return reply(res, 200, await fleet.action(publicId(value.machine), request => copyContext(value, request)));
         if (typeof value.action === 'string' && value.action.startsWith('plugin.')) {
           const machine = publicId(value.machine);
           const read = ['plugin.list', 'plugin.action.list', 'plugin.log.list'].includes(value.action);
@@ -171,7 +173,7 @@ const handler: RequestListener = async (req, res) => {
         }
         const { method, params } = browserAction(value);
         const machine = publicId(value.machine);
-        const read = ['worktree.list', 'integration.list'].includes(method);
+        const read = copyReadActions.has(method) || ['worktree.list', 'integration.list'].includes(method);
         return reply(res, 200, read ? await fleet.request(machine, method, params, false) : await fleet.action(machine, request => request(method, params)));
       }
       return reply(res, 404, { error: 'Unknown route' });
