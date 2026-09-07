@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { consoleInput } from './console-helpers';
 import { fixture } from './fixture';
 import { WebSocket } from 'ws';
 
@@ -9,9 +10,8 @@ test.afterAll(async () => { await runtime?.close(); });
 test('configured DNS alias supports login and terminal WebSockets without broadening origins', async ({ page, request }) => {
   const alias = runtime.url.replace('127.0.0.1', 'localhost');
   await page.goto(alias);
-  await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
-  await expect(page.locator('#login')).not.toBeVisible();
+  await consoleInput(page, 'token', runtime.token);
+  await expect(page.locator('#boot')).not.toBeVisible();
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await expect(page.locator('#shield')).toBeHidden();
   const snapshot = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot;
@@ -25,16 +25,15 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   expect((await request.get(`${runtime.url}/api/machines`)).status()).toBe(401);
   expect((await request.post(`${runtime.url}/api/login`, { headers: { Origin: 'https://untrusted.invalid' }, data: { token: runtime.token } })).status()).toBe(403);
   await page.goto(runtime.url);
-  await expect(page.locator('#login')).toBeVisible();
-  await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
-  await expect(page.locator('#login')).not.toBeVisible();
+  await expect(page.locator('#boot')).toBeVisible();
+  await consoleInput(page, 'token', runtime.token);
+  await expect(page.locator('#boot')).not.toBeVisible();
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await expect(page.locator('#shield')).toBeHidden();
   const initial = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot;
   const pane = initial.panes[0].pane_id;
   const terminalId = initial.panes[0].terminal_id;
-  await page.locator('textarea').focus();
+  await page.locator('#terminal textarea').focus();
   await page.keyboard.type("export WERDR_TEST_VALUE=alive; printf 'WERDR_%s\\n' LIVE_OK");
   await page.keyboard.press('Enter');
   await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('WERDR_LIVE_OK');
@@ -42,7 +41,7 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('UNICODE_羊🐑');
   await page.reload();
   await expect(page.locator('#shield')).toBeHidden();
-  await page.locator('textarea').focus();
+  await page.locator('#terminal textarea').focus();
   await page.keyboard.type('printf "STATE_%s\\n" "$WERDR_TEST_VALUE"'); await page.keyboard.press('Enter');
   await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('STATE_alive');
   await page.getByRole('button', { name: '[|] SPLIT', exact: true }).click();
@@ -58,12 +57,11 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await page.screenshot({ path: 'test-results/mobile.png' });
   await runtime.restartGateway();
   await page.reload();
-  await expect(page.locator('#login')).toBeVisible();
-  await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
+  await expect(page.locator('#boot')).toBeVisible();
+  await consoleInput(page, 'token', runtime.token);
   await expect(page.locator('#shield')).toBeHidden();
   expect(JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.find((p: any) => p.pane_id === pane).terminal_id).toBe(terminalId);
-  await page.locator('textarea').focus(); await page.keyboard.type('printf "AFTER_%s\\n" "$WERDR_TEST_VALUE"'); await page.keyboard.press('Enter');
+  await page.locator('#terminal textarea').focus(); await page.keyboard.type('printf "AFTER_%s\\n" "$WERDR_TEST_VALUE"'); await page.keyboard.press('Enter');
   await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('AFTER_alive');
   expect(errors).toEqual([]);
 });

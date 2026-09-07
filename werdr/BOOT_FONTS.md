@@ -1,7 +1,9 @@
 # Boot-screen fonts
 
 The startup and authentication console share one randomly selected machine profile, palette, and font.
-DOM-backed username, password, and token inputs retain native keyboard, autofill, paste, and accessibility support.
+Boot text and authentication prompts write into the same Ghostty terminal, using the wmux input scheme.
+Rows, columns, font size, and canvas geometry remain fixed through the authentication transition; only an actual browser viewport change adjusts the outer display scale.
+The terminal's hidden textarea handles keyboard and paste input, with input-assistance attributes matching wmux and accessible prompt labels.
 Authentication proceeds through username, password, verification, and access-granted prompts without leaving that console.
 Secret characters are not echoed, and failed login or sign-out clears them.
 

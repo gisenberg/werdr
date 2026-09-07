@@ -8,6 +8,7 @@ The upstream herdr runtime remains Apache-2.0-licensed under the repository root
 `src/wmux/retro-boot-profiles.ts` and `src/wmux/retro-boot-audio.ts` were copied from wmux commit `5dd1affd1230479ac36519f77811dc64aeaaf80f`.
 Their original MIT notice is retained in `src/wmux/LICENSE`.
 The UI adapts selected profile text and authentication prompts at display time.
+The terminal-backed authentication flow in `src/boot.ts` adapts wmux's `RetroBootScreen.tsx` and terminal input configuration under the same retained MIT notice.
 
 ## Ghostty browser fork
 

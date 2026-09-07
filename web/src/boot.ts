@@ -1,25 +1,33 @@
+import type { Terminal } from 'ghostty-web';
+import { loadGhostty } from './terminal-loader';
 import { RETRO_BOOT_PROFILES } from './wmux/retro-boot-profiles';
 import './boot-fonts.css';
 
 const profiles = RETRO_BOOT_PROFILES.filter(p => ['commodore-64', 'apple-iie', 'ibm-pc-at'].includes(p.id));
 type Login = { username: string; password: string } | { token: string };
+type Stage = 'boot' | 'username' | 'password' | 'token' | 'submitting' | 'ready';
 
+// Like wmux, boot and authentication write to one fixed-grid Ghostty terminal.
 export class BootConsole {
   readonly screen = document.createElement('dialog');
   readonly profile;
   readonly ready: Promise<void>;
   private readonly frame = document.createElement('div');
-  private readonly output = document.createElement('pre');
-  private readonly form = document.createElement('form');
-  private readonly query = <T extends HTMLElement = HTMLElement>(id: string) => this.form.querySelector<T>(`#${id}`)!;
+  private readonly host = document.createElement('div');
+  private readonly transcript = document.createElement('div');
+  private readonly error = document.createElement('div');
+  private readonly switchMode = document.createElement('button');
   private readonly observer: ResizeObserver;
-  private booting = true;
-  private skipBoot!: () => void;
+  private terminal?: Terminal;
+  private stage: Stage = 'boot';
   private passwordEnabled = false;
   private passwordMode = false;
-  private stage: 'username' | 'password' | 'token' | 'submitting' = 'token';
+  private username = '';
+  private input = '';
+  private previousCR = false;
   private challenge = false;
-  private disposed = false;
+  private booting = true;
+  private skipBoot!: () => void;
 
   constructor(private readonly login: (value: Login) => Promise<void>, private readonly onAuthenticated: () => Promise<void>) {
     let previous: string | null = null;
@@ -34,149 +42,134 @@ export class BootConsole {
     this.screen.style.setProperty('--boot-background', this.profile.colors.background);
     this.screen.style.setProperty('--boot-foreground', this.profile.colors.foreground);
     this.screen.style.fontFamily = this.profile.fontFamily;
-    this.frame.id = 'boot-frame'; this.output.id = 'boot-output'; this.output.setAttribute('aria-hidden', 'true');
-    this.form.id = 'login'; this.form.hidden = true;
-    this.form.innerHTML = `<div id="login-status" role="status"></div>
-<div id="credentials" hidden><label id="username-field"><span id="username-prompt"></span><input id="username" aria-label="Username" autocomplete="username" maxlength="256" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
-<label id="password-field" hidden><span id="password-prompt"></span><input id="password" aria-label="Password" type="password" autocomplete="current-password" maxlength="4096" enterkeyhint="go"></label></div>
-<label id="token-field"><span>ACCESS TOKEN&gt; </span><input id="token" aria-label="Access token" type="password" autocomplete="off" maxlength="4096" enterkeyhint="go"></label>
-<div id="login-error" role="alert"></div><div class="console-actions"><button type="submit" id="login-submit">[ENTER]</button><button id="login-mode" type="button" hidden>USE ACCESS TOKEN</button></div>`;
-    this.query('username-prompt').textContent = this.profile.auth.usernamePrompt;
-    this.query('password-prompt').textContent = this.profile.auth.passwordPrompt;
-    this.frame.append(this.output, this.form); this.screen.append(this.frame); document.body.append(this.screen);
-    this.screen.showModal();
+    this.frame.id = 'boot-frame'; this.host.id = 'boot-terminal';
+    this.transcript.id = 'boot-output'; this.transcript.className = 'sr-only';
+    this.error.id = 'login-error'; this.error.className = 'sr-only'; this.error.setAttribute('role', 'alert');
+    this.switchMode.id = 'login-mode'; this.switchMode.hidden = true;
+    this.switchMode.onclick = () => {
+      if (this.stage === 'submitting') return;
+      this.passwordMode = !this.passwordMode; this.write('\n'); this.prompt();
+    };
+    this.frame.append(this.host); this.screen.append(this.frame, this.transcript, this.error, this.switchMode);
+    document.body.append(this.screen); this.screen.showModal();
     this.screen.addEventListener('cancel', event => { event.preventDefault(); if (this.booting) this.skipBoot(); });
-    this.screen.addEventListener('click', () => { if (this.booting) this.skipBoot(); });
-    this.screen.addEventListener('keydown', event => {
-      if (this.booting) { event.preventDefault(); this.skipBoot(); }
+    this.screen.addEventListener('click', event => {
+      if (this.booting) this.skipBoot();
+      else if (event.target !== this.switchMode) this.terminal?.focus();
     });
-    this.query('login-mode').onclick = () => this.setMode(!this.passwordMode);
-    this.form.onsubmit = event => { event.preventDefault(); void this.submit(); };
-    this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(this.screen);
-    visualViewport?.addEventListener('resize', this.viewportChanged);
+    this.screen.addEventListener('keydown', event => { if (this.booting) { event.preventDefault(); this.skipBoot(); } }, true);
+    this.observer = new ResizeObserver(() => this.fitViewport()); this.observer.observe(this.screen);
     this.ready = this.animate();
   }
 
-  configure(passwordEnabled: boolean) {
-    this.passwordEnabled = passwordEnabled;
-    this.query('login-mode').hidden = !passwordEnabled;
-    this.setMode(passwordEnabled);
-  }
-
+  configure(passwordEnabled: boolean) { this.passwordEnabled = passwordEnabled; this.passwordMode = passwordEnabled; }
   requireAuthentication() {
+    const first = !this.challenge || !this.screen.open;
     this.challenge = true;
-    if (!this.screen.open) { this.screen.showModal(); this.setMode(this.passwordEnabled); }
-    if (!this.booting) this.showPrompt();
+    if (!this.screen.open) this.screen.showModal();
+    if (!this.booting && first) { this.write(this.profile.auth.required); this.prompt(); }
   }
-
   async complete() {
     if (!this.screen.open) return;
     await this.ready;
-    this.form.hidden = true;
-    this.write(this.challenge ? this.profile.auth.granted + this.profile.auth.ready : '\n' + this.profile.auth.ready);
-    this.resize();
+    this.setStage('ready'); this.clearSecrets(); this.switchMode.hidden = true;
+    await this.write(this.challenge ? this.profile.auth.granted + this.profile.auth.ready : '\n' + this.profile.auth.ready);
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise(resolve => setTimeout(resolve, 180));
-    this.screen.close(); this.clearSecrets(); this.challenge = false;
+    this.screen.close(); this.challenge = false;
   }
-
-  dispose() {
-    this.disposed = true; this.skipBoot(); this.clearSecrets();
-    this.observer.disconnect(); visualViewport?.removeEventListener('resize', this.viewportChanged); this.screen.remove();
+  private clearSecrets() { this.input = ''; this.username = ''; if (this.terminal?.textarea) this.terminal.textarea.value = ''; }
+  private setStage(stage: Stage) {
+    this.stage = stage; this.screen.dataset.stage = stage;
+    const textarea = this.terminal?.textarea;
+    if (textarea) {
+      textarea.setAttribute('aria-label', stage === 'username' ? 'Username' : stage === 'password' ? 'Password' : stage === 'token' ? 'Access token' : 'Console');
+      textarea.setAttribute('aria-describedby', 'boot-output');
+    }
   }
-
-  private readonly viewportChanged = () => { this.resize(); this.focusPrompt(); };
-  private clearSecrets() {
-    this.query<HTMLInputElement>('password').value = ''; this.query<HTMLInputElement>('token').value = '';
+  private prompt() {
+    this.clearSecrets(); this.previousCR = false;
+    this.setStage(this.passwordMode ? 'username' : 'token');
+    this.switchMode.hidden = !this.passwordEnabled;
+    this.switchMode.disabled = false;
+    this.switchMode.textContent = this.passwordMode ? 'USE ACCESS TOKEN' : 'USE USERNAME AND PASSWORD';
+    this.write(this.passwordMode ? this.profile.auth.usernamePrompt : 'ACCESS TOKEN> ');
+    this.terminal?.focus();
   }
-  private setMode(password: boolean) {
-    this.passwordMode = password; this.stage = password ? 'username' : 'token'; this.clearSecrets();
-    this.query<HTMLInputElement>('username').value = ''; this.query<HTMLInputElement>('username').readOnly = false;
-    this.query('credentials').hidden = !password; this.query('password-field').hidden = true;
-    this.query('token-field').hidden = password;
-    this.query<HTMLInputElement>('username').required = password;
-    this.query<HTMLInputElement>('password').required = false;
-    this.query<HTMLInputElement>('token').required = !password;
-    this.query('login-mode').textContent = password ? 'USE ACCESS TOKEN' : 'USE USERNAME AND PASSWORD';
-    this.query('login-error').textContent = '';
-    this.query('login-status').textContent = this.profile.auth.required.trim();
-    this.focusPrompt();
-  }
-  private showPrompt() {
-    this.form.hidden = false; this.screen.classList.add('authenticating'); this.resize(); this.focusPrompt();
-  }
-  private focusPrompt() {
-    if (this.form.hidden || !this.screen.open || this.stage === 'submitting') return;
-    this.query<HTMLInputElement>(this.stage).focus({ preventScroll: true });
-    this.frame.scrollTop = this.frame.scrollHeight;
+  private accept(data: string) {
+    if (!['username', 'password', 'token'].includes(this.stage) || data.includes('\x1b')) return;
+    for (const character of data) {
+      if (!['username', 'password', 'token'].includes(this.stage)) return;
+      if (character === '\r' || character === '\n') {
+        if (character === '\n' && this.previousCR) { this.previousCR = false; continue; }
+        this.previousCR = character === '\r';
+        this.write('\n');
+        if (this.stage === 'username') {
+          this.username = this.input; this.input = ''; this.setStage('password'); this.write(this.profile.auth.passwordPrompt);
+        } else void this.submit();
+      } else {
+        this.previousCR = false;
+        if (character === '\b' || character === '\x7f') {
+          if (this.input.length) { this.input = [...this.input].slice(0, -1).join(''); if (this.stage === 'username') this.write('\b \b'); }
+        } else if (character >= ' ' && this.input.length + character.length <= (this.stage === 'username' ? 256 : 4096)) {
+          this.input += character;
+          if (this.stage === 'username') this.write(character);
+        }
+      }
+    }
   }
   private async submit() {
-    if (this.stage === 'submitting') return;
-    if (this.stage === 'username') {
-      this.stage = 'password'; this.query<HTMLInputElement>('username').readOnly = true;
-      this.query('password-field').hidden = false; this.query<HTMLInputElement>('password').required = true;
-      this.focusPrompt(); return;
-    }
-    const value: Login = this.passwordMode
-      ? { username: this.query<HTMLInputElement>('username').value, password: this.query<HTMLInputElement>('password').value }
-      : { token: this.query<HTMLInputElement>('token').value };
-    this.stage = 'submitting'; this.clearSecrets();
-    this.query<HTMLButtonElement>('login-submit').disabled = true; this.query<HTMLButtonElement>('login-mode').disabled = true;
-    this.query('login-error').textContent = ''; this.query('login-status').textContent = this.profile.auth.verifying.trim();
-    try {
-      await this.login(value);
-      if (this.disposed) return;
-      await this.complete(); await this.onAuthenticated();
-    } catch (error) {
-      if (this.disposed) return;
-      this.setMode(this.passwordMode);
-      this.query('login-error').textContent = this.profile.auth.failed.trim() + '\n' + (error as Error).message;
-      this.focusPrompt();
-    } finally {
-      this.query<HTMLButtonElement>('login-submit').disabled = false; this.query<HTMLButtonElement>('login-mode').disabled = false;
+    const value: Login = this.passwordMode ? { username: this.username, password: this.input } : { token: this.input };
+    this.setStage('submitting'); this.clearSecrets(); this.switchMode.disabled = true; this.error.textContent = '';
+    await this.write(this.profile.auth.verifying);
+    try { await this.login(value); await this.complete(); await this.onAuthenticated(); }
+    catch (error) {
+      const message = (error as Error).message;
+      this.error.textContent = message;
+      await this.write(this.profile.auth.failed + message + '\n'); this.prompt();
     }
   }
-  private write(text: string, overwrite = false) {
-    if (overwrite) this.output.textContent = this.output.textContent!.slice(0, this.output.textContent!.lastIndexOf('\n') + 1);
-    this.output.textContent += text.replaceAll('WMUX', 'WERDR');
-    this.output.textContent = this.output.textContent.split('\n').slice(-this.profile.rows).join('\n');
-    this.frame.scrollTop = this.frame.scrollHeight;
+  private async write(text: string) {
+    if (!this.terminal) return;
+    await new Promise<void>(resolve => this.terminal!.write(text.replaceAll('WMUX', 'WERDR').replaceAll('\n', '\r\n'), resolve));
+    const buffer = this.terminal.buffer.active;
+    this.transcript.textContent = Array.from({ length: this.terminal.rows }, (_, row) => buffer.getLine(row)?.translateToString(true) || '').join('\n');
   }
-  private resize() {
+  private fitViewport() {
+    const metrics = this.terminal?.renderer?.getMetrics();
+    if (!metrics || !this.terminal) return;
+    // Viewport fitting never changes terminal cells or depends on authentication state.
     const width = Math.min(this.screen.clientWidth * .92, this.screen.clientHeight * .92 * 4 / 3);
-    if (this.screen.classList.contains('authenticating')) {
-      // Keep editable prompts readable when a phone keyboard consumes the viewport.
-      this.frame.style.width = `${Math.min(1104, this.screen.clientWidth * .92)}px`;
-      this.frame.style.height = `${this.screen.clientHeight * .92}px`;
-      this.frame.style.fontSize = `${this.screen.clientWidth <= 700 ? 16 : 20}px`;
-      this.frame.style.transform = 'none';
-      this.frame.scrollTop = this.frame.scrollHeight;
-    } else {
-      const fontSize = width * 3 / 4 / (this.profile.rows * 1.25);
-      this.frame.style.width = `${this.profile.columns}ch`; this.frame.style.height = `${this.profile.rows * 1.25}em`;
-      this.frame.style.fontSize = `${fontSize}px`; this.frame.style.transform = 'none';
-      const naturalWidth = this.frame.getBoundingClientRect().width;
-      this.frame.style.transform = `scaleX(${naturalWidth ? width / naturalWidth : 1})`;
-    }
+    const naturalWidth = metrics.width * this.terminal.cols, naturalHeight = metrics.height * this.terminal.rows;
+    this.frame.style.width = `${width}px`; this.frame.style.height = `${width * .75}px`;
+    this.host.style.width = `${naturalWidth}px`; this.host.style.height = `${naturalHeight}px`;
+    this.host.style.transform = `scale(${width / naturalWidth}, ${width * .75 / naturalHeight})`;
   }
   private async animate() {
     const dismissed = new Promise<void>(resolve => { this.skipBoot = resolve; });
-    // Bounded font loading prevents a missing optional private font from blocking sign-in.
-    await Promise.race([document.fonts.load(`400 16px ${this.profile.fontFamily}`).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]);
-    this.resize();
+    const [library] = await Promise.all([
+      loadGhostty(),
+      Promise.race([document.fonts.load(`400 16px ${this.profile.fontFamily}`).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]),
+    ]);
+    const terminal = new library.Terminal({ cols: this.profile.columns, rows: this.profile.rows,
+      fontSize: this.profile.fontSize.desktop, fontFamily: this.profile.fontFamily, scrollback: 0,
+      cursorBlink: true, cursorStyle: 'block', theme: { background: this.profile.colors.background, foreground: this.profile.colors.foreground,
+        cursor: this.profile.colors.foreground, cursorAccent: this.profile.colors.background } });
+    this.terminal = terminal; terminal.open(this.host); this.setStage('boot');
+    if (terminal.textarea) for (const [key, value] of Object.entries({ autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none', spellcheck: 'false', enterkeyhint: 'enter', 'aria-autocomplete': 'none', 'data-form-type': 'other', 'data-lpignore': 'true', 'data-gramm': 'false', 'data-ms-editor': 'false' })) terminal.textarea.setAttribute(key, value);
+    terminal.onData(data => this.accept(data)); this.fitViewport();
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    let skipped = false;
-    void dismissed.then(() => { skipped = true; });
-    const run = async () => {
-      for (const step of this.profile.boot) {
-        if (this.disposed || skipped) return;
-        if (step.clear) this.output.textContent = '';
-        this.write(step.text, step.overwrite);
-        if (!reduced) await new Promise(resolve => setTimeout(resolve, Math.min(step.delay, 160)));
-      }
-      if (!reduced) await new Promise(resolve => setTimeout(resolve, 300));
-    };
-    await Promise.race([run(), dismissed]);
+    let skipped = false; void dismissed.then(() => { skipped = true; });
+    for (const step of this.profile.boot) {
+      if (skipped) break;
+      if (step.clear) await this.write('\x1b[2J\x1b[H');
+      if (step.position) await this.write(`\x1b[${step.position.row};${step.position.column}H`);
+      if (step.overwrite) await this.write('\r\x1b[2K');
+      if (step.inverse) await this.write('\x1b[7m');
+      await this.write(step.text);
+      if (step.inverse) await this.write('\x1b[27m');
+      if (!reduced) await Promise.race([new Promise(resolve => setTimeout(resolve, Math.min(step.delay, 160))), dismissed]);
+    }
     this.booting = false;
-    if (this.challenge) this.showPrompt();
+    if (this.challenge) { await this.write(this.profile.auth.required); this.prompt(); }
   }
 }

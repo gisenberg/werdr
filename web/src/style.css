@@ -39,20 +39,12 @@ dialog button { width: 100%; color: #b6ef9c; }
 #boot { outline: none; position: fixed; inset: 0; width: 100vw; height: var(--viewport, 100dvh); max-width: none; max-height: none; margin: 0; border: 0; padding: 0; overflow: hidden; align-items: center; justify-content: center; background: var(--boot-border); color: var(--boot-foreground); font-synthesis: none; }
 #boot[open] { display: flex; }
 #boot::backdrop { background: #000; }
-#boot-frame { overflow: hidden; flex: none; background: var(--boot-background); line-height: 1.25; }
-#boot.authenticating #boot-frame { overflow: auto; padding: 1em; scrollbar-width: thin; scrollbar-color: var(--boot-foreground) var(--boot-background); }
-#boot pre { margin: 0; padding: 0; white-space: pre; font: inherit; }
-#boot.authenticating pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-#boot form { margin: 1em 0 0; }
-#boot label { display: flex; flex-wrap: wrap; align-items: baseline; margin: .5em 0; color: inherit; }
-#boot label span { white-space: pre; }
-#boot input { display: inline-block; flex: 1; min-width: 6ch; width: 6ch; padding: 0; margin: 0; border: 0; outline: none; font: inherit; background: transparent; color: inherit; caret-color: var(--boot-foreground); }
-#boot input[type=password] { color: transparent; }
-#boot input:focus-visible { box-shadow: 0 1px var(--boot-foreground); }
-#boot button { width: auto; border: 0; padding: .5em 0; font: inherit; background: transparent; color: inherit; }
-#boot button:focus-visible { outline: 1px solid var(--boot-foreground); }
-.console-actions { display: flex; flex-wrap: wrap; gap: 1em; margin-top: .5em; font-size: .75em; }
-#boot #login-error, #login-status { white-space: pre-wrap; color: inherit; margin: .5em 0; }
+#boot-frame { overflow: hidden; flex: none; position: relative; background: var(--boot-background); }
+#boot canvas { image-rendering: pixelated; }
+#boot-terminal { transform-origin: top left; overflow: hidden; }
+#boot #login-mode { position: absolute; bottom: 0; left: 4%; width: auto; padding: 6px 0; border: 0; font: 12px ui-monospace, monospace; background: transparent; color: inherit; }
+#boot #login-mode:focus-visible { outline: 1px solid var(--boot-foreground); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: pre; }
 #generated-token { font-size: 12px; }
 #token-error { color: #f4ac99; }
 #login-error { color: #f4ac99; }

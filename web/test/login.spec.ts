@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { WebSocket } from 'ws';
+import { consoleInput } from './console-helpers';
 import { fixture } from './fixture';
 let runtime: Awaited<ReturnType<typeof fixture>>;
 test.beforeAll(async () => { runtime = await fixture(true); });
@@ -11,7 +12,7 @@ test('startup fills desktop and mobile, changes profiles, and has no settings or
   expect(await page.locator('#boot').boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
   const first = await page.evaluate(() => localStorage.getItem('werdr-last-boot'));
   await page.screenshot({ path: 'test-results/boot-desktop.png' });
-  await expect(page.locator('#login')).toBeVisible();
+  await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
   await expect(page.locator('#boot-profile')).toHaveCount(0);
   await expect(page.getByText('BOOT SCREEN', { exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -22,7 +23,7 @@ test('startup fills desktop and mobile, changes profiles, and has no settings or
   await page.screenshot({ path: 'test-results/boot-mobile.png' });
   await page.keyboard.press('Escape');
   await expect(page.locator('#boot')).toBeVisible();
-  await expect(page.locator('#username')).toBeVisible();
+  await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   await page.screenshot({ path: 'test-results/login-mobile.png' });
 });
@@ -40,16 +41,12 @@ test('password login generates a persistent replacement token with credential-on
   const closed = new Promise<number>(resolve => ws.once('close', resolve));
   try {
   await page.goto(runtime.url);
-  await page.locator('#username').fill(runtime.username);
-  await page.locator('#username').press('Enter');
-  await page.locator('#password').fill('incorrect');
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
+  await consoleInput(page, 'username', runtime.username);
+  await consoleInput(page, 'password', 'incorrect');
   await expect(page.locator('#login-error')).toContainText('Invalid credentials');
-  await page.locator('#username').fill(runtime.username);
-  await page.locator('#username').press('Enter');
-  await page.locator('#password').fill(runtime.password);
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
-  await expect(page.locator('#login')).not.toBeVisible();
+  await consoleInput(page, 'username', runtime.username);
+  await consoleInput(page, 'password', runtime.password);
+  await expect(page.locator('#boot')).not.toBeVisible();
   await page.getByRole('button', { name: 'ACCESS TOKEN', exact: true }).click();
   await page.getByRole('button', { name: 'GENERATE TOKEN', exact: true }).click();
   await expect(page.locator('#generated-token')).toHaveValue(/^[0-9a-f]{64}$/);
@@ -63,9 +60,8 @@ test('password login generates a persistent replacement token with credential-on
   await runtime.restartGateway();
   await page.reload();
   await page.getByRole('button', { name: 'USE ACCESS TOKEN', exact: true }).click();
-  await page.locator('#token').fill(token);
-  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
-  await expect(page.locator('#login')).not.toBeVisible();
+  await consoleInput(page, 'token', token);
+  await expect(page.locator('#boot')).not.toBeVisible();
   await expect(page.locator('#access-token')).toBeHidden();
   expect(await page.evaluate(value => Object.values(localStorage).includes(value), token)).toBe(false);
   } finally { ws.terminate(); }
@@ -85,8 +81,8 @@ test('network login throttling rejects excessive attempts and never trusts forwa
 test('BIOS memory count overwrites its row and the display retains a 4:3 shape', async ({ page }) => {
   await page.addInitScript(() => { localStorage.setItem('werdr-last-boot', 'apple-iie'); Math.random = () => .99; });
   await page.goto(runtime.url);
-  await expect(page.locator('#boot pre')).toContainText('Keyboard');
-  const text = await page.locator('#boot pre').textContent();
+  await expect(page.locator('#boot-output')).toContainText('Keyboard');
+  const text = await page.locator('#boot-output').textContent();
   expect(text).toContain('016384 KB OK');
   expect(text!.match(/KB OK/g)).toHaveLength(1);
   const box = await page.locator('#boot-frame').boundingBox();

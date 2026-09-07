@@ -1,5 +1,6 @@
 import type { Terminal } from 'ghostty-web';
 import { BootConsole } from './boot';
+import { loadGhostty } from './terminal-loader';
 import './style.css';
 
 interface Machine { id: string; label: string; enabled: boolean; target?: string }
@@ -21,11 +22,6 @@ let snapshot: Snapshot = { workspaces: [], tabs: [], panes: [] };
 let authenticated = false, refreshing = false, refreshAgain = false, terminal: Terminal | undefined, socket: WebSocket | undefined;
 let disposeTerminal: (() => void) | undefined, generation = 0, reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectAttempt = 0;
-let ghostty: Promise<typeof import('ghostty-web')> | undefined;
-function loadGhostty() {
-  return ghostty ??= import('ghostty-web').then(async library => { await library.init(); return library; }).catch(error => { ghostty = undefined; throw error; });
-}
-
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();

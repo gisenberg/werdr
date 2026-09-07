@@ -40,7 +40,8 @@ To enable username/password login, set `WERDR_CREDENTIALS_FILE` to an owner-only
 The hash format is wmux-compatible `scrypt$<32 hex salt characters>$<64 hex hash characters>`; plaintext passwords are never stored.
 A private copy of an existing wmux `auth.json` can be used as this file.
 When configured, the selected boot console prompts for a username, then a password after Enter, and also offers token login.
-Authentication stays in that machine's console through retries and access granted; password and token characters are not echoed into the console.
+Authentication writes into the same Ghostty terminal as boot, without changing its cell grid, font size, or canvas dimensions.
+It stays in that machine's console through retries and access granted; password and token characters are not echoed into the console.
 After password login, **ACCESS TOKEN** lets you generate a replacement token for another browser.
 Generation atomically updates `WERDR_TOKEN_FILE`, invalidates the old token, and revokes sessions and terminal sockets authenticated with it.
 Password-authenticated sessions remain signed in, and token-authenticated sessions cannot generate tokens.
