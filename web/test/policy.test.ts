@@ -50,3 +50,10 @@ test('Windows adapter encodes explicit argv without loading a PowerShell profile
     if (previous === undefined) delete process.env.WERDR_WINDOWS_MACHINES; else process.env.WERDR_WINDOWS_MACHINES = previous;
   }
 });
+
+test('HTTPS authorities require HTTPS origins, including on WebSocket upgrades', () => {
+  const allowed = allowedHttpOrigins('127.0.0.1', 3480, 'host.example.ts.net', 'https');
+  assert.equal(requestOrigin('host.example.ts.net:3480', 'https://host.example.ts.net:3480', allowed, 'https'), 'https://host.example.ts.net:3480');
+  assert.equal(requestOrigin('host.example.ts.net:3480', 'http://host.example.ts.net:3480', allowed, 'https'), undefined);
+  assert.equal(requestOrigin('host.example.ts.net:3480', undefined, allowed), undefined);
+});

@@ -1,4 +1,6 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import { tlsConfiguration } from './tls.ts';
+import { createServer, type RequestListener, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { dirname, resolve, extname, sep } from 'node:path';
@@ -15,8 +17,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
 const port = Number(process.env.WERDR_PORT || 3480);
 if (!allowedBind(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('WERDR_HOST must be a private IP literal; WERDR_PORT must be valid');
-const origin = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
-const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_HOSTS);
+const tls = await tlsConfiguration(process.env.WERDR_CERT_FILE, process.env.WERDR_KEY_FILE);
+const scheme = tls ? 'https' : 'http';
+const origin = `${scheme}://${host.includes(':') ? `[${host}]` : host}:${port}`;
+const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_HOSTS, scheme);
 const tokenPath = resolve(root, process.env.WERDR_TOKEN_FILE || '.auth-token');
 const auth = await authentication(tokenPath, process.env.WERDR_CREDENTIALS_FILE ? resolve(root, process.env.WERDR_CREDENTIALS_FILE) : undefined);
 const fonts = await bootFonts(process.env.WERDR_BOOT_FONT_DIR);
@@ -53,11 +57,11 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   return value;
 }
 let requests = 0;
-const server = createServer(async (req, res) => {
+const handler: RequestListener = async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins);
+  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins, scheme);
   if (!browserOrigin) return reply(res, 403, { error: 'Origin rejected' });
   if (++requests > 16) { requests--; return reply(res, 503, { error: 'Busy' }); }
   try {
@@ -83,7 +87,7 @@ const server = createServer(async (req, res) => {
       }
       if (sessions.size >= 64) return reply(res, 503, { error: 'Session limit reached' });
       const id = randomBytes(32).toString('hex'); sessions.set(id, { expiry: Date.now() + 12 * 3600_000, method });
-      res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+      res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${tls ? '; Secure' : ''}`);
       return reply(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/api/')) {
@@ -102,7 +106,7 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/logout' && req.method === 'POST') {
         sessions.delete(id);
         for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Signed out');
-        res.setHeader('Set-Cookie', 'werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+        res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
         return reply(res, 200, { ok: true });
       }
       if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: await machines() });
@@ -137,14 +141,24 @@ const server = createServer(async (req, res) => {
     console.error(error instanceof Error ? error.message : error);
     if (!res.headersSent) reply(res, 502, { error: 'Herdr request failed. Check the gateway log and host availability.' });
   } finally { requests--; }
-});
+};
+const server = tls ? createHttpsServer(tls.options, handler) : createServer(handler);
+let reloading = false;
+const certificateTimer = tls ? setInterval(async () => {
+  if (reloading) return;
+  reloading = true;
+  try { if (await tls.reload(server as HttpsServer)) console.log('TLS certificate reloaded'); }
+  catch { console.error('TLS certificate reload failed; retaining the previous certificate'); }
+  finally { reloading = false; }
+}, 60_000) : undefined;
+certificateTimer?.unref();
 server.requestTimeout = 20_000;
 server.headersTimeout = 10_000;
 let upgrades = 0;
 server.on('upgrade', async (req, socket, head) => {
   socket.on('error', () => socket.destroy());
   const id = session(req);
-  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins);
+  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins, scheme);
   if (!id || !browserOrigin || req.headers.origin !== browserOrigin || sockets.size + upgrades >= 16) { socket.destroy(); return; }
   upgrades++;
   try {
@@ -220,7 +234,7 @@ const cleanup = setInterval(() => {
 cleanup.unref();
 function shutdown() {
   for (const ws of sockets.keys()) closeSocket(ws, 1001, 'Gateway restarting');
-  server.close(); clearInterval(cleanup);
+  server.close(); clearInterval(cleanup); clearInterval(certificateTimer);
   setTimeout(() => process.exit(0), 3000).unref();
 }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

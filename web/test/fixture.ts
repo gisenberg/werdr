@@ -5,9 +5,10 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
+import { get as httpsGet } from 'node:https';
 
 const exec = promisify(execFile);
-export async function fixture(passwordLogin = false) {
+export async function fixture(passwordLogin = false, secure = false) {
   const directory = await mkdtemp(resolve(tmpdir(), 'werdr-e2e-'));
   const username = 'test-user', password = randomBytes(24).toString('hex');
   const salt = randomBytes(16);
@@ -19,7 +20,10 @@ export async function fixture(passwordLogin = false) {
   const listener = createServer(); await new Promise<void>(r => listener.listen(0, '127.0.0.1', r));
   const port = (listener.address() as { port: number }).port;
   await new Promise<void>(r => listener.close(() => r()));
-  const url = `http://127.0.0.1:${port}`;
+  const url = `${secure ? 'https' : 'http'}://127.0.0.1:${port}`;
+  const certPath = resolve(directory, 'cert.pem'), keyPath = resolve(directory, 'key.pem');
+  if (secure) await exec('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-keyout', keyPath, '-out', certPath]);
+  const certificate = secure ? await readFile(certPath) : undefined;
   let diagnostics = '';
   const children: ChildProcess[] = [];
   const start = (file: string, args: string[], extra = {}) => {
@@ -42,8 +46,8 @@ export async function fixture(passwordLogin = false) {
   };
   let gateway: ChildProcess;
   const startGateway = async () => {
-    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
-    await wait(async () => (await fetch(url)).ok);
+    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_CERT_FILE: secure ? certPath : '', WERDR_KEY_FILE: secure ? keyPath : '', WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
+    await wait(async () => secure ? new Promise<boolean>((resolve, reject) => { httpsGet(url, { ca: certificate }, response => { response.resume(); resolve(response.statusCode === 200); }).on('error', reject); }) : (await fetch(url)).ok);
   };
   const close = async () => {
     try {
@@ -57,7 +61,7 @@ export async function fixture(passwordLogin = false) {
     start(binary, ['server']);
     await wait(async () => !!(await cli('api', 'snapshot')));
     await startGateway();
-    return { url, cli, username, password, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
+    return { url, cli, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
       restartGateway: async () => { await stop(gateway); await startGateway(); } };
   } catch (error) { await close(); throw error; }
 }

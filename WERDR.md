@@ -36,6 +36,8 @@ XDG_CONFIG_HOME="$PWD/../.local/trial-config" WERDR_HERDR_BIN="$PWD/../.local/bi
 
 Open `http://127.0.0.1:3480` and enter the access token from `web/.auth-token`.
 The gateway creates that ignored, owner-only file on first start.
+For TLS, configure `WERDR_CERT_FILE` and `WERDR_KEY_FILE` and open the matching `https://` hostname instead.
+TLS listeners reject plaintext origins; the private bind and exact Host/Origin boundary remain enforced.
 To enable username/password login, set `WERDR_CREDENTIALS_FILE` to an owner-only JSON file outside the checkout containing `username` and `passwordHash`.
 The hash format is wmux-compatible `scrypt$<32 hex salt characters>$<64 hex hash characters>`; plaintext passwords are never stored.
 A private copy of an existing wmux `auth.json` can be used as this file.
@@ -77,6 +79,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_HERDR_BIN` | Local executable, default `herdr`. |
 | `WERDR_SOCKET_PATH` | Explicit local API socket override. |
 | `WERDR_SESSION` | Local named session. |
+| `WERDR_CERT_FILE` / `WERDR_KEY_FILE` | Configure both PEM paths to enable HTTPS and secure cookies; certificate changes reload every 60 seconds without restarting the gateway. |
 | `WERDR_HOST` | Private IP literal, default `127.0.0.1`. |
 | `WERDR_ALLOWED_HOSTS` | Comma-separated exact DNS names or IP literals accepted in addition to the bind address, without ports or wildcards. |
 | `WERDR_PORT` | Gateway port, default `3480`. |

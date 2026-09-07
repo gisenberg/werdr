@@ -9,17 +9,17 @@ export function allowedBind(host: string): boolean {
   const family = isIP(host);
   return !!family && privateNetworks.check(host, family === 4 ? 'ipv4' : 'ipv6');
 }
-export function allowedHttpOrigins(bindHost: string, port: number, configuredHosts = ''): Set<string> {
+export function allowedHttpOrigins(bindHost: string, port: number, configuredHosts = '', scheme: 'http' | 'https' = 'http'): Set<string> {
   const hosts = [bindHost, ...configuredHosts.split(',').map(value => value.trim()).filter(Boolean)];
   if (hosts.length > 33) throw new Error('Too many allowed hosts');
   return new Set(hosts.map(host => {
     if (!isIP(host) && (host.length > 253 || !host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)))) throw new Error('Allowed hosts must be exact IP literals or DNS names without ports, schemes, or wildcards');
-    return new URL(`http://${isIP(host) === 6 ? `[${host}]` : host}:${port}`).origin;
+    return new URL(`${scheme}://${isIP(host) === 6 ? `[${host}]` : host}:${port}`).origin;
   }));
 }
-export function requestOrigin(host: string | undefined, origin: string | undefined, allowed: Set<string>): string | undefined {
+export function requestOrigin(host: string | undefined, origin: string | undefined, allowed: Set<string>, scheme: 'http' | 'https' = 'http'): string | undefined {
   if (!host) return undefined;
-  const expected = `http://${host.toLowerCase()}`;
+  const expected = `${scheme}://${host.toLowerCase()}`;
   return allowed.has(expected) && (!origin || origin === expected) ? expected : undefined;
 }
 export function equalToken(actual: string, expected: string): boolean {
