@@ -45,6 +45,7 @@ export class DesktopSurface {
     const fingerprint = JSON.stringify([this.panes.map(item => [item.pane_id, item.terminal_id]), snapshot.layouts]);
     if (online && tab && (fingerprint !== this.fingerprint || !this.layout)) { this.fingerprint = fingerprint; void this.load(); }
   }
+  recover() { for (const controller of this.controllers.values()) controller.recover(); this.refresh(); }
   refresh() { this.fingerprint = ''; if (this.tab) void this.load(); }
   private async load() {
     if (this.loading || this.drag) { this.dirty = true; return; }

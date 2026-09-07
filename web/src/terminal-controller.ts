@@ -28,7 +28,7 @@ export class TerminalController {
   label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.element.classList.toggle('pane-active', active); this.element.setAttribute('aria-label', label); }
   show(visible: boolean) {
     const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible;
-    if (visible) { if (changed) this.fit?.(); if (!this.terminal && !this.cleanup) void this.connect(); }
+    if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }
   }
   update(preferences: Preferences, colors: Colors) {
     this.preferences = preferences; this.colors = colors;
@@ -36,8 +36,13 @@ export class TerminalController {
   }
   private options() { return { fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
   focus() { this.terminal?.focus(); }
+  recover() {
+    // Connectivity recovery resumes only exhausted attachments. Healthy sockets
+    // and their scheduled retries retain their renderer and ownership.
+    if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
+  }
   private reset() {
-    ++this.epoch; clearTimeout(this.timer); this.socket?.close(); this.socket = undefined;
+    ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
@@ -94,7 +99,7 @@ export class TerminalController {
       this.ready = false; this.shield.hidden = false;
       if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
-      this.timer = setTimeout(() => { if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
+      this.timer = setTimeout(() => { this.timer = undefined; if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
     };
     this.cleanup = () => { boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
   }

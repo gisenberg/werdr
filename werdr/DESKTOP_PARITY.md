@@ -9,7 +9,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 
 | Capability | Required browser behavior | Current evidence |
 | --- | --- | --- |
-| Fleet and session ownership | Host-scoped identity, independent reconnect, durable native processes, explicit takeover and closure | Existing fleet and controller tests; retain through every change |
+| Fleet and session ownership | Host-scoped identity, independent reconnect, durable native processes, explicit takeover and closure | Existing fleet and controller tests; prolonged gateway-outage test verifies exhausted retries recover for every visible pane without page reload, forced takeover, or loss of native shell state |
 | Desktop layout | Render native split tree simultaneously; preserve ratios; drag and keyboard resize; zoom, directional focus, swap, move, reorder | Implemented native split tree, independent controllers, drag and keyboard ratios, zoom, directional focus/resize/swap, pane moves and workspace/tab ordering; isolated browser tests exercise input, stable terminal DOM, phone fallback and gateway restart |
 | Visual hierarchy | Native semantic palette, compact cell rhythm, borders and active pane cues, configurable sidebar sections and contextual hints | Partial: native semantic palette and active pane borders; sidebar sections and contextual hints remain |
 | Themes | All native theme choices, custom semantic overrides, light/dark/system selection and live preview/cancel | Implemented palette extraction, preview/cancel, system switching and custom colors; package and browser tests cover these behaviors |

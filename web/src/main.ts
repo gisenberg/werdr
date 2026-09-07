@@ -46,7 +46,13 @@ function rememberSelection() {
   history.replaceState(null, '', url);
 }
 let authenticated = false, refreshing = false, refreshAgain = false;
-const fleet = new FleetClient(applyFleet, online => { if (!online && authenticated) { status('[RECONNECTING] GATEWAY'); void refresh(); } });
+let gatewayOnline = false;
+const fleet = new FleetClient(applyFleet, online => {
+  const recovered = online && !gatewayOnline; gatewayOnline = online;
+  if (!authenticated) return;
+  if (!online) { status('[RECONNECTING] GATEWAY'); void refresh(); }
+  else if (recovered) surface.recover();
+});
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`));
@@ -86,7 +92,7 @@ function applyFleet(state: FleetState, added?: Notice) {
   if (pendingPane?.machine === machineId) { const target = snapshot.panes.find(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab); if (target) { workspaceId = target.workspace_id; tabId = target.tab_id; paneId = target.pane_id; } }
   if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) { pendingPane = undefined; choose(); }
   renderFleetNavigation(); hostManager.update(state.hosts); activity.update(state, added);
-  if (previous !== 'online' && selectedHost()?.connection === 'online') surface.refresh();
+  if (previous !== 'online' && selectedHost()?.connection === 'online') surface.recover();
 }
 function renderFleetNavigation() {
   const query = element<HTMLInputElement>('fleet-search').value.trim().toLowerCase();
