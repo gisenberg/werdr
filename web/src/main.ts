@@ -72,7 +72,7 @@ async function refresh() {
     authenticated = true;
     const session = await api('/api/session');
     element('access-token').hidden = !session.canGenerateToken;
-    navigation('hosts', machines.map(m => ({ id: m.id, label: `${m.label}${m.enabled ? '' : ' [DISABLED]'}`, active: m.id === machineId, disabled: !m.enabled, title: m.target || 'Gateway host', select: () => {
+    navigation('hosts', machines.map(m => ({ id: m.id, label: `${m.label}${m.enabled ? '' : ' [DISABLED]'}`, active: m.id === machineId, disabled: !m.enabled, title: m.target || m.label, select: () => {
         if (machineId === m.id) return;
         detach(); machineId = m.id; workspaceId = ''; tabId = ''; paneId = ''; snapshot = { workspaces: [], tabs: [], panes: [] }; renderNavigation(); closeRail();
         void refresh();

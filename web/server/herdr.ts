@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { hostname } from 'node:os';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
@@ -34,7 +35,7 @@ export async function command(machine: Machine, args: string[]): Promise<any> {
   return response.result ?? response;
 }
 export async function machines(): Promise<Machine[]> {
-  const local: Machine = { id: 'local', label: 'Local', enabled: true, session: process.env.WERDR_SESSION };
+  const local: Machine = { id: 'local', label: hostname(), enabled: true, session: process.env.WERDR_SESSION };
   const saved = await command(local, ['machine', 'list', '--json']);
   if (!Array.isArray(saved) || saved.length > 64) throw new Error('Invalid Herdr machine catalog');
   return [local, ...saved.map((m): Machine => {

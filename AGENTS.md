@@ -11,6 +11,7 @@ It does not grant maintainer authority in `herdrdev/herdr` or change the rules f
 - A request to fix, ship, deploy, land, integrate, or merge authorizes the normal fork pull-request and merge workflow once the work is complete and verified.
 - Keep local iteration on the current task branch unless isolation is useful or integration is requested.
 - Preserve unrelated changes and keep commits focused.
+- Identify the gateway by its hostname in browser host labels; never use the ambiguous label `Local`.
 - Review the final diff and run checks appropriate to the changed surfaces before publishing or deploying.
 - For changes confined to the web gateway, browser client, or fork documentation, use `npm --prefix web run check` and relevant browser tests; upstream `just check` is required when changing the Rust runtime or integrating runtime changes.
 - Commit and push completed work before calling a deployment durable, and verify the intended remote commit.
