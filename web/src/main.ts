@@ -1,5 +1,6 @@
 import { BootConsole } from './boot';
 import { Integrations, integrationsMarkup } from './integrations';
+import { Plugins, pluginsMarkup } from './plugins';
 import { Worktrees, worktreesMarkup } from './worktrees';
 import { DesktopSurface } from './desktop-surface';
 import './style.css';
@@ -19,7 +20,7 @@ app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-con
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="pane-actions">ACTIONS</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
 <dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><button id="revoke-token">REVOKE ACCESS TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>
 <dialog id="sessions-dialog"><h1>Signed-in browsers</h1><p>Browser tokens stay valid for 90 days, including across restarts. Revoking a browser disconnects it immediately.</p><div id="session-list"></div><p id="session-error" role="alert"></p><button id="revoke-others">REVOKE OTHER BROWSERS</button><button id="sessions-done">DONE</button></dialog>
-${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}${integrationsMarkup}
+${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}${integrationsMarkup}${pluginsMarkup}
 <dialog id="command-dialog"><h1>COMMANDS</h1><label>FIND ACTION<input id="command-search" type="search" autocomplete="off" placeholder="Search actions, hosts, workspaces, agents"></label><div id="command-list"></div><button id="command-done">DONE</button></dialog>
 <dialog id="rename-dialog"><form id="rename-form"><h1 id="rename-title">RENAME</h1><label>LABEL<input id="rename-value" required maxlength="256"></label><button type="submit">SAVE</button><button id="rename-cancel" type="button">CANCEL</button><p id="rename-error" role="alert"></p></form></dialog>
 <dialog id="agent-dialog"><h1>AGENT</h1><p id="agent-context"></p><form id="agent-start-form"><label>AGENT KIND<input id="agent-kind" value="claude" list="agent-kinds" required maxlength="80" autocomplete="off"><datalist id="agent-kinds"><option value="claude"><option value="codex"><option value="opencode"><option value="aider"><option value="gemini"></datalist></label><label>NAME<input id="agent-name" required maxlength="256" autocomplete="off"></label><button type="submit">START AGENT IN THIS PANE</button></form><form id="agent-prompt-form"><label>PROMPT<textarea id="agent-prompt" required maxlength="32768" rows="5"></textarea></label><button type="submit">SEND PROMPT</button></form><p id="agent-error" role="alert"></p><button id="agent-done">DONE</button></dialog>`;
@@ -59,6 +60,7 @@ const surface = new DesktopSurface(element('terminal'), element('shield'), api, 
 function selectPane(id: string) { if (paneId === id && !pendingPane) return; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
+const plugins = new Plugins(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId || undefined, pane: paneId || undefined, selectedText: surface.active?.selection } : undefined; }, (machine, pane) => selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true), () => { fleet.resync(); void refresh(); });
 const worktrees = new Worktrees(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId, cwd: snapshot.panes.find(pane => pane.pane_id === paneId)?.cwd } : undefined; }, (machine, pane) => { if (!pane) return; selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true); }, () => { fleet.resync(); void refresh(); });
 const settings = new Settings(api, (value, nextColors) => {
   preferences = value; colors = nextColors;
@@ -66,6 +68,7 @@ const settings = new Settings(api, (value, nextColors) => {
   renderNavigation(); renderFleetNavigation();
 });
 element('settings-integrations').onclick = () => integrations.open();
+element('settings-plugins').onclick = () => plugins.open();
 element('settings').onclick = () => void settings.open();
 function selectedHost() { return fleetState.hosts.find(host => host.machine.id === machineId); }
 function selectHost(id: string) {
@@ -81,6 +84,7 @@ function selectTarget(machine: string, workspace: string, tab: string, pane: str
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
+  if (waitForSnapshot) surface.requestFocus(pane);
 }
 function applyFleet(state: FleetState, added?: Notice) {
   const previous = selectedHost()?.connection; fleetState = state;
@@ -107,9 +111,11 @@ function renderFleetNavigation() {
   navigation('agents', agents.map(({ host, agent }) => ({ id: `${host.machine.id}/${agent.pane_id}`, label: `${host.machine.label} / ${agent.name || agent.display_agent || agent.agent || agent.pane_id}`, badge: host.connection === 'online' ? agent.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && agent.pane_id === paneId, disabled: !host.machine.enabled, title: agent.title || agent.cwd, select: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) })));
   const current = selectedHost(); const online = current?.connection === 'online';
   element<HTMLButtonElement>('settings-integrations').disabled = !online;
+  element<HTMLButtonElement>('settings-plugins').disabled = !online;
   element<HTMLButtonElement>('create').disabled = !online || !!pendingPane;
   const connected = fleetState.hosts.filter(host => host.connection === 'online').length;
   status(`${online ? '[OK]' : '[' + (current?.connection || 'connecting').toUpperCase() + ']'} ${current?.machine.label || ''} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
+  if (element<HTMLDialogElement>('command-dialog').open) refreshCommands();
 }
 
 async function api(path: string, data?: object): Promise<any> {
@@ -147,11 +153,19 @@ function choose() {
   // Connecting hosts have no snapshot yet. Preserve deep links and saved selection
   // until the native server can authoritatively reconcile those IDs.
   if (!selectedHost()?.snapshot) { renderNavigation(); element('shield').textContent = selectedHost()?.detail || 'Connecting to host...'; return; }
-  if (!snapshot.workspaces.some(w => w.workspace_id === workspaceId)) workspaceId = snapshot.workspaces[0]?.workspace_id || '';
-  if (!snapshot.tabs.some(t => t.tab_id === tabId && t.workspace_id === workspaceId)) tabId = snapshot.tabs.find(t => t.workspace_id === workspaceId)?.tab_id || '';
-  if (!snapshot.panes.some(p => p.pane_id === paneId && p.tab_id === tabId)) paneId = snapshot.panes.find(p => p.tab_id === tabId)?.pane_id || '';
+  const restoreFocus = !!paneId && !snapshot.panes.some(p => p.pane_id === paneId);
+  if (!snapshot.workspaces.some(w => w.workspace_id === workspaceId)) workspaceId = snapshot.workspaces.find(w => w.workspace_id === snapshot.focused_workspace_id)?.workspace_id || snapshot.workspaces[0]?.workspace_id || '';
+  if (!snapshot.tabs.some(t => t.tab_id === tabId && t.workspace_id === workspaceId)) {
+    const nativeTab = snapshot.workspaces.find(w => w.workspace_id === workspaceId)?.active_tab_id;
+    tabId = snapshot.tabs.find(t => t.workspace_id === workspaceId && t.tab_id === nativeTab)?.tab_id || snapshot.tabs.find(t => t.workspace_id === workspaceId)?.tab_id || '';
+  }
+  if (!snapshot.panes.some(p => p.pane_id === paneId && p.tab_id === tabId)) {
+    const nativePane = snapshot.layouts.find(layout => layout?.tab_id === tabId)?.focused_pane_id;
+    paneId = snapshot.panes.find(p => p.tab_id === tabId && p.pane_id === nativePane)?.pane_id || snapshot.panes.find(p => p.tab_id === tabId)?.pane_id || '';
+  }
   renderNavigation(); rememberSelection();
   surface.sync(machineId, tabId, paneId, snapshot, selectedHost()?.connection === 'online');
+  if (restoreFocus) surface.requestFocus(paneId);
   if (!paneId && selectedHost()?.connection === 'online') { detach(); element('shield').textContent = 'No panes. Create a workspace to start a session.'; }
 }
 async function refresh() {
@@ -237,13 +251,14 @@ for (const [formId, actionName] of [['agent-start-form', 'agent.start'], ['agent
     finally { button.disabled = false; }
   };
 }
-function openCommands() {
+function refreshCommands() {
   const machine = machineId, workspace = workspaceId, tab = tabId, pane = paneId;
   const online = selectedHost()?.connection === 'online' && !pendingPane;
   commands = [
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
     { label: 'Integrations: agent hooks and readiness', disabled: !online, run: () => integrations.open() },
+    { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },
     { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
     { label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
     { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
@@ -276,14 +291,21 @@ function openCommands() {
     ...fleetState.hosts.map(host => ({ label: `Host: ${host.machine.label} [${host.connection}]`, disabled: !host.machine.enabled, run: () => selectHost(host.machine.id) })),
     ...fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).filter(agent => agent.agent || agent.name).map(agent => ({ label: `Agent: ${host.machine.label} / ${agent.name || agent.agent} [${agent.agent_status}]`, disabled: !host.machine.enabled, run: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) }))),
   ];
-  element<HTMLInputElement>('command-search').value = ''; renderCommands(); element<HTMLDialogElement>('command-dialog').showModal(); element('command-search').focus();
+  renderCommands();
+}
+function openCommands() {
+  element<HTMLInputElement>('command-search').value = ''; refreshCommands(); element<HTMLDialogElement>('command-dialog').showModal(); element('command-search').focus();
 }
 function renderCommands() {
-  const query = element<HTMLInputElement>('command-search').value.toLowerCase(); const parent = element('command-list'); parent.replaceChildren();
+  const query = element<HTMLInputElement>('command-search').value.toLowerCase(); const parent = element('command-list');
+  const focused = parent.contains(document.activeElement) ? document.activeElement?.textContent : undefined; const scroll = parent.scrollTop; parent.replaceChildren();
   for (const command of commands.filter(command => command.label.toLowerCase().includes(query))) {
     const button = document.createElement('button'); button.textContent = command.label; button.disabled = !!command.disabled;
     button.onclick = () => { element<HTMLDialogElement>('command-dialog').close(); command.run(); }; parent.append(button);
+    if (focused && command.label === focused) button.focus({ preventScroll: true });
   }
+  if (focused && !parent.contains(document.activeElement)) element('command-search').focus({ preventScroll: true });
+  parent.scrollTop = scroll;
 }
 element('commands').onclick = openCommands; element('pane-actions').onclick = openCommands;
 element('command-done').onclick = () => element<HTMLDialogElement>('command-dialog').close();
@@ -291,7 +313,7 @@ element('command-search').oninput = renderCommands;
 element('command-search').onkeydown = event => { if (event.key === 'ArrowDown') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); } else if (event.key === 'Enter') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.click(); } };
 document.addEventListener('keydown', event => {
   if (!authenticated || !(event.ctrlKey || event.metaKey)) return;
-  if (event.key.toLowerCase() === 'k') { event.preventDefault(); if (!document.querySelector('dialog[open]')) openCommands(); }
+  if (event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); if (!document.querySelector('dialog[open]')) openCommands(); }
   else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open]') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
 }, true);
 async function start() {

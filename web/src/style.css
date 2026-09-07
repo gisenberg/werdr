@@ -179,3 +179,30 @@ dialog .check-label input[type=checkbox] { flex: 0 0 auto; width: auto; margin: 
 #integration-list { max-height: 45vh; overflow: auto; overscroll-behavior: contain; }
 #integration-results { max-height: 120px; overflow: auto; }
 #integration-done { position: sticky; bottom: 0; background: var(--herdr-panel-bg); }
+
+dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(var(--viewport, 100dvh) - 24px); padding: 0; }
+#plugins-dialog[open] { display: flex; flex-direction: column; }
+#plugins-dialog > h1 { flex-shrink: 0; margin: 24px 28px 8px; }
+.plugin-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 28px 16px; }
+.plugin-footer { flex-shrink: 0; padding: 12px 28px; border-top: 1px solid var(--herdr-surface1); }
+#plugin-host, #plugin-context, #plugin-error, #plugin-result { overflow-wrap: anywhere; }
+#plugin-list { margin-top: 12px; }
+.plugin-row { padding: 12px 0; border-top: 1px solid var(--herdr-surface1); overflow-wrap: anywhere; }
+.plugin-row h2, .plugin-row h3 { margin: 8px 0; }
+.plugin-row button { display: inline-block; width: auto; margin: 4px 8px 4px 0; }
+.plugin-row pre, #plugin-logs pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.plugin-row details { margin: 8px 0; }
+.plugin-entry { border-left: 2px solid var(--herdr-surface1); padding: 4px 12px; margin: 12px 0; }
+.plugin-entry small { display: inline-block; white-space: nowrap; }
+.plugin-pane-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 12px 0; }
+.plugin-pane-controls label { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.plugin-pane-controls button { margin: 0; }
+.plugin-entry label[hidden] { display: none; }
+.plugin-checkbox input { display: inline-block; width: auto; }
+#plugin-log-details { margin: 16px 0; }
+#plugin-logs { overflow-wrap: anywhere; }
+#plugin-logs details { border-top: 1px solid var(--herdr-surface1); padding: 8px 0; }
+#plugin-done { background: var(--herdr-panel-bg); }
+
+#plugin-result { white-space: pre-wrap; }
+@media (max-width: 700px) { .plugin-body { padding: 0 16px 12px; } .plugin-footer { padding: 12px 16px; } #plugins-dialog > h1 { margin: 16px 16px 8px; } }

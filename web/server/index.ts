@@ -16,6 +16,7 @@ import { Fleet } from './fleet.ts';
 import { MachineManagement, ManagementError } from './machine-management.ts';
 import { browserLayout } from './layout.ts';
 import { browserAction } from './browser-actions.ts';
+import { pluginAction } from './plugin-actions.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
 import { NativeApiError } from './native-api.ts';
@@ -159,8 +160,19 @@ const handler: RequestListener = async (req, res) => {
         return reply(res, 200, browserLayout(result));
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
-        const value = await authorizedBody(req); const { method, params } = browserAction(value);
-        return reply(res, 200, await fleet.request(publicId(value.machine), method, params, !['worktree.list', 'integration.list'].includes(method)));
+        const value = await authorizedBody(req);
+        if (typeof value.action === 'string' && value.action.startsWith('plugin.')) {
+          const machine = publicId(value.machine);
+          const read = ['plugin.list', 'plugin.action.list', 'plugin.log.list'].includes(value.action);
+          const result = read
+            ? await pluginAction(value, (method, params, invalidate) => fleet.request(machine, method, params, invalidate))
+            : await fleet.action(machine, request => pluginAction(value, request));
+          return reply(res, 200, result);
+        }
+        const { method, params } = browserAction(value);
+        const machine = publicId(value.machine);
+        const read = ['worktree.list', 'integration.list'].includes(method);
+        return reply(res, 200, read ? await fleet.request(machine, method, params, false) : await fleet.action(machine, request => request(method, params)));
       }
       return reply(res, 404, { error: 'Unknown route' });
     }

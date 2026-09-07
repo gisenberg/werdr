@@ -18,6 +18,7 @@ export class TerminalController {
   private visible = true;
   ready = false;
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
+  get selection() { return this.terminal?.getSelection() || ''; }
   constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
@@ -25,7 +26,8 @@ export class TerminalController {
     this.element.append(this.title, this.content, this.shield);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
-  label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.element.classList.toggle('pane-active', active); this.element.setAttribute('aria-label', label); }
+  activate(active: boolean) { this.element.classList.toggle('pane-active', active); }
+  label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.activate(active); this.element.setAttribute('aria-label', label); }
   show(visible: boolean) {
     const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible;
     if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }

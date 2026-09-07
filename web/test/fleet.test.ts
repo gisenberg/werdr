@@ -80,3 +80,65 @@ test('removing a host while its handshake is pending retires the eventual connec
     assert.equal(fleet.state().hosts.length, 0);
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('multi-step browser actions serialize per host while metadata reads and other hosts remain independent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-actions-'));
+  let resume!: () => void; const paused = new Promise<void>(resolve => { resume = resolve; });
+  const calls: string[] = [];
+  class ActionEndpoint extends Endpoint {
+    focused = '';
+    constructor(private name: string) { super(); }
+    override async request(method: string, params: any = {}) {
+      if (method === 'session.snapshot') return super.request(method);
+      calls.push(`${this.name}:${method}:${params.pane_id || this.focused}`);
+      if (method === 'pane.focus') { this.focused = params.pane_id; if (this.name === 'one' && this.focused === 'p:first') await paused; }
+      return { snapshot: structuredClone(this.snapshot) };
+    }
+  }
+  const fleet = new Fleet(async () => ['one', 'two'].map(id => ({ id, label: id, enabled: true })), join(directory, 'notices.json'), async machine => new ActionEndpoint(machine.id));
+  try {
+    await fleet.start(); await until(() => fleet.state().hosts.every(host => host.connection === 'online'));
+    const first = fleet.action('one', async request => { await request('pane.focus', { pane_id: 'p:first' }); return request('plugin.action.invoke'); });
+    const second = fleet.action('one', async request => { await request('pane.focus', { pane_id: 'p:second' }); return request('plugin.action.invoke'); });
+    await until(() => calls.length === 1);
+    await fleet.request('one', 'session.snapshot', {}, false);
+    await fleet.action('two', request => request('pane.focus', { pane_id: 'p:other' }));
+    assert.deepEqual(calls, ['one:pane.focus:p:first', 'two:pane.focus:p:other']);
+    resume(); await Promise.all([first, second]);
+    assert.deepEqual(calls.slice(2), ['one:plugin.action.invoke:p:first', 'one:pane.focus:p:second', 'one:plugin.action.invoke:p:second']);
+    await assert.rejects(fleet.action('one', async () => { throw new Error('fixture failure'); }), /fixture failure/);
+    await fleet.action('one', request => request('session.snapshot'));
+  } finally { resume(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a multi-step action cannot continue on a replacement host with the same catalog ID', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-actions-'));
+  let catalog: Machine[] = [{ id: 'one', label: 'One', target: 'original', enabled: true }];
+  let endpoint: Endpoint | undefined;
+  const fleet = new Fleet(async () => catalog, join(directory, 'notices.json'), async () => { endpoint = new Endpoint(); return endpoint; });
+  let resume!: () => void; const paused = new Promise<void>(resolve => { resume = resolve; }); let began = false, continued = false;
+  try {
+    await fleet.start(); await until(() => fleet.state().hosts[0]?.connection === 'online');
+    const original = endpoint;
+    const action = fleet.action('one', async request => { await request('session.snapshot', {}, false); began = true; await paused; await request('session.snapshot', {}, false); continued = true; });
+    await until(() => began);
+    catalog = [{ ...catalog[0], target: 'replacement' }]; await fleet.reloadCatalog();
+    await until(() => endpoint !== original && fleet.state().hosts[0]?.connection === 'online');
+    assert.equal(original?.closed, true); resume();
+    await assert.rejects(action, /Host changed/); assert.equal(continued, false);
+    await fleet.action('one', request => request('session.snapshot'));
+  } finally { resume(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('per-host action backlog is bounded and drains after the active operation finishes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-actions-'));
+  const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => new Endpoint());
+  let resume!: () => void; const paused = new Promise<void>(resolve => { resume = resolve; });
+  try {
+    await fleet.start(); await until(() => fleet.state().hosts[0]?.connection === 'online');
+    const tasks = [fleet.action('one', async request => { await paused; return request('session.snapshot'); })];
+    for (let index = 0; index < 31; index++) tasks.push(fleet.action('one', request => request('session.snapshot')));
+    await assert.rejects(fleet.action('one', request => request('session.snapshot')), /too many pending actions/);
+    resume(); await Promise.all(tasks); await fleet.action('one', request => request('session.snapshot'));
+  } finally { resume(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});

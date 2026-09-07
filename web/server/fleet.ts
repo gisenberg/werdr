@@ -12,8 +12,10 @@ interface Host {
   refreshTimer?: ReturnType<typeof setTimeout>; reading: boolean; dirty: boolean; attempts: number; eventSequence: number;
   watchKey?: string; stopWatch?: () => void; watching: boolean; baseline: boolean; agentStates: Map<string, Agent>; fingerprint?: string;
 }
+type NativeRequest = (method: string, params?: object, invalidate?: boolean) => Promise<any>;
 export class Fleet extends EventEmitter {
   private hosts = new Map<string, Host>();
+  private actionQueues = new WeakMap<Host, { tail: Promise<unknown>; pending: number }>();
   private order: string[] = [];
   private revision = 0;
   private notices: Notice[] = [];
@@ -193,12 +195,31 @@ export class Fleet extends EventEmitter {
   }
   markNoticesRead(id?: string) { return this.updateNotices(notices => { for (const notice of notices) if (!id || notice.id === id) notice.read = true; }); }
   async request(machineId: string, method: string, params: object = {}, invalidate = true) {
+    return this.requestScope(machineId)(method, params, invalidate);
+  }
+  private requestScope(machineId: string): NativeRequest {
     const host = this.hosts.get(machineId);
     if (!host?.api || host.view.connection !== 'online' || !host.view.machine.enabled) throw new NativeApiError('Selected host is not connected', 'offline');
-    const epoch = host.epoch;
-    const result = await host.api.request(method, params);
-    if (host.epoch !== epoch) throw new NativeApiError('Host changed while the action was running; refresh before retrying.', 'interrupted');
-    if (invalidate) this.invalidate(host, 0); return result;
+    const epoch = host.epoch, api = host.api;
+    const current = () => {
+      if (this.stopped || this.hosts.get(machineId) !== host || host.epoch !== epoch || host.api !== api || host.view.connection !== 'online' || !host.view.machine.enabled) throw new NativeApiError('Host changed while the action was running; refresh before retrying.', 'interrupted');
+    };
+    return async (method, params = {}, invalidate = true) => {
+      current(); const result = await api.request(method, params); current();
+      if (invalidate) this.invalidate(host, 0); return result;
+    };
+  }
+  async action<T>(machineId: string, operation: (request: NativeRequest) => Promise<T>): Promise<T> {
+    // Focus followed by a plugin command is one browser action. Keep other
+    // browser mutations out of that interval and pin every step to this endpoint.
+    const request = this.requestScope(machineId), host = this.hosts.get(machineId)!;
+    let queue = this.actionQueues.get(host);
+    if (!queue) { queue = { tail: Promise.resolve(), pending: 0 }; this.actionQueues.set(host, queue); }
+    if (queue.pending >= 32) throw new NativeApiError('This host has too many pending actions. Wait for an action to finish.', 'busy');
+    queue.pending++;
+    const result = queue.tail.then(() => operation(request));
+    queue.tail = result.then(() => {}, () => {});
+    return result.finally(() => { queue.pending--; });
   }
   retry(machineId: string) {
     const host = this.hosts.get(machineId);

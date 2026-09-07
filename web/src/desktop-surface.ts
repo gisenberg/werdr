@@ -15,6 +15,7 @@ export class DesktopSurface {
   private epoch = 0;
   private loading = false;
   private pendingSelection = false;
+  private focusTarget?: string;
   private dirty = false;
   private preferences: Preferences;
   private colors: ReturnType<typeof palette>;
@@ -27,9 +28,10 @@ export class DesktopSurface {
     matchMedia('(max-width: 700px)').addEventListener('change', () => this.render());
   }
   get active() { return this.controllers.get(this.pane); }
+  requestFocus(pane: string) { this.focusTarget = pane || undefined; this.readiness(); }
   waitForSelection() { this.pendingSelection = true; this.container.inert = true; this.shield.hidden = false; this.shield.textContent = 'Waiting for native workspace update...'; }
   clear() {
-    this.pendingSelection = false; this.container.inert = false;
+    this.pendingSelection = false; this.focusTarget = undefined; this.container.inert = false;
     ++this.epoch; this.loading = false; this.dirty = false; clearTimeout(this.retry); this.drag = undefined;
     for (const controller of this.controllers.values()) controller.dispose(); this.controllers.clear();
     for (const node of this.overflow.values()) node.remove(); this.overflow.clear();
@@ -38,7 +40,8 @@ export class DesktopSurface {
   updatePreferences(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; for (const controller of this.controllers.values()) controller.update(preferences, colors); this.render(); }
   sync(machine: string, tab: string, pane: string, snapshot: Snapshot, online: boolean) {
     this.pendingSelection = false; this.container.inert = false;
-    if (machine !== this.machine || tab !== this.tab) { this.clear(); this.machine = machine; this.tab = tab; }
+    if (machine !== this.machine || tab !== this.tab) { const focusTarget = this.focusTarget; this.clear(); if (focusTarget === pane) this.focusTarget = focusTarget; this.machine = machine; this.tab = tab; }
+    if (this.focusTarget !== pane) this.focusTarget = undefined;
     this.pane = pane; this.panes = snapshot.panes.filter(item => item.tab_id === tab);
     for (const [id, controller] of this.controllers) if (!this.panes.some(item => item.pane_id === id && item.terminal_id === controller.terminalId)) { controller.dispose(); this.controllers.delete(id); }
     this.render();
@@ -65,7 +68,14 @@ export class DesktopSurface {
       if (epoch === this.epoch) { this.loading = false; if (this.dirty && !this.drag) { this.dirty = false; void this.load(); } }
     }
   }
-  private readiness = () => { if (!this.pendingSelection && this.active && !this.active.ready) this.shield.textContent = this.active.status; this.shield.hidden = !this.pendingSelection && (!!this.active?.ready || this.overflow.has(this.pane)) && !document.querySelector<HTMLDialogElement>('#boot')?.open; };
+  private readiness = () => {
+    if (!this.pendingSelection && this.active && !this.active.ready) this.shield.textContent = this.active.status;
+    this.shield.hidden = !this.pendingSelection && (!!this.active?.ready || this.overflow.has(this.pane)) && !document.querySelector<HTMLDialogElement>('#boot')?.open;
+    if (!this.pendingSelection && this.active?.ready && this.focusTarget === this.pane) {
+      this.focusTarget = undefined;
+      if (!document.querySelector('dialog[open]')) this.active.focus();
+    }
+  };
   private render() {
     if (!this.layout || !this.container.clientWidth || !this.container.clientHeight) return;
     const mobile = matchMedia('(max-width: 700px)').matches;
@@ -75,7 +85,7 @@ export class DesktopSurface {
     // Controller capacity matches the surface attachment limit. Hidden panes keep
     // their live geometry; a phone never resizes a background pane to zero.
     const visible = [...panes.keys()];
-    for (const [id, controller] of this.controllers) controller.show(visible.includes(id));
+    for (const [id, controller] of this.controllers) { controller.activate(id === this.pane); controller.show(visible.includes(id)); }
     for (const [id, node] of this.overflow) { if (!visible.includes(id)) { node.remove(); this.overflow.delete(id); } }
     for (const [id, rect] of panes) {
       const pane = this.panes.find(item => item.pane_id === id); if (!pane) continue;

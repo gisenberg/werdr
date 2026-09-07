@@ -174,3 +174,14 @@ Open **Manage host integrations** in Settings, or use the command palette, to in
 Install, update, reinstall, and uninstall use herdr's native integration API and display its results.
 **Install recommended** selects outdated integrations and available agents whose integration is not installed, matching the native desktop rule.
 Closing the panel stops any remaining unstarted batch actions.
+
+## Native plugins
+
+Open **Manage host plugins** in Settings or **Plugins** in the command palette for the selected host.
+Link a trusted directory already present on that host, inspect its manifest and commands, enable or disable it, or unlink its registration while retaining its files and running panes.
+Actions receive the selected pane's native workspace, tab, cwd, worktree, and agent context, along with any browser terminal selection.
+Browser mutations are serialized per host so another browser action cannot interrupt the focus-and-invoke sequence, and every step remains pinned to the same host connection.
+Command logs retain native running, succeeded, and failed outcomes, exit codes, stdout, and stderr; filter by plugin and choose the native log limit from 10 through 200 entries.
+Plugin panes support native overlay, split, tab, and zoomed placements, input, focus, and explicit closure.
+An overlay's exit restores the native focused pane while retaining the underlying browser terminals.
+Native popup surfaces and GitHub plugin installation are still pending in the browser, as tracked in the [desktop parity matrix](werdr/DESKTOP_PARITY.md).
