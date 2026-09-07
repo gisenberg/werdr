@@ -41,7 +41,7 @@ test('native desktop splits preserve terminal identity, input, ratios, zoom and 
   await run('Resize pane up'); await expect.poll(async () => (await layout()).root.second.ratio).not.toBe(.5);
   await run('Focus pane up'); await expect(secondPane).toHaveClass(/pane-active/);
   await run('Swap pane down'); await expect.poll(async () => (await layout()).root.second.second.pane_id).toBe(second);
-  await expect.poll(async () => (await secondPane.boundingBox())!.y).toBeGreaterThan((await thirdPane.boundingBox())!.y);
+  await expect.poll(async () => (await secondPane.boundingBox())!.y - (await thirdPane.boundingBox())!.y).toBeGreaterThan(0);
   await page.screenshot({ path: 'test-results/native-desktop-splits.png' });
   await runtime.restartGateway(); await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
   await expect(page.locator('.terminal-pane:visible')).toHaveCount(3); expect((await layout()).root.ratio).toBeCloseTo(ratio, 3);
