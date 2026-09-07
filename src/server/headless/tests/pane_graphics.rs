@@ -593,9 +593,12 @@ async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() 
     client.host_sgr_pixels_active = None;
     server.app.direct_graphics_available = false;
 
+    // The test writer drains on a separate OS thread. This checks message content,
+    // not scheduler latency while the Windows suite runs concurrent test processes.
+    let writer_timeout = Duration::from_secs(5);
     server.stream_host_mouse_capture_mode();
     assert!(matches!(
-        read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
+        read_server_message(control_rx.recv_timeout(writer_timeout).unwrap()),
         ServerMessage::MouseCapture {
             enabled: true,
             sgr_pixels: false
@@ -605,7 +608,7 @@ async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() 
     set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
     server.stream_host_mouse_capture_mode();
     assert!(matches!(
-        read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
+        read_server_message(control_rx.recv_timeout(writer_timeout).unwrap()),
         ServerMessage::MouseCapture {
             enabled: true,
             sgr_pixels: true
