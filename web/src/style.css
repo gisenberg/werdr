@@ -168,3 +168,14 @@ dialog .check-label input[type=checkbox] { flex: 0 0 auto; width: auto; margin: 
 .worktree-row button { display: inline-block; width: auto; margin-right: 8px; }
 #worktree-done { position: sticky; bottom: 0; background: var(--herdr-panel-bg); }
 @media (max-width: 700px) { #worktree-create { grid-template-columns: minmax(0, 1fr); } }
+
+#integrations-dialog { width: min(900px, calc(100vw - 32px)); }
+#integration-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.integration-row { border-top: 1px solid var(--herdr-surface1); padding: 8px 0; overflow-wrap: anywhere; }
+.integration-row h2 { margin: 4px 0; }
+.integration-row button { display: inline-block; width: auto; margin-right: 8px; }
+#integration-results { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) { #integration-list { grid-template-columns: minmax(0, 1fr); } }
+#integration-list { max-height: 45vh; overflow: auto; overscroll-behavior: contain; }
+#integration-results { max-height: 120px; overflow: auto; }
+#integration-done { position: sticky; bottom: 0; background: var(--herdr-panel-bg); }

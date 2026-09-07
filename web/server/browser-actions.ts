@@ -11,6 +11,12 @@ export function browserAction(value: Record<string, unknown>): { method: string;
   if (method.startsWith('worktree.')) return worktreeAction(value);
   const id = () => publicId(value.id);
   switch (method) {
+    case 'integration.list': return { method, params: {} };
+    case 'integration.install':
+    case 'integration.uninstall':
+      if (typeof value.target !== 'string' || !['pi', 'omp', 'claude', 'codex', 'copilot', 'devin', 'droid', 'kimi', 'opencode', 'kilo', 'hermes', 'qodercli', 'qwen', 'cursor', 'mastracode', 'antigravity_cli', 'grok'].includes(value.target)) throw new ManagementError('Invalid integration target.');
+      return { method, params: { target: value.target } };
+
     case 'workspace.create': return { method, params: { ...(value.label ? { label: text(value.label) } : {}), ...(value.source ? { source_workspace_id: publicId(value.source) } : {}) } };
     case 'workspace.close': return { method, params: { workspace_id: id() } };
     case 'workspace.rename': return { method, params: { workspace_id: id(), label: text(value.label) } };

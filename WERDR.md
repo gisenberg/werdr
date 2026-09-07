@@ -167,3 +167,10 @@ Branch, base ref, checkout path, and workspace label are passed to herdr; blank 
 Repository trust explicitly overrides Git ownership checks for that operation and does not suppress Git hooks.
 Removal uses the native workspace-scoped worktree operation, requires confirmation, and preserves dirty checkouts unless force is explicitly selected.
 Closed worktrees can be opened before removal.
+
+## Agent integrations
+
+Open **Manage host integrations** in Settings, or use the command palette, to inspect native agent availability and hook installation state on the selected host.
+Install, update, reinstall, and uninstall use herdr's native integration API and display its results.
+**Install recommended** selects outdated integrations and available agents whose integration is not installed, matching the native desktop rule.
+Closing the panel stops any remaining unstarted batch actions.

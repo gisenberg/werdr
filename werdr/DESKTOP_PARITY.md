@@ -19,7 +19,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 | Worktrees | Native list/create/open/remove flows with host and repository scope and native errors | Implemented native repository picker and create/open/remove; isolated Git browser test verifies branch and checkout identity, dirty removal rejection, explicit force, normal native checkout hooks, and repository retention |
 | Agents | Start/prompt/rename, native ordering/views, detail/status metadata and attention navigation | Partial: basic actions and fleet list |
 | Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Partial: durable fleet activity and desktop opt-in |
-| Integrations | Native readiness list and explicit installation/uninstallation with results | Missing |
+| Integrations | Native readiness list and explicit installation/uninstallation with results | Implemented all native targets, individual and recommended installs, uninstall confirmation and native results; isolated agent-config browser tests verify install/reinstall/uninstall, preservation of unrelated settings and native failures |
 | Plugins | Native management, actions, logs and plugin pane lifecycle | Missing |
 | Host onboarding | Shared native catalog, explicit compatibility/install prompts and repair, no forced runtime replacement | Existing management tests; extend compatibility coverage |
 | Runtime configuration | Explicit host-scoped shell/cwd/scrollback/worktree/resume settings and validated reload | Missing browser controls |

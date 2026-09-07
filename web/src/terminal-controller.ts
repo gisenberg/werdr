@@ -13,9 +13,11 @@ export class TerminalController {
   private fit?: () => void;
   private epoch = 0;
   private attempt = 0;
+  private failure?: string;
   private timer?: ReturnType<typeof setTimeout>;
   private visible = true;
   ready = false;
+  get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
@@ -42,11 +44,11 @@ export class TerminalController {
   dispose() { this.reset(); this.element.remove(); }
   async connect(takeover = false, retry = false) {
     this.reset(); if (!this.visible) return; if (!retry) this.attempt = 0;
-    const epoch = this.epoch; this.shield.textContent = 'Attaching to Herdr...'; this.changed();
+    const epoch = this.epoch; if (!retry) this.failure = undefined; this.shield.textContent = this.failure || 'Attaching to Herdr...'; this.changed();
     // Reserve the pending instance so a metadata update cannot start another load.
     this.cleanup = () => {};
     let library: Awaited<ReturnType<typeof loadGhostty>>;
-    try { library = await loadGhostty(); } catch { if (epoch === this.epoch) { this.cleanup = undefined; this.shield.textContent = 'Terminal renderer could not load. Retry attachment.'; } return; }
+    try { library = await loadGhostty(); } catch { if (epoch === this.epoch) { this.cleanup = undefined; this.shield.textContent = 'Terminal renderer could not load. Retry attachment.'; this.changed(); } return; }
     if (epoch !== this.epoch) return;
     const term = new library.Terminal(this.options()); this.terminal = term;
     const fit = new library.FitAddon(); term.loadAddon(fit); term.open(this.content);
@@ -79,19 +81,19 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
-        if (frame.type === 'terminal.closed') { this.ready = false; this.shield.hidden = false; this.shield.textContent = frame.reason; this.changed(); return; }
+        if (frame.type === 'terminal.closed') { this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
         if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
         const bytes = Uint8Array.from(atob(frame.bytes), c => c.charCodeAt(0));
         applyingFrame = true;
         try { if (term.cols !== frame.width || term.rows !== frame.height) term.resize(frame.width, frame.height); } finally { applyingFrame = false; }
-        term.write(bytes, () => { if (epoch === this.epoch) { this.ready = true; this.attempt = 0; reveal(); } });
+        term.write(bytes, () => { if (epoch === this.epoch) { this.ready = true; this.failure = undefined; this.attempt = 0; reveal(); } });
       } catch { ws.close(1002, 'Invalid frame'); }
     };
     ws.onclose = () => {
       if (epoch !== this.epoch) return;
-      this.ready = false; this.shield.hidden = false; this.changed();
-      if (this.attempt >= 5) { this.shield.textContent = 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; return; }
-      this.shield.textContent = 'Connection lost. Reattaching...';
+      this.ready = false; this.shield.hidden = false;
+      if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
+      this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
       this.timer = setTimeout(() => { if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
     };
     this.cleanup = () => { boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };

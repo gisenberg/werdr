@@ -160,7 +160,7 @@ const handler: RequestListener = async (req, res) => {
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req); const { method, params } = browserAction(value);
-        return reply(res, 200, await fleet.request(publicId(value.machine), method, params, method !== 'worktree.list'));
+        return reply(res, 200, await fleet.request(publicId(value.machine), method, params, !['worktree.list', 'integration.list'].includes(method)));
       }
       return reply(res, 404, { error: 'Unknown route' });
     }
@@ -244,7 +244,7 @@ server.on('upgrade', async (req, socket, head) => {
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
       const decoder = new NdjsonDecoder();
-      let ended = false, released = false;
+      let ended = false, released = false, terminalClosedSent = false;
       const startup = setTimeout(() => closeSocket(ws, 1011, 'Terminal controller timed out'), 15000);
       startup.unref();
       controllers.set(ws, () => {
@@ -256,6 +256,7 @@ server.on('upgrade', async (req, socket, head) => {
         terminate.unref(); kill.unref();
       });
       const send = (value: unknown) => {
+        if (value && typeof value === 'object' && 'type' in value && value.type === 'terminal.closed') { if (terminalClosedSent) return; terminalClosedSent = true; }
         if (ws.readyState !== WebSocket.OPEN) return;
         if (ws.bufferedAmount > 4 * 1024 * 1024) { closeSocket(ws, 1013, 'Viewer too slow'); return; }
         ws.send(JSON.stringify(value));

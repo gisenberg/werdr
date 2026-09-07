@@ -64,7 +64,7 @@ export class DesktopSurface {
       if (epoch === this.epoch) { this.loading = false; if (this.dirty && !this.drag) { this.dirty = false; void this.load(); } }
     }
   }
-  private readiness = () => { this.shield.hidden = !this.pendingSelection && (!!this.active?.ready || this.overflow.has(this.pane)) && !document.querySelector<HTMLDialogElement>('#boot')?.open; };
+  private readiness = () => { if (!this.pendingSelection && this.active && !this.active.ready) this.shield.textContent = this.active.status; this.shield.hidden = !this.pendingSelection && (!!this.active?.ready || this.overflow.has(this.pane)) && !document.querySelector<HTMLDialogElement>('#boot')?.open; };
   private render() {
     if (!this.layout || !this.container.clientWidth || !this.container.clientHeight) return;
     const mobile = matchMedia('(max-width: 700px)').matches;
