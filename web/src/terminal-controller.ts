@@ -1,6 +1,7 @@
 import type { Terminal } from 'ghostty-web';
 import { loadGhostty } from './terminal-loader';
 import { fontFamilies, type Preferences, palette } from '../shared/settings';
+import { NativeKeyboard } from './native-keyboard';
 import { NativeMouse } from './native-mouse';
 import { NativeLinks } from './native-links';
 import { NativeCopyMode } from './native-copy-mode';
@@ -75,6 +76,7 @@ export class TerminalController {
     const params = new URLSearchParams({ machine: this.machine, pane: this.pane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0' });
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); this.socket = ws;
     const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
+    const keyboard = new NativeKeyboard(this.content, term, term.createInputEncoder(), library, () => this.ready && this.visible && !this.copyMode.active, text => send({ type: 'terminal.input', text }));
     let applyingFrame = false;
     const boot = document.querySelector<HTMLDialogElement>('#boot')!;
     const reveal = () => { if (epoch === this.epoch && this.ready && !boot.open) { this.shield.hidden = true; this.changed(); } };
@@ -105,6 +107,7 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
+        if (frame.type === 'terminal.keyboard') { keyboard.update(frame.flags, frame.modify_other_keys_level); return; }
         if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { this.mouse.setEnabled(frame.enabled); return; }
         if (frame.type === 'terminal.closed') { this.mouse.setEnabled(false); this.links.cancel(); this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
         if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
@@ -123,6 +126,6 @@ export class TerminalController {
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
       this.timer = setTimeout(() => { this.timer = undefined; if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
     };
-    this.cleanup = () => { boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
+    this.cleanup = () => { keyboard.dispose(); boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
   }
 }

@@ -31,3 +31,14 @@ The checked-in hashes above identify the exact reviewed artifacts even when arch
 This pin can be removed once the changes are merged upstream and available as a published package.
 At the time of pinning, the pull request has merge conflicts, its 612 KiB WASM artifact exceeds the pull request's stated 512 KiB CI budget, and its Bun test invocation also discovers Playwright specifications.
 wmux's own unit, type, build, and browser tests pass against this artifact.
+
+## Werdr keyboard encoder extension
+
+Werdr uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr1.tgz` with package version `0.4.1-pr169.faf6fbd.werdr1`.
+Its SHA-256 is `b88dcacd14ea22391e6abff1751e7b408d26a1bb0a51f1b4379da5a2904431d8`.
+Apply `werdr-key-encoder-fields.patch` after the four wmux patches listed above.
+The wrapper now forwards consumed modifiers, composition state, and the unshifted codepoint from its existing `KeyEvent` interface to WASM.
+Without the unshifted codepoint, Kitty encoding falls back to plain text for printable keys even when the application requests event reporting.
+The WASM binary remains byte-identical to the wmux4 artifact.
+Build the library with `npm run build:lib`, retain the root and dist WASM copies, set the package version above, include `LICENSE` in the package files, and run `npm pack`.
+Werdr verifies printable Kitty press, repeat, release, and reset behavior through its browser and pinned native-runtime fixture.

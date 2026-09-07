@@ -1,0 +1,24 @@
+--- a/lib/ghostty.ts
++++ b/lib/ghostty.ts
+@@ -224,6 +224,9 @@
+     this.exports.ghostty_key_event_set_action(eventPtr, event.action);
+     this.exports.ghostty_key_event_set_key(eventPtr, event.key);
+     this.exports.ghostty_key_event_set_mods(eventPtr, event.mods);
++    this.exports.ghostty_key_event_set_consumed_mods(eventPtr, event.consumedMods ?? 0);
++    this.exports.ghostty_key_event_set_composing(eventPtr, event.composing ? 1 : 0);
++    this.exports.ghostty_key_event_set_unshifted_codepoint(eventPtr, event.unshiftedCodepoint ?? 0);
+ 
+     if (event.utf8) {
+       const encoder = new TextEncoder();
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -405,6 +405,9 @@
+   ghostty_key_event_set_action(event: number, action: number): void;
+   ghostty_key_event_set_key(event: number, key: number): void;
+   ghostty_key_event_set_mods(event: number, mods: number): void;
++  ghostty_key_event_set_consumed_mods(event: number, mods: number): void;
++  ghostty_key_event_set_composing(event: number, composing: number): void;
++  ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
+   ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
+ 
+   // Terminal lifecycle
