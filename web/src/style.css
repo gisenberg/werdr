@@ -1,0 +1,53 @@
+:root { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #d1ddd8; background: #14191b; color-scheme: dark; font-size: 13px; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select { font: inherit; color: inherit; border: 1px solid #35413d; border-radius: 0; background: #14191b; padding: 9px 11px; }
+button { cursor: pointer; text-align: left; }
+button:hover, button.active { color: #b6ef9c; background: #25322b; }
+button:disabled { opacity: .35; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 2px solid #b6ef9c; outline-offset: -2px; }
+#app { height: var(--viewport, 100dvh); display: flex; flex-direction: column; overflow: hidden; }
+header, footer { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid #35413d; }
+header strong { color: #b6ef9c; font-size: 20px; letter-spacing: 1px; }
+header span { color: #85968e; font-size: 11px; font-weight: normal; }
+main { display: flex; flex: 1; min-height: 0; position: relative; }
+#host-toggle { display: none; }
+aside { width: 248px; flex-shrink: 0; border-right: 1px solid #35413d; overflow: auto; }
+.section { color: #85968e; padding: 14px 12px 8px; display: flex; align-items: center; justify-content: space-between; }
+.section button { padding: 3px 7px; }
+aside nav { display: flex; flex-direction: column; }
+aside nav button { border: 0; border-bottom: 1px solid #25302c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#surface { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
+#tabs, #panes { display: flex; overflow-x: auto; flex-shrink: 0; min-height: 34px; border-bottom: 1px solid #35413d; }
+#tabs button, #panes button { border: 0; border-right: 1px solid #35413d; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+#panes { color: #85968e; font-size: 11px; }
+#terminal { flex: 1; min-height: 0; overflow: hidden; }
+#shield { position: absolute; inset: 75px 0 0; background: #14191b; padding: 28px; color: #85968e; pointer-events: none; }
+#shield[hidden] { display: none; }
+footer { border-top: 1px solid #35413d; border-bottom: 0; font-size: 11px; }
+footer div { display: flex; gap: 4px; flex-shrink: 0; }
+#status { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+dialog { width: min(520px, 94vw); border: 1px solid #708576; padding: 28px; background: #14191b; }
+dialog::backdrop { background: #090d0ee8; }
+dialog h1 { color: #b6ef9c; font-size: 30px; margin-bottom: 8px; }
+dialog p { color: #98a99f; line-height: 1.6; }
+dialog label { display: block; margin: 25px 0 14px; color: #98a99f; }
+dialog input { display: block; width: 100%; margin-top: 10px; }
+dialog button { width: 100%; color: #b6ef9c; }
+#boot { white-space: pre; height: 150px; padding: 14px 5px; overflow: hidden; font-size: 11px; line-height: 1.5; }
+dialog .boot-options { margin: 10px 0; display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
+#login-error { color: #f4ac99; }
+@media (max-width: 700px) {
+  header span { display: none; }
+  #host-toggle { display: block; }
+  aside { display: none; position: absolute; inset: 0 auto 0 0; z-index: 5; width: min(280px, 85vw); background: #14191b; }
+  .hosts-open aside { display: block; }
+  .section { padding: 10px 6px; font-size: 10px; }
+  aside nav button { padding: 12px 6px; font-size: 11px; }
+  footer { flex-direction: column; align-items: stretch; padding: 5px; gap: 4px; }
+  footer div { display: grid; grid-template-columns: repeat(4, 1fr); }
+  footer button { padding: 10px 4px; text-align: center; font-size: 10px; }
+  .keyboard-open header, .keyboard-open footer, .keyboard-open #tabs, .keyboard-open #panes { height: 0; min-height: 0; padding: 0; border: 0; overflow: hidden; visibility: hidden; }
+  .keyboard-open aside { display: none; }
+  .keyboard-open #shield { inset: 0; }
+}

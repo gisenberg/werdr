@@ -1,0 +1,2 @@
+# Unified-diff context contains single-space empty lines. Preserve patch bytes.
+*.patch -whitespace

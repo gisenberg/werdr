@@ -1,0 +1,108 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index 573f1d3..a3bece4 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -900,7 +900,7 @@ export class CanvasRenderer {
+     // Handle special characters that need pixel-perfect rendering:
+     // - Block drawing characters (U+2580-U+259F): rectangles for gap-free ASCII art
+     // - Powerline glyphs (U+E0B0-U+E0BF): vector shapes to match exact cell height
+-    if (this.renderBlockChar(codepoint, cellX, cellY, cellWidth)) {
++    if (this.renderBlockElement(codepoint, cellX, cellY, cellWidth)) {
+       // Block character was rendered as a rectangle, skip font rendering
+     } else if (this.renderPowerlineGlyph(codepoint, cellX, cellY, cellWidth)) {
+       // Powerline glyph was rendered as a vector shape, skip font rendering
+@@ -971,82 +971,6 @@ export class CanvasRenderer {
+     );
+   }
+ 
+-  /**
+-   * Render block drawing characters as filled rectangles for pixel-perfect rendering.
+-   * Returns true if the character was handled, false if it should be rendered as text.
+-   */
+-  private renderBlockChar(
+-    codepoint: number,
+-    cellX: number,
+-    cellY: number,
+-    cellWidth: number
+-  ): boolean {
+-    const height = this.metrics.height;
+-
+-    // Block Elements (U+2580-U+259F)
+-    switch (codepoint) {
+-      case 0x2580: // ▀ UPPER HALF BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth, height / 2);
+-        return true;
+-      case 0x2581: // ▁ LOWER ONE EIGHTH BLOCK
+-        this.ctx.fillRect(cellX, cellY + (height * 7) / 8, cellWidth, height / 8);
+-        return true;
+-      case 0x2582: // ▂ LOWER ONE QUARTER BLOCK
+-        this.ctx.fillRect(cellX, cellY + (height * 3) / 4, cellWidth, height / 4);
+-        return true;
+-      case 0x2583: // ▃ LOWER THREE EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY + (height * 5) / 8, cellWidth, (height * 3) / 8);
+-        return true;
+-      case 0x2584: // ▄ LOWER HALF BLOCK
+-        this.ctx.fillRect(cellX, cellY + height / 2, cellWidth, height / 2);
+-        return true;
+-      case 0x2585: // ▅ LOWER FIVE EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY + (height * 3) / 8, cellWidth, (height * 5) / 8);
+-        return true;
+-      case 0x2586: // ▆ LOWER THREE QUARTERS BLOCK
+-        this.ctx.fillRect(cellX, cellY + height / 4, cellWidth, (height * 3) / 4);
+-        return true;
+-      case 0x2587: // ▇ LOWER SEVEN EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY + height / 8, cellWidth, (height * 7) / 8);
+-        return true;
+-      case 0x2588: // █ FULL BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth, height);
+-        return true;
+-      case 0x2589: // ▉ LEFT SEVEN EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY, (cellWidth * 7) / 8, height);
+-        return true;
+-      case 0x258a: // ▊ LEFT THREE QUARTERS BLOCK
+-        this.ctx.fillRect(cellX, cellY, (cellWidth * 3) / 4, height);
+-        return true;
+-      case 0x258b: // ▋ LEFT FIVE EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY, (cellWidth * 5) / 8, height);
+-        return true;
+-      case 0x258c: // ▌ LEFT HALF BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth / 2, height);
+-        return true;
+-      case 0x258d: // ▍ LEFT THREE EIGHTHS BLOCK
+-        this.ctx.fillRect(cellX, cellY, (cellWidth * 3) / 8, height);
+-        return true;
+-      case 0x258e: // ▎ LEFT ONE QUARTER BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth / 4, height);
+-        return true;
+-      case 0x258f: // ▏ LEFT ONE EIGHTH BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth / 8, height);
+-        return true;
+-      case 0x2590: // ▐ RIGHT HALF BLOCK
+-        this.ctx.fillRect(cellX + cellWidth / 2, cellY, cellWidth / 2, height);
+-        return true;
+-      case 0x2594: // ▔ UPPER ONE EIGHTH BLOCK
+-        this.ctx.fillRect(cellX, cellY, cellWidth, height / 8);
+-        return true;
+-      case 0x2595: // ▕ RIGHT ONE EIGHTH BLOCK
+-        this.ctx.fillRect(cellX + (cellWidth * 7) / 8, cellY, cellWidth / 8, height);
+-        return true;
+-      default:
+-        return false;
+-    }
+-  }
+-
+   /**
+    * Render Powerline glyphs as vector shapes for pixel-perfect cell height.
+    * Powerline glyphs (U+E0B0-U+E0BF) are designed to span the full cell height,
+diff --git a/package.json b/package.json
+index 44ca31c..d3eaafa 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "ghostty-web",
+-  "version": "0.4.1-pr169.faf6fbd.wmux3",
++  "version": "0.4.1-pr169.faf6fbd.wmux4",
+   "description": "Web-based terminal emulator using Ghostty's VT100 parser via WebAssembly",
+   "type": "module",
+   "main": "./dist/ghostty-web.cjs.js",

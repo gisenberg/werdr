@@ -1,0 +1,153 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index 4f6218e..7ffcbc8 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -143,6 +143,7 @@ export class CanvasRenderer {
+   private ctx: CanvasRenderingContext2D;
+   private fontSize: number;
+   private fontFamily: string;
++  private fontStrings = new Map<string, string>();
+   private cursorStyle: 'block' | 'underline' | 'bar';
+   private cursorBlink: boolean;
+   private theme: Required<ITheme>;
+@@ -326,6 +327,9 @@ export class CanvasRenderer {
+    * Example: "Fira Code, monospace" -> '"Fira Code", monospace'
+    */
+   private buildFontString(style: string = ''): string {
++    const cached = this.fontStrings.get(style);
++    if (cached) return cached;
++
+     // Quote font family names that contain spaces but aren't already quoted
+     const quotedFamily = this.fontFamily
+       .split(',')
+@@ -340,7 +344,9 @@ export class CanvasRenderer {
+       })
+       .join(', ');
+ 
+-    return `${style}${this.fontSize}px ${quotedFamily}`;
++    const font = `${style}${this.fontSize}px ${quotedFamily}`;
++    this.fontStrings.set(style, font);
++    return font;
+   }
+ 
+   private measureFont(): FontMetrics {
+@@ -827,6 +833,16 @@ export class CanvasRenderer {
+       return;
+     }
+ 
++    const codepoint = cell.codepoint || 32;
++    const hoveredOsc8Link =
++      cell.hyperlink_id > 0 && cell.hyperlink_id === this.hoveredHyperlinkId;
++    const hoveredRegexLink = this.isInHoveredLinkRange(x, y);
++    const hasTextDecoration =
++      (cell.flags & (CellFlags.UNDERLINE | CellFlags.STRIKETHROUGH)) !== 0 ||
++      hoveredOsc8Link ||
++      hoveredRegexLink;
++    if (codepoint === 32 && cell.grapheme_len === 0 && !hasTextDecoration) return;
++
+     // Check if this cell is selected
+     const isSelected = this.isInSelection(x, y);
+ 
+@@ -834,7 +850,8 @@ export class CanvasRenderer {
+     let fontStyle = '';
+     if (cell.flags & CellFlags.ITALIC) fontStyle += 'italic ';
+     if (cell.flags & CellFlags.BOLD) fontStyle += 'bold ';
+-    this.ctx.font = this.buildFontString(fontStyle);
++    const font = this.buildFontString(fontStyle);
++    if (this.ctx.font !== font) this.ctx.font = font;
+ 
+     // Extract colors and handle inverse
+     let fg_r = cell.fg_r,
+@@ -883,7 +900,6 @@ export class CanvasRenderer {
+     // Handle special characters that need pixel-perfect rendering:
+     // - Block drawing characters (U+2580-U+259F): rectangles for gap-free ASCII art
+     // - Powerline glyphs (U+E0B0-U+E0BF): vector shapes to match exact cell height
+-    const codepoint = cell.codepoint || 32;
+     if (this.renderBlockChar(codepoint, cellX, cellY, cellWidth)) {
+       // Block character was rendered as a rectangle, skip font rendering
+     } else if (this.renderPowerlineGlyph(codepoint, cellX, cellY, cellWidth)) {
+@@ -921,10 +937,8 @@ export class CanvasRenderer {
+ 
+     // Draw hyperlink underline (for OSC8 hyperlinks)
+     if (cell.hyperlink_id > 0) {
+-      const isHovered = cell.hyperlink_id === this.hoveredHyperlinkId;
+-
+       // Only show underline when hovered (cleaner look)
+-      if (isHovered) {
++      if (hoveredOsc8Link) {
+         const underlineY = cellY + this.metrics.baseline + 2;
+         this.ctx.strokeStyle = '#4A90E2'; // Blue underline on hover
+         this.ctx.lineWidth = 1;
+@@ -936,26 +950,27 @@ export class CanvasRenderer {
+     }
+ 
+     // Draw regex link underline (for plain text URLs)
+-    if (this.hoveredLinkRange) {
+-      const range = this.hoveredLinkRange;
+-      // Check if this cell is within the hovered link range
+-      const isInRange =
+-        (y === range.startY && x >= range.startX && (y < range.endY || x <= range.endX)) ||
+-        (y > range.startY && y < range.endY) ||
+-        (y === range.endY && x <= range.endX && (y > range.startY || x >= range.startX));
+-
+-      if (isInRange) {
+-        const underlineY = cellY + this.metrics.baseline + 2;
+-        this.ctx.strokeStyle = '#4A90E2'; // Blue underline on hover
+-        this.ctx.lineWidth = 1;
+-        this.ctx.beginPath();
+-        this.ctx.moveTo(cellX, underlineY);
+-        this.ctx.lineTo(cellX + cellWidth, underlineY);
+-        this.ctx.stroke();
+-      }
++    if (hoveredRegexLink) {
++      const underlineY = cellY + this.metrics.baseline + 2;
++      this.ctx.strokeStyle = '#4A90E2'; // Blue underline on hover
++      this.ctx.lineWidth = 1;
++      this.ctx.beginPath();
++      this.ctx.moveTo(cellX, underlineY);
++      this.ctx.lineTo(cellX + cellWidth, underlineY);
++      this.ctx.stroke();
+     }
+   }
+ 
++  private isInHoveredLinkRange(x: number, y: number): boolean {
++    const range = this.hoveredLinkRange;
++    if (!range) return false;
++    return (
++      (y === range.startY && x >= range.startX && (y < range.endY || x <= range.endX)) ||
++      (y > range.startY && y < range.endY) ||
++      (y === range.endY && x <= range.endX && (y > range.startY || x >= range.startX))
++    );
++  }
++
+   /**
+    * Render block drawing characters as filled rectangles for pixel-perfect rendering.
+    * Returns true if the character was handled, false if it should be rendered as text.
+@@ -1690,6 +1705,7 @@ export class CanvasRenderer {
+    */
+   public setFontSize(size: number): void {
+     this.fontSize = size;
++    this.fontStrings.clear();
+     this.metrics = this.measureFont();
+   }
+ 
+@@ -1698,6 +1714,7 @@ export class CanvasRenderer {
+    */
+   public setFontFamily(family: string): void {
+     this.fontFamily = family;
++    this.fontStrings.clear();
+     this.metrics = this.measureFont();
+   }
+ 
+diff --git a/package.json b/package.json
+index 91af5cc..3a26673 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "ghostty-web",
+-  "version": "0.4.1-pr169.faf6fbd.wmux1",
++  "version": "0.4.1-pr169.faf6fbd.wmux2",
+   "description": "Web-based terminal emulator using Ghostty's VT100 parser via WebAssembly",
+   "type": "module",
+   "main": "./dist/ghostty-web.cjs.js",

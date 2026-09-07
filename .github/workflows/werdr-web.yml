@@ -1,0 +1,41 @@
+name: Werdr web
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'werdr/**'
+      - '.github/workflows/werdr-web.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - 'werdr/**'
+      - '.github/workflows/werdr-web.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    if: github.repository == 'gisenberg/werdr'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run check
+        working-directory: web
+      - run: node werdr/fetch-runtime.mjs
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:e2e
+        working-directory: web

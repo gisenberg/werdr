@@ -1,0 +1,51 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+test('upstream helper stages reviewable merges, preserves dirty work, and refuses merged PR replay', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'werdr-upstream-'));
+  const remote = join(directory, 'upstream.git'), seed = join(directory, 'seed'), fork = join(directory, 'fork');
+  const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const commit = (cwd: string, message: string) => { run(cwd, 'add', '.'); run(cwd, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', message); };
+  try {
+    run(directory, 'init', '--bare', '--initial-branch=master', remote);
+    run(directory, 'clone', remote, seed);
+    mkdirSync(join(seed, 'werdr'));
+    copyFileSync(fileURLToPath(new URL('../../werdr/upstream.mjs', import.meta.url)), join(seed, 'werdr/upstream.mjs'));
+    commit(seed, 'test: seed'); run(seed, 'push', 'origin', 'master');
+    run(directory, 'clone', '--origin', 'upstream', remote, fork);
+    run(fork, 'config', 'user.name', 'Fixture'); run(fork, 'config', 'user.email', 'fixture@example.invalid');
+    run(fork, 'switch', '-c', 'update/runtime');
+    const initial = run(fork, 'rev-parse', 'HEAD');
+    writeFileSync(join(seed, 'upstream-file'), 'upstream\n'); commit(seed, 'test: upstream update'); run(seed, 'push', 'origin', 'master');
+    const helper = (args: string[], env = process.env) => spawnSync(process.execPath, ['werdr/upstream.mjs', ...args], { cwd: fork, env, encoding: 'utf8' });
+    assert.equal(helper(['prepare-sync']).status, 0);
+    assert.equal(run(fork, 'rev-parse', 'HEAD'), initial, 'preparation must not create a commit');
+    assert.equal(run(fork, 'rev-parse', 'MERGE_HEAD'), run(seed, 'rev-parse', 'HEAD'));
+    assert.match(run(fork, 'diff', '--cached', '--name-only'), /upstream-file/);
+    run(fork, 'merge', '--abort');
+    writeFileSync(join(fork, 'local-work'), 'keep me');
+    assert.notEqual(helper(['prepare-sync']).status, 0);
+    assert.equal(run(fork, 'status', '--porcelain'), '?? local-work');
+    rmSync(join(fork, 'local-work'));
+    writeFileSync(join(seed, 'pr-file'), 'feature\n'); commit(seed, 'test: open pr');
+    const sha = run(seed, 'rev-parse', 'HEAD'); run(seed, 'push', 'origin', 'HEAD:refs/pull/123/head');
+    const bin = join(directory, 'bin'); mkdirSync(bin);
+    const metadata = (state: string) => writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node\nconsole.log(${JSON.stringify(JSON.stringify({ state, headRefOid: sha, title: 'Fixture PR' }))});\n`, { mode: 0o700 });
+    const env = { ...process.env, PATH: bin + ':' + process.env.PATH };
+    metadata('OPEN');
+    const prepared = helper(['prepare-pr', '123'], env);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.equal(run(fork, 'rev-parse', 'MERGE_HEAD'), sha);
+    run(fork, 'merge', '--abort');
+    metadata('MERGED');
+    const refused = helper(['prepare-pr', '123'], env);
+    assert.notEqual(refused.status, 0); assert.match(refused.stderr, /MERGED/);
+    assert.equal(run(fork, 'status', '--porcelain'), '');
+    assert.equal(run(fork, 'rev-parse', 'HEAD'), initial);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

@@ -1,0 +1,4 @@
+dist/
+.auth-token
+test-results/
+playwright-report/
