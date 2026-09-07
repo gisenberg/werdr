@@ -158,6 +158,7 @@ fn pane_scroll_result(
             tokens: HashMap::new(),
             agent_session: None,
             scroll: Some(crate::api::schema::PaneScrollInfo {
+                alternate_screen_active: Some(false),
                 offset_from_bottom,
                 max_offset_from_bottom,
                 viewport_rows,

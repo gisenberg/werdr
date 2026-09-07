@@ -561,6 +561,9 @@ pub struct PaneInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneScrollInfo {
+    /// Absent on older endpoints; clients must not infer the active screen from history size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_screen_active: Option<bool>,
     pub offset_from_bottom: u64,
     pub max_offset_from_bottom: u64,
     pub viewport_rows: u64,

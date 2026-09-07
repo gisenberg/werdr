@@ -999,6 +999,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,
@@ -6527,6 +6534,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,
@@ -8446,6 +8460,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,

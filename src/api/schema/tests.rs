@@ -695,6 +695,7 @@ fn scroll_changed_subscription_event_round_trips() {
             pane_id: "p_1_1".into(),
             workspace_id: "w_1".into(),
             scroll: PaneScrollInfo {
+                alternate_screen_active: Some(false),
                 offset_from_bottom: 12,
                 max_offset_from_bottom: 240,
                 viewport_rows: 30,
@@ -1432,4 +1433,25 @@ fn popup_close_request_round_trips() {
 
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
+}
+
+#[test]
+fn legacy_scroll_geometry_does_not_claim_a_screen_mode() {
+    let legacy = r#"{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":24}"#;
+    let scroll: PaneScrollInfo = serde_json::from_str(legacy).unwrap();
+    assert_eq!(scroll.alternate_screen_active, None);
+    assert!(!serde_json::to_string(&scroll)
+        .unwrap()
+        .contains("alternate_screen_active"));
+    for alternate in [false, true] {
+        let current = PaneScrollInfo {
+            alternate_screen_active: Some(alternate),
+            ..scroll
+        };
+        let encoded = serde_json::to_string(&current).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PaneScrollInfo>(&encoded).unwrap(),
+            current
+        );
+    }
 }

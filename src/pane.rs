@@ -2907,6 +2907,10 @@ impl PaneRuntime {
         self.terminal.scroll_metrics()
     }
 
+    pub fn scroll_state(&self) -> Option<(ScrollMetrics, bool)> {
+        self.terminal.scroll_state()
+    }
+
     pub(crate) fn search_text_window(
         &self,
         query: &str,

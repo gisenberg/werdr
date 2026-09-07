@@ -278,6 +278,10 @@ impl TerminalRuntime {
         self.0.scroll_metrics()
     }
 
+    pub fn scroll_state(&self) -> Option<(crate::pane::ScrollMetrics, bool)> {
+        self.0.scroll_state()
+    }
+
     pub(crate) fn search_text_window(
         &self,
         query: &str,

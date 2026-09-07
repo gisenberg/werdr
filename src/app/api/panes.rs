@@ -2350,6 +2350,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_pane_scroll_state_tracks_alternate_screen_entry_and_exit() {
+        let (app, _, pane_id) = app_with_scrollback_runtime();
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        let original = app
+            .pane_info(0, pane_id)
+            .expect("pane")
+            .scroll
+            .expect("scroll");
+        assert_eq!(original.alternate_screen_active, Some(false));
+        assert!(original.max_offset_from_bottom > 0);
+        runtime.test_process_pty_bytes(b"\x1b[?1049h");
+        let alternate = app
+            .pane_info(0, pane_id)
+            .expect("pane")
+            .scroll
+            .expect("scroll");
+        assert_eq!(alternate.alternate_screen_active, Some(true));
+        assert_eq!(alternate.max_offset_from_bottom, 0);
+        assert_eq!(alternate.viewport_rows, original.viewport_rows);
+        runtime.test_process_pty_bytes(b"\x1b[?1049l");
+        assert_eq!(
+            app.pane_info(0, pane_id)
+                .expect("pane")
+                .scroll
+                .expect("scroll"),
+            original
+        );
+    }
+
+    #[tokio::test]
     async fn api_pane_get_exposes_scroll_metrics() {
         let (mut app, public_pane_id, pane_id) = app_with_scrollback_runtime();
         let runtime = app

@@ -688,13 +688,46 @@ mod tests {
     }
 
     #[test]
+    fn scroll_subscription_emits_screen_transitions_without_history_changes() {
+        let normal = PaneScrollInfo {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 20,
+            alternate_screen_active: Some(false),
+        };
+        let alternate = PaneScrollInfo {
+            alternate_screen_active: Some(true),
+            ..normal
+        };
+        let mut subscription = ActiveScrollChangedSubscription {
+            pane_id: "pane_1".into(),
+            last_scroll: Some(normal),
+            request_prefix: "test".into(),
+        };
+        for scroll in [alternate, normal] {
+            let event = subscription
+                .event_from_snapshot(pane_info_with_scroll(Some(scroll)))
+                .expect("screen transition must update the gutter");
+            let SubscriptionEventData::ScrollChanged(data) = event.data else {
+                panic!("wrong event data");
+            };
+            assert_eq!(data.scroll, scroll);
+            assert!(subscription
+                .event_from_snapshot(pane_info_with_scroll(Some(scroll)))
+                .is_none());
+        }
+    }
+
+    #[test]
     fn scroll_subscription_emits_when_scroll_snapshot_changes() {
         let at_bottom = PaneScrollInfo {
+            alternate_screen_active: Some(false),
             offset_from_bottom: 0,
             max_offset_from_bottom: 40,
             viewport_rows: 20,
         };
         let scrolled_back = PaneScrollInfo {
+            alternate_screen_active: Some(false),
             offset_from_bottom: 8,
             max_offset_from_bottom: 40,
             viewport_rows: 20,

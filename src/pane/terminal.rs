@@ -262,6 +262,10 @@ impl PaneTerminal {
         self.ghostty.scroll_metrics()
     }
 
+    pub fn scroll_state(&self) -> Option<(ScrollMetrics, bool)> {
+        self.ghostty.scroll_state()
+    }
+
     pub(crate) fn search_text_window(
         &self,
         query: &str,
@@ -1753,6 +1757,25 @@ impl GhosttyPaneTerminal {
             max_offset_from_bottom: scrollbar.total.saturating_sub(scrollbar.len),
             viewport_rows: scrollbar.len,
         })
+    }
+
+    /// API scroll geometry and screen identity must describe the same terminal state.
+    /// Keep the render-loop metrics accessor independent of this extra mode query.
+    pub fn scroll_state(&self) -> Option<(ScrollMetrics, bool)> {
+        let core = self.core.lock().ok()?;
+        let scrollbar = core.terminal.scrollbar().ok()?;
+        let alternate =
+            core.terminal.active_screen().ok()? == crate::ghostty::ActiveScreen::Alternate;
+        Some((
+            ScrollMetrics {
+                offset_from_bottom: scrollbar
+                    .total
+                    .saturating_sub(scrollbar.offset + scrollbar.len),
+                max_offset_from_bottom: scrollbar.total.saturating_sub(scrollbar.len),
+                viewport_rows: scrollbar.len,
+            },
+            alternate,
+        ))
     }
 
     pub fn keyboard_protocol(&self) -> Option<crate::input::KeyboardProtocol> {
