@@ -50,10 +50,13 @@ test('missing fonts cannot block terminal authentication and logout clears secre
   await page.addInitScript(() => { localStorage.removeItem('werdr-last-boot'); Math.random = () => .4; });
   await page.route('**/fonts/retro/*.woff2', route => route.abort());
   await page.goto(runtime.url);
+  await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
+  const before = await page.locator('#boot canvas').boundingBox();
   await consoleInput(page, 'username', runtime.username); await consoleInput(page, 'password', runtime.password);
   await expect(page.locator('#boot')).not.toBeVisible();
   await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
   await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
   await expect(page.locator('#boot textarea')).toHaveValue('');
+  expect(await page.locator('#boot canvas').boundingBox()).toEqual(before);
   expect(await page.locator('#boot-output').textContent()).not.toContain(runtime.password);
 });

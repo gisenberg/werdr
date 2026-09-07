@@ -135,6 +135,8 @@ export class BootConsole {
     this.transcript.textContent = Array.from({ length: this.terminal.rows }, (_, row) => buffer.getLine(row)?.translateToString(true) || '').join('\n');
   }
   private fitViewport() {
+    // A closed dialog reports zero size. Preserve its geometry for the next auth challenge.
+    if (!this.screen.open || !this.screen.clientWidth || !this.screen.clientHeight) return;
     const metrics = this.terminal?.renderer?.getMetrics();
     if (!metrics || !this.terminal) return;
     // Viewport fitting never changes terminal cells or depends on authentication state.
