@@ -28,7 +28,7 @@ export class TerminalController {
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
-    this.copyMode = new NativeCopyMode(this.element, this.content, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.terminal?.focus(), report);
+    this.copyMode = new NativeCopyMode(this.element, this.content, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report);
     this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
@@ -43,7 +43,8 @@ export class TerminalController {
     if (this.terminal) { Object.assign(this.terminal.options, this.options()); if (this.visible) this.fit?.(); }
   }
   private options() { return { focusOnOpen: false, fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
-  focus() { if (this.copyMode.active) this.copyMode.focus(); else this.terminal?.focus(); }
+  // Ghostty.focus() queues another focus call that can outlive this selection.
+  focus() { if (this.copyMode.active) this.copyMode.focus(); else this.terminal?.textarea?.focus({ preventScroll: true }); }
   recover() {
     // Connectivity recovery resumes only exhausted attachments. Healthy sockets
     // and their scheduled retries retain their renderer and ownership.

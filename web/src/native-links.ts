@@ -41,7 +41,7 @@ export class NativeLinks {
     const gesture: Gesture = { down: event, target: event.target, row, col, rows: term.rows, cols: term.cols, timer: setTimeout(() => {
       if (this.gesture === gesture) { this.cancel(); this.report('Link response timed out.', true); }
     }, 5000) };
-    this.gesture = gesture; term.focus(); void this.activate(gesture);
+    this.gesture = gesture; term.textarea?.focus({ preventScroll: true }); void this.activate(gesture);
   };
   private move = (event: MouseEvent) => { if (!this.replaying && this.gesture) { this.stop(event); this.gesture.move = event; } };
   private up = (event: MouseEvent) => { if (!this.replaying && this.gesture && event.button === 0) { this.stop(event); this.gesture.up = event; } };

@@ -91,3 +91,16 @@ test('one and fifteen visible panes retain controller identity through metadata 
     await measure(15);
   } finally { await action('workspace.close', root.workspace_id); }
 });
+
+test('rapid pane focus changes cannot reclaim focus from the navigation search', async ({ page }) => {
+  await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
+  await page.keyboard.press('Control+d'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('.pane-shield:not([hidden])')).toHaveCount(0);
+  await page.evaluate(() => {
+    const inputs = document.querySelectorAll<HTMLTextAreaElement>('.terminal-pane textarea');
+    inputs[0].focus(); inputs[1].focus(); document.querySelector<HTMLInputElement>('#fleet-search')!.focus();
+  });
+  await page.keyboard.type('focus remains in navigation while background terminals receive frames');
+  await expect(page.locator('#fleet-search')).toHaveValue('focus remains in navigation while background terminals receive frames');
+  await expect(page.locator('#fleet-search')).toBeFocused();
+});
