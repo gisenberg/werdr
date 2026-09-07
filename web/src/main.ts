@@ -1,5 +1,5 @@
 import { ContextMenu, type ContextAction } from './context-menu';
-import { navigationTargets, resolveNavigationTarget } from './navigation-targets';
+import { attentionTarget, navigationTargets, resolveNavigationTarget } from './navigation-targets';
 import { BootConsole } from './boot';
 import { RuntimeSettings, runtimeSettingsMarkup } from './runtime-settings';
 import { Integrations, integrationsMarkup } from './integrations';
@@ -327,6 +327,10 @@ function refreshCommands() {
   commands = [
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
+    ...([1, -1] as const).map(direction => ({ label: `${direction === 1 ? 'Next' : 'Previous'} agent needing attention`, disabled: !attentionTarget(fleetState, machine, pane, direction), run: () => {
+      const target = attentionTarget(fleetState, machine, pane, direction); if (!target) return;
+      selectTarget(target.machine, target.workspace, target.tab, target.pane); surface.requestFocus(target.pane);
+    } })),
     { label: 'Host: runtime settings', disabled: !online, run: () => runtimeSettings.open() },
     { label: 'Integrations: agent hooks and readiness', disabled: !online, run: () => integrations.open() },
     { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },

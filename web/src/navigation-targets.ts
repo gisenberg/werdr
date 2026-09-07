@@ -17,3 +17,10 @@ export function navigationTargets(fleet: FleetState): NavigationTarget[] {
 export function resolveNavigationTarget(fleet: FleetState, target: NavigationTarget): NavigationTarget | undefined {
   return navigationTargets(fleet).find(item => !item.disabled && item.kind === target.kind && item.machine === target.machine && item.workspace === target.workspace && item.tab === target.tab && item.pane === target.pane);
 }
+export function attentionTarget(fleet: FleetState, machine: string, pane: string, direction: 1 | -1) {
+  const targets = fleet.hosts.filter(host => host.machine.enabled && host.connection === 'online').flatMap(host => (host.snapshot?.agents || []).filter(agent => agent.agent_status === 'blocked').map(agent => ({ machine: host.machine.id, workspace: agent.workspace_id, tab: agent.tab_id, pane: agent.pane_id })));
+  if (!targets.length) return;
+  const current = targets.findIndex(target => target.machine === machine && target.pane === pane);
+  const index = current < 0 ? direction === 1 ? 0 : targets.length - 1 : (current + direction + targets.length) % targets.length;
+  return targets[index];
+}
