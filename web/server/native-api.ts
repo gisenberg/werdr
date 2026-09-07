@@ -71,7 +71,10 @@ async function unixRemoteTransport(machine: Machine, remotePath: string): Promis
 async function windowsTransport(machine: Machine, pipe: string): Promise<Transport> {
   if (!pipe || pipe.length > 1024 || /[\r\n\0]/.test(pipe)) throw new Error('Invalid native pipe name');
   const source = await readFile(fileURLToPath(new URL('./windows-api-relay.ps1', import.meta.url)), 'utf8');
-  const script = `& { ${source}\n } -PipeName ${quotePowerShell(pipe)}`;
+  // Windows OpenSSH may launch cmd.exe, whose command-line limit is 8191 bytes.
+  // Read an exact UTF-8 prefix from stdin so no buffered reader consumes the
+  // following NDJSON channels, and keep the launch command independent of source size.
+  const script = `$bytes=New-Object byte[] ${Buffer.byteLength(source)}; $stream=[Console]::OpenStandardInput(); $offset=0; while($offset -lt $bytes.Length) { $count=$stream.Read($bytes,$offset,$bytes.Length-$offset); if($count -eq 0) { throw 'Relay source truncated' }; $offset+=$count }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($bytes))) -PipeName ${quotePowerShell(pipe)}`;
   const child = spawn('ssh', [...sshArgs(machine), '--', machine.target!, powershellCommand(script)], { env: environment });
   const channels = new Map<string, Channel>(); const decoder = new NdjsonDecoder(9 * 1024 * 1024);
   let ended: Error | undefined;
@@ -89,6 +92,7 @@ async function windowsTransport(machine: Machine, pipe: string): Promise<Transpo
       else channel.receive(frame.message);
     }); } catch { stop(new Error('Invalid SSH API relay frame')); }
   });
+  child.stdin.write(source);
   return {
     open(id, request, channel) {
       if (ended) throw ended;
