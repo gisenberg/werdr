@@ -10,6 +10,7 @@ const groups: [string, Control[]][] = [
     { key: 'darkTheme', label: 'DARK THEME', choices: themeNames }, { key: 'lightTheme', label: 'LIGHT THEME', choices: themeNames },
     { key: 'font', label: 'TERMINAL FONT', choices: fonts }, { key: 'fontSize', label: 'FONT SIZE', min: 10, max: 32 },
     { key: 'cursorBlink', label: 'BLINKING CURSOR' }, { key: 'sidebarWidth', label: 'SIDEBAR WIDTH', min: 160, max: 640 },
+    { key: 'sidebarSectionPercent', label: 'WORKSPACE SECTION (%)', min: 10, max: 90 },
     { key: 'compact', label: 'COMPACT CHROME' }, { key: 'indicators', label: 'STATUS INDICATORS', choices: ['text', 'dots', 'symbols'] },
     { key: 'hideSingleTab', label: 'HIDE TAB BAR FOR ONE TAB' },
   ]],
@@ -21,6 +22,7 @@ export class Settings {
   preferences: Preferences = structuredClone(defaults);
   private readonly media = matchMedia('(prefers-color-scheme: light)');
   private deviceSize?: number;
+  private sidebarSave?: Promise<void>;
   constructor(private readonly api: Api, private readonly changed: (preferences: Preferences, colors: Record<string, string>) => void) {
     try { const size = Number(localStorage.getItem('werdr-device-font-size')); if (Number.isInteger(size) && size >= 10 && size <= 32) this.deviceSize = size; } catch {}
     this.media.addEventListener('change', () => this.apply(this.preferences));
@@ -44,9 +46,29 @@ export class Settings {
     };
     this.apply(this.preferences);
   }
+  saveSidebarSplit(sidebarSectionPercent: number) {
+    const task = this.persistSidebarSplit(sidebarSectionPercent);
+    this.sidebarSave = task;
+    return task.finally(() => { if (this.sidebarSave === task) this.sidebarSave = undefined; });
+  }
+  private async persistSidebarSplit(sidebarSectionPercent: number) {
+    // Read the latest revision so a drag changes only this preference.
+    // A racing save still conflicts at the server instead of overwriting it.
+    try {
+      const latest: SettingsState = await this.api('/api/settings');
+      this.state = await this.api('/api/settings', { revision: latest.revision, preferences: { ...latest.preferences, sidebarSectionPercent } });
+      this.apply(this.state.preferences);
+    } catch (error) {
+      try { this.state = await this.api('/api/settings'); } catch {}
+      this.apply(this.state.preferences);
+      throw error;
+    }
+  }
   async refresh() {
+    try { await this.sidebarSave; } catch {}
     if (element<HTMLDialogElement>('settings-dialog').open) return;
-    this.state = await this.api('/api/settings'); this.apply(this.state.preferences);
+    const latest: SettingsState = await this.api('/api/settings');
+    if (latest.revision >= this.state.revision) { this.state = latest; this.apply(this.state.preferences); }
   }
   async open() {
     try { await this.refresh(); this.fill(this.state.preferences); element('settings-error').textContent = ''; element<HTMLDialogElement>('settings-dialog').showModal(); }

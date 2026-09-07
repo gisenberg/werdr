@@ -247,3 +247,18 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 .context-menu-title { max-width: 320px; overflow-wrap: anywhere; font-size: 11px; color: var(--herdr-subtext0); padding: 6px 8px; border-bottom: 1px solid var(--herdr-surface1); }
 .context-menu button { display: block; width: 100%; text-align: left; border: 0; }
 .context-menu button:focus { background: var(--herdr-surface1); outline: 1px solid var(--herdr-accent); outline-offset: -1px; }
+
+/* Desktop sidebar sections share a fixed-height rail and scroll independently. */
+@media (min-width: 701px) {
+  #rail { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .rail-catalog { flex: 0 1 auto; max-height: 45%; overflow: auto; }
+  #rail-sections { flex: 1 1 0; min-height: 150px; display: grid; grid-template-rows: minmax(72px, var(--workspace-section, 50fr)) 6px minmax(72px, var(--agent-section, 50fr)); }
+  .rail-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .rail-panel .section { flex: none; }
+  .rail-panel nav { overflow: auto; min-height: 0; flex: 1; }
+  .rail-panel nav button { flex: none; }
+  #rail-divider { cursor: row-resize; touch-action: none; border-block: 1px solid var(--herdr-surface1); background: var(--herdr-sidebar-bg); }
+  #rail-divider:hover, #rail-divider:focus-visible, #rail-divider[data-dragging] { background: var(--herdr-accent); outline: none; }
+  #rail-divider[aria-disabled=true] { cursor: wait; }
+}
+@media (max-width: 700px) { #rail-divider { display: none; } }
