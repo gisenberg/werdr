@@ -78,10 +78,10 @@ Theme and font changes update the mounted terminal without releasing its control
 - Startup has no visible settings or prompts; any key or click dismisses it, and reduced-motion preferences shorten it.
 - Authenticated REST and WebSocket access with logout revocation.
 
-The browser displays one selected pane at a time, including on desktop.
+Desktop displays the native split tree with independent controllers for visible panes; phones display the selected pane.
 Metadata stays connected for every enabled saved host through native event subscriptions, with a ten-second reconciliation heartbeat.
-Only the selected pane attaches a terminal controller.
-Simultaneous split surfaces and full wmux media/clipboard integration are not implemented.
+A surface retains up to 16 pane controllers, with explicit capacity feedback and zoom access for larger layouts.
+Full wmux media/clipboard integration remains outside the current browser implementation.
 The remaining native desktop work is tracked in [the parity acceptance matrix](werdr/DESKTOP_PARITY.md).
 This is a working first version, not feature parity with wmux.
 
