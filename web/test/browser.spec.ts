@@ -57,8 +57,7 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await page.screenshot({ path: 'test-results/mobile.png' });
   await runtime.restartGateway();
   await page.reload();
-  await expect(page.locator('#boot')).toBeVisible();
-  await consoleInput(page, 'token', runtime.token);
+  await expect(page.locator('#boot')).toBeHidden();
   await expect(page.locator('#shield')).toBeHidden();
   expect(JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.find((p: any) => p.pane_id === pane).terminal_id).toBe(terminalId);
   await page.locator('#terminal textarea').focus(); await page.keyboard.type('printf "AFTER_%s\\n" "$WERDR_TEST_VALUE"'); await page.keyboard.press('Enter');

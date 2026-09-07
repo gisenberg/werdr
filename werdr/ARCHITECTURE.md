@@ -20,7 +20,9 @@ Herdr owns process lifetime, runtime state, workspace/tab/pane identity, agent d
 The gateway authenticates browsers and routes bounded requests to explicit saved machines.
 Gateway-only credential and token files remain separate from herdr runtime state.
 Username/password or access-token login issues an opaque HttpOnly SameSite cookie; only password-authenticated sessions may rotate the durable access token.
-Token replacement revokes token-authenticated sessions and their terminal controllers while herdr retains the shells.
+Browser cookies last 90 days and survive gateway restarts through an atomic owner-only versioned store containing token hashes and bounded browser metadata.
+Browser-session revocation removes persisted authority and closes the matching terminal controllers immediately while herdr retains the shells.
+Token replacement or explicit access-token revocation invalidates token-authenticated sessions; their persisted token fingerprint also prevents resurrection if shutdown interrupts rotation.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
 Startup and authentication are browser presentation: `BootConsole` owns credential stages and fixed display geometry, while the retained wmux React artwork and desktop components provide the historical visuals.
 Text profiles use one Ghostty terminal throughout login; graphical profiles use a DOM input with the same credential stages and matching desktop fields.

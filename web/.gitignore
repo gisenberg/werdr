@@ -2,3 +2,5 @@ dist/
 .auth-token
 test-results/
 playwright-report/
+browser-sessions.json
+browser-sessions.json.*.tmp

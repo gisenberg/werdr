@@ -9,11 +9,12 @@ interface Tab { tab_id: string; workspace_id: string; label: string }
 interface Pane { pane_id: string; workspace_id: string; tab_id: string; label?: string; title?: string; agent_status: string; cwd?: string }
 interface Snapshot { workspaces: Workspace[]; tabs: Tab[]; panes: Pane[] }
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
+app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="sessions" hidden>SESSIONS</button><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
 <main><aside id="rail"><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav></aside>
 <section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
-<dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>`;
+<dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><button id="revoke-token">REVOKE ACCESS TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>
+<dialog id="sessions-dialog"><h1>Signed-in browsers</h1><p>Browser tokens stay valid for 90 days, including across restarts. Revoking a browser disconnects it immediately.</p><div id="session-list"></div><p id="session-error" role="alert"></p><button id="revoke-others">REVOKE OTHER BROWSERS</button><button id="sessions-done">DONE</button></dialog>`;
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const boot = new BootConsole(value => api('/api/login', value), refresh);
 const status = (text: string) => { element('status').textContent = text; };
@@ -25,7 +26,7 @@ let reconnectAttempt = 0;
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();
-  if (res.status === 401) { authenticated = false; detach(); element('access-token').hidden = true; element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
+  if (res.status === 401) { authenticated = false; detach(); element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -69,7 +70,7 @@ async function refresh() {
   const selected = machineId;
   try {
     const { machines }: { machines: Machine[] } = await api('/api/machines');
-    authenticated = true;
+    authenticated = true; element('sessions').hidden = false;
     const session = await api('/api/session');
     element('access-token').hidden = !session.canGenerateToken;
     navigation('hosts', machines.map(m => ({ id: m.id, label: `${m.label}${m.enabled ? '' : ' [DISABLED]'}`, active: m.id === machineId, disabled: !m.enabled, title: m.target || m.label, select: () => {
@@ -184,6 +185,43 @@ element('generate-token').onclick = async () => {
     element('generated-token-field').hidden = false;
     const input = element<HTMLInputElement>('generated-token'); input.value = token; input.focus(); input.select();
   } catch (error) { element('token-error').textContent = (error as Error).message; }
+  finally { button.disabled = false; }
+};
+element('revoke-token').onclick = async () => {
+  const button = element<HTMLButtonElement>('revoke-token'); button.disabled = true;
+  try { await api('/api/token/revoke', {}); element<HTMLInputElement>('generated-token').value = ''; element('generated-token-field').hidden = true; element('token-error').textContent = 'Access token revoked. Browsers signed in with it were disconnected.'; }
+  catch (error) { element('token-error').textContent = (error as Error).message; }
+  finally { button.disabled = false; }
+};
+const sessionsDialog = element<HTMLDialogElement>('sessions-dialog');
+async function showSessions() {
+  const { sessions } = await api('/api/sessions');
+  element('session-list').replaceChildren();
+  for (const session of sessions) {
+    const row = document.createElement('div'); row.className = 'session-row';
+    const label = document.createElement('strong'); label.textContent = session.current ? '[THIS BROWSER]' : '[BROWSER]';
+    const client = document.createElement('div');
+    const browser = /Edg\//.test(session.client) ? 'Edge' : /(?:Chrome|CriOS)\//.test(session.client) ? 'Chrome' : /(?:Firefox|FxiOS)\//.test(session.client) ? 'Firefox' : /Safari\//.test(session.client) ? 'Safari' : 'Browser';
+    const platform = /Android/.test(session.client) ? 'Android' : /iPhone|iPad/.test(session.client) ? 'iOS' : /Windows/.test(session.client) ? 'Windows' : /Macintosh/.test(session.client) ? 'macOS' : /Linux/.test(session.client) ? 'Linux' : 'Unknown device';
+    client.textContent = `${browser} / ${platform}`; client.title = session.client;
+    const dates = document.createElement('div'); dates.textContent = `Signed in ${new Date(session.issued).toLocaleString()} / Expires ${new Date(session.expiry).toLocaleDateString()} / ${session.method}`;
+    const revoke = document.createElement('button'); revoke.textContent = session.current ? 'SIGN OUT THIS BROWSER' : 'REVOKE';
+    revoke.onclick = async () => {
+      revoke.disabled = true;
+      try {
+        await api('/api/sessions/revoke', { id: session.id });
+        if (session.current) { sessionsDialog.close(); await refresh(); } else await showSessions();
+      } catch (error) { element('session-error').textContent = (error as Error).message; revoke.disabled = false; }
+    };
+    row.append(label, client, dates, revoke); element('session-list').append(row);
+  }
+}
+element('sessions').onclick = () => { sessionsDialog.showModal(); element('session-error').textContent = ''; void showSessions().catch(error => { element('session-error').textContent = error.message; }); };
+element('sessions-done').onclick = () => sessionsDialog.close();
+element('revoke-others').onclick = async () => {
+  const button = element<HTMLButtonElement>('revoke-others'); button.disabled = true;
+  try { await api('/api/sessions/revoke', { others: true }); await showSessions(); }
+  catch (error) { element('session-error').textContent = (error as Error).message; }
   finally { button.disabled = false; }
 };
 async function start() {

@@ -1,6 +1,6 @@
 import { open, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { equalToken } from './policy.ts';
 
 interface Credentials { username: string; passwordHash: string }
@@ -52,6 +52,7 @@ export async function authentication(tokenPath: string, credentialsPath?: string
   let rotating = false;
   return {
     passwordEnabled: !!credentials,
+    get tokenVersion() { return createHash('sha256').update(token).digest('hex'); },
     verifyPassword: (username: unknown, password: unknown) => credentials ? verifyCredentials(credentials, username, password) : Promise.resolve(false),
     verifyToken: (value: unknown) => typeof value === 'string' && value.length <= 4096 && equalToken(value, token),
     async rotateToken(): Promise<string> {

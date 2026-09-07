@@ -2,7 +2,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { tlsConfiguration } from './tls.ts';
 import { createServer, type RequestListener, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { sessionStore, SESSION_SECONDS } from './sessions.ts';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -27,7 +27,8 @@ const fonts = await bootFonts(process.env.WERDR_BOOT_FONT_DIR);
 const artwork = await bootArtwork(process.env.WERDR_BOOT_ASSET_DIR);
 const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
-const sessions = new Map<string, { expiry: number; method: 'password' | 'token' }>();
+const sessions = await sessionStore(process.env.WERDR_SESSION_FILE || resolve(dirname(tokenPath), 'browser-sessions.json'));
+const sessionTokens = new Map<string, string>();
 const sockets = new Map<WebSocket, string>();
 const controllers = new Map<WebSocket, () => void>();
 const alive = new WeakSet<WebSocket>();
@@ -35,10 +36,13 @@ function closeSocket(ws: WebSocket, code: number, reason?: string) {
   controllers.get(ws)?.();
   ws.close(code, reason);
 }
+function disconnectSessions(ids: string[], reason: string) {
+  for (const [ws, owner] of sockets) if (ids.includes(owner)) closeSocket(ws, 1008, reason);
+}
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
-function session(req: IncomingMessage): string | undefined {
+function session(req: IncomingMessage) {
   const id = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6);
-  return id && (sessions.get(id)?.expiry ?? 0) > Date.now() ? id : undefined;
+  return sessions.get(id, auth.tokenVersion);
 }
 function reply(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -81,31 +85,34 @@ const handler: RequestListener = async (req, res) => {
         try { valid = await auth.verifyPassword(value.username, value.password); } finally { passwordChecks--; }
       } else valid = auth.verifyToken(value.token);
       if (!valid) return reply(res, 401, { error: 'Invalid credentials' });
-      for (const [id, record] of sessions) if (record.expiry <= Date.now()) {
-        sessions.delete(id);
-        for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Session expired');
-      }
-      if (sessions.size >= 64) return reply(res, 503, { error: 'Session limit reached' });
-      const id = randomBytes(32).toString('hex'); sessions.set(id, { expiry: Date.now() + 12 * 3600_000, method });
-      res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${tls ? '; Secure' : ''}`);
+      const id = await sessions.create(method, req.headers['user-agent'] || 'Unknown browser', auth.tokenVersion);
+      res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}${tls ? '; Secure' : ''}`);
       return reply(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/api/')) {
       const id = session(req);
       if (!id) return reply(res, 401, { error: 'Sign in required' });
-      if (url.pathname === '/api/session' && req.method === 'GET') return reply(res, 200, { canGenerateToken: sessions.get(id)?.method === 'password' });
-      if (url.pathname === '/api/token' && req.method === 'POST') {
-        if (sessions.get(id)?.method !== 'password') return reply(res, 403, { error: 'Sign in with your username and password to generate a token.' });
+      if (url.pathname === '/api/session' && req.method === 'GET') return reply(res, 200, { canGenerateToken: id.method === 'password' });
+      if (url.pathname === '/api/sessions' && req.method === 'GET') return reply(res, 200, { sessions: sessions.list(id.id, auth.tokenVersion) });
+      if (url.pathname === '/api/sessions/revoke' && req.method === 'POST') {
+        const value = await body(req);
+        if (value.others !== true && (typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id))) return reply(res, 400, { error: 'Expected a session ID or others=true' });
+        if (!session(req)) return reply(res, 401, { error: 'Sign in required' });
+        const revoked = await sessions.revoke(record => value.others === true ? record.id !== id.id : record.id === value.id);
+        disconnectSessions(revoked, 'Session revoked');
+        return reply(res, 200, { ok: true });
+      }
+      if ((url.pathname === '/api/token' || url.pathname === '/api/token/revoke') && req.method === 'POST') {
+        if (id.method !== 'password') return reply(res, 403, { error: 'Sign in with your username and password to manage the access token.' });
         const token = await auth.rotateToken();
-        for (const [owner, record] of sessions) if (record.method === 'token') {
-          sessions.delete(owner);
-          for (const [ws, socketOwner] of sockets) if (socketOwner === owner) closeSocket(ws, 1008, 'Token replaced');
-        }
-        return reply(res, 200, { token });
+        // The persisted token fingerprint also invalidates sessions if shutdown
+        // interrupts the two-file rotation between these durable writes.
+        const revoked = await sessions.revoke(record => record.method === 'token' && record.tokenVersion !== auth.tokenVersion);
+        disconnectSessions(revoked, 'Access token revoked');
+        return reply(res, 200, url.pathname === '/api/token' ? { token } : { ok: true });
       }
       if (url.pathname === '/api/logout' && req.method === 'POST') {
-        sessions.delete(id);
-        for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Signed out');
+        disconnectSessions(await sessions.revoke(record => record.id === id.id), 'Signed out');
         res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
         return reply(res, 200, { ok: true });
       }
@@ -169,7 +176,8 @@ server.on('upgrade', async (req, socket, head) => {
     const cols = dimension(Number(url.searchParams.get('cols'))), rows = dimension(Number(url.searchParams.get('rows')));
     if (socket.destroyed || !session(req)) { socket.destroy(); return; }
     wsServer.handleUpgrade(req, socket, head, ws => {
-      sockets.set(ws, id);
+      sockets.set(ws, id.id);
+      sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
       const decoder = new NdjsonDecoder();
@@ -214,6 +222,7 @@ server.on('upgrade', async (req, socket, head) => {
       ws.on('error', () => ws.terminate());
       ws.on('close', () => {
         sockets.delete(ws);
+        if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id);
         controllers.get(ws)?.(); controllers.delete(ws);
       });
     });
@@ -221,10 +230,7 @@ server.on('upgrade', async (req, socket, head) => {
   finally { upgrades--; }
 });
 const cleanup = setInterval(() => {
-  for (const [id, record] of sessions) if (record.expiry <= Date.now()) {
-    sessions.delete(id);
-    for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Session expired');
-  }
+  for (const [ws, owner] of sockets) if (!sessions.get(sessionTokens.get(owner), auth.tokenVersion)) closeSocket(ws, 1008, 'Session expired or revoked');
   for (const ws of sockets.keys()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (!alive.has(ws)) { controllers.get(ws)?.(); ws.terminate(); }

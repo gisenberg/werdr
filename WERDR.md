@@ -99,11 +99,16 @@ Real remote SSH and Windows validation remain outstanding; see [Windows and term
 Only loopback and private-network IPs may be bound.
 Set `WERDR_ALLOWED_HOSTS` to explicitly allow the service's short hostname and full Tailscale DNS name while keeping `WERDR_HOST` on its private IP.
 The browser Origin must match the requested host and port, even when both aliases are individually allowed.
-The gateway does not yet support a separate reverse-proxy or HTTPS origin.
+The gateway supports direct HTTPS with the configured certificate and key; it does not support a separate reverse-proxy origin.
 Access tokens never go into URLs or local storage.
 Login attempts are limited by the actual peer IP, and password verification concurrency is bounded.
-Browser sessions are held in gateway memory and expire after 12 hours.
-Restarting the gateway requires signing in again and releases terminal controllers; herdr continues owning the running shells.
+Browser login issues a random HttpOnly SameSite cookie valid for 90 days, with Secure set under HTTPS.
+Only a SHA-256 hash is persisted in the schema-versioned, owner-only `browser-sessions.json` beside the access-token file; `WERDR_SESSION_FILE` overrides that location.
+Atomic serialized writes preserve revocations across restarts; invalid or future stores stop startup rather than resurrecting credentials from a backup.
+The SESSIONS panel lists signed-in browsers and lets the owner revoke one browser or all other browsers immediately, including their open terminal sockets.
+REVOKE ACCESS TOKEN invalidates the shared sign-in token and browsers issued from it; password-authenticated browsers stay signed in.
+Browser cookies survive reloads, browser restarts, and gateway deployments until expiry, revocation, or explicit sign-out.
+Restarting the gateway releases terminal controllers; herdr continues owning the running shells.
 Closing a pane explicitly terminates its process.
 
 ## Development and upstream updates

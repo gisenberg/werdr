@@ -59,6 +59,8 @@ test('password login generates a persistent replacement token with credential-on
   expect((await request.post(`${runtime.url}/api/login`, { headers, data: { token: runtime.token } })).status()).toBe(401);
   await runtime.restartGateway();
   await page.reload();
+  await expect(page.locator('#boot')).toBeHidden();
+  await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
   await page.getByRole('button', { name: 'USE ACCESS TOKEN', exact: true }).click();
   await consoleInput(page, 'token', token);
   await expect(page.locator('#boot')).not.toBeVisible();

@@ -1,0 +1,52 @@
+import { test, expect } from '@playwright/test';
+import { WebSocket } from 'ws';
+import { fixture } from './fixture';
+
+test('browser restart persistence, device revocation, sockets, and access-token revocation', async ({ browser }) => {
+  const runtime = await fixture(true);
+  const first = await browser.newContext({ reducedMotion: 'reduce' });
+  let second = await browser.newContext({ reducedMotion: 'reduce' });
+  let ws: WebSocket | undefined;
+  try {
+    const headers = { Origin: runtime.url };
+    expect((await first.request.post(runtime.url + '/api/login', { headers, data: { username: runtime.username, password: runtime.password } })).ok()).toBe(true);
+    expect((await second.request.post(runtime.url + '/api/login', { headers, data: { token: runtime.token } })).ok()).toBe(true);
+    const storage = await second.storageState();
+    const cookie = storage.cookies.find(cookie => cookie.name === 'werdr')!;
+    expect(cookie.httpOnly).toBe(true); expect(cookie.expires).toBeGreaterThan(Date.now() / 1000 + 89 * 86400);
+    await second.close(); second = await browser.newContext({ storageState: storage, reducedMotion: 'reduce' });
+    await runtime.restartGateway();
+    const page = await first.newPage(); await page.goto(runtime.url); await expect(page.locator('#boot')).toBeHidden();
+    const otherPage = await second.newPage(); await otherPage.goto(runtime.url); await expect(otherPage.locator('#boot')).toBeHidden();
+    const created = JSON.parse(await runtime.cli('workspace', 'create')).result;
+    ws = new WebSocket(runtime.url.replace('http:', 'ws:') + `/ws/terminal?machine=local&pane=${created.root_pane.pane_id}&cols=80&rows=24`, { headers: { Cookie: `werdr=${cookie.value}`, Origin: runtime.url } });
+    await new Promise<void>((done, reject) => { ws!.once('open', done); ws!.once('error', reject); });
+    const closed = new Promise<number>(done => ws!.once('close', done));
+    await page.getByRole('button', { name: 'SESSIONS', exact: true }).click();
+    await expect(page.locator('.session-row')).toHaveCount(2);
+    await page.locator('.session-row').filter({ hasText: '[BROWSER]' }).getByRole('button', { name: 'REVOKE', exact: true }).click();
+    expect(await closed).toBe(1008);
+    await expect(page.locator('.session-row')).toHaveCount(1);
+    await expect.poll(async () => (await second.request.get(runtime.url + '/api/session')).status()).toBe(401);
+    await runtime.restartGateway();
+    await expect.poll(async () => (await second.request.get(runtime.url + '/api/session')).status()).toBe(401);
+    expect((await first.request.get(runtime.url + '/api/session')).ok()).toBe(true);
+    expect((await second.request.post(runtime.url + '/api/login', { headers, data: { token: runtime.token } })).ok()).toBe(true);
+    expect((await first.request.post(runtime.url + '/api/token/revoke', { headers, data: {} })).ok()).toBe(true);
+    await runtime.restartGateway();
+    await expect.poll(async () => (await second.request.get(runtime.url + '/api/session')).status()).toBe(401);
+    expect((await second.request.post(runtime.url + '/api/login', { headers, data: { token: runtime.token } })).status()).toBe(401);
+    expect((await first.request.get(runtime.url + '/api/session')).ok()).toBe(true);
+    await page.reload(); await expect(page.locator('#boot')).toBeHidden();
+    await page.getByRole('button', { name: 'SESSIONS', exact: true }).click();
+    expect((await second.request.post(runtime.url + '/api/login', { headers, data: { username: runtime.username, password: runtime.password } })).ok()).toBe(true);
+    await page.getByRole('button', { name: 'REVOKE OTHER BROWSERS', exact: true }).click();
+    await expect.poll(async () => (await second.request.get(runtime.url + '/api/session')).status()).toBe(401);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: 'test-results/sessions-mobile.png' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'SIGN OUT THIS BROWSER', exact: true }).click();
+    await expect(page.locator('#boot')).toBeVisible();
+    expect((await first.request.get(runtime.url + '/api/session')).status()).toBe(401);
+  } finally { ws?.terminate(); await first.close(); await second.close(); await runtime.close(); }
+});

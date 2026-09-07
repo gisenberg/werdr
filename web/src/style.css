@@ -78,3 +78,9 @@ dialog button { width: 100%; color: #b6ef9c; }
 #boot .retro-next-boot img { width: 110px; }
 #boot .retro-os2-boot img { width: 390px; }
 #boot .retro-amiga-guru-alert { font-size: 14px; }
+
+#sessions-dialog { width: min(680px, calc(100vw - 24px)); max-height: calc(var(--viewport, 100dvh) - 32px); overflow: auto; }
+.session-row { border-top: 1px solid currentColor; padding: 12px 0; overflow-wrap: anywhere; }
+.session-row div { margin: 6px 0; }
+
+@media (max-width: 700px) { header { display: grid; grid-template-columns: auto 1fr; } header strong { text-align: right; } .account-actions { grid-column: 1 / -1; } .account-actions button { flex: 1; white-space: nowrap; } }

@@ -27,5 +27,5 @@ test('HTTPS login uses secure cookies and WSS while rejecting plaintext origins'
   });
   await new Promise<void>((resolve, reject) => { ws.once('error', () => resolve()); ws.once('open', () => { ws.terminate(); reject(new Error('Plaintext Origin accepted over TLS')); }); });
   await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
-  expect((await page.context().cookies()).some(cookie => cookie.name === 'werdr')).toBe(false);
+  await expect.poll(async () => (await page.context().cookies()).some(cookie => cookie.name === 'werdr')).toBe(false);
 });
