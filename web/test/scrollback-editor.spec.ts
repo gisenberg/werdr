@@ -46,6 +46,7 @@ test('native editor receives the selected full history, preserves the original s
   // native restoration. The browser must converge to the final native focus.
   const nativeFocus = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.layouts.find((layout: { tab_id: string }) => layout.tab_id === source.tab).focused_pane_id;
   await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe(nativeFocus);
+  await expect(page.locator(`.terminal-pane[data-pane="${nativeFocus}"] textarea`)).toBeFocused();
   const sibling = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.find((pane: { pane_id: string; tab_id: string }) => pane.tab_id === source.tab && pane.pane_id !== source.pane).pane_id;
   await page.locator(`#panes button[data-id="${sibling}"]`).click();
   for (const data of [{ action: 'pane.focus_direction', id: source.pane, direction: 'right' }, { action: 'pane.focus_direction', id: sibling, direction: 'left' }, { action: 'pane.rename', id: sibling, label: 'Selection survives native focus' }]) {

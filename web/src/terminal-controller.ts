@@ -42,7 +42,7 @@ export class TerminalController {
     this.preferences = preferences; this.colors = colors;
     if (this.terminal) { Object.assign(this.terminal.options, this.options()); if (this.visible) this.fit?.(); }
   }
-  private options() { return { fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
+  private options() { return { focusOnOpen: false, fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
   focus() { if (this.copyMode.active) this.copyMode.focus(); else this.terminal?.focus(); }
   recover() {
     // Connectivity recovery resumes only exhausted attachments. Healthy sockets

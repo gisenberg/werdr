@@ -39,9 +39,11 @@ export class DesktopSurface {
   }
   updatePreferences(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; for (const controller of this.controllers.values()) controller.update(preferences, colors); this.render(); }
   sync(machine: string, tab: string, pane: string, snapshot: Snapshot, online: boolean) {
+    const selectionChanged = machine !== this.machine || tab !== this.tab || pane !== this.pane;
     this.pendingSelection = false; this.container.inert = false;
     if (machine !== this.machine || tab !== this.tab) { const focusTarget = this.focusTarget; this.clear(); if (focusTarget === pane) this.focusTarget = focusTarget; this.machine = machine; this.tab = tab; }
-    if (this.focusTarget !== pane) this.focusTarget = undefined;
+    if (selectionChanged) this.focusTarget = pane || undefined;
+    else if (this.focusTarget !== pane) this.focusTarget = undefined;
     this.pane = pane; this.panes = snapshot.panes.filter(item => item.tab_id === tab);
     for (const [id, controller] of this.controllers) if (!this.panes.some(item => item.pane_id === id && item.terminal_id === controller.terminalId)) { controller.dispose(); this.controllers.delete(id); }
     this.render();
@@ -72,6 +74,7 @@ export class DesktopSurface {
     if (!this.pendingSelection && this.active && !this.active.ready) this.shield.textContent = this.active.status;
     this.shield.hidden = !this.pendingSelection && (!!this.active?.ready || this.overflow.has(this.pane)) && !document.querySelector<HTMLDialogElement>('#boot')?.open;
     if (!this.pendingSelection && this.active?.ready && this.focusTarget === this.pane) {
+      if (document.querySelector<HTMLDialogElement>('#boot')?.open) return;
       this.focusTarget = undefined;
       if (!document.querySelector('dialog[open]')) this.active.focus();
     }
