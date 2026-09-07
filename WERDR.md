@@ -149,3 +149,12 @@ The checksum-pinned fixture tests an official upstream preview rather than compi
 Run upstream `just check` as well when modifying the runtime or integrating new upstream runtime changes.
 
 See [architecture](werdr/ARCHITECTURE.md), [upstream workflow](werdr/UPSTREAM.md), and [third-party notices](web/THIRD_PARTY_NOTICES.md).
+
+## Desktop pane layouts
+
+The browser renders the native split tree with simultaneous terminals on desktop.
+Drag a divider or focus it and use the arrow keys to change its native saved ratio.
+The command palette includes zoom, directional focus, resize and swap, pane moves to tabs or workspaces, and tab/workspace ordering.
+Chrome updates and focus changes retain existing terminal elements and controller connections.
+On phones, only the selected pane is visible and hidden panes retain their last terminal size.
+Layout exports sent to browsers include only geometry and public identities, excluding native commands and environment variables.

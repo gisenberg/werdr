@@ -87,7 +87,7 @@ dialog button { width: 100%; color: var(--herdr-accent, #b6ef9c); }
 
 /* Fleet chrome keeps terminal pixels untouched and follows the console grid. */
 .rail-tools { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--herdr-surface1, #35413d); }
-.rail-tools button { flex: 1; padding: 8px 5px; font-size: 11px; }
+.rail-tools button { flex: 1 0 auto; white-space: nowrap; padding: 8px 5px; font-size: 11px; }
 .rail-search { display: block; padding: 10px 12px; color: var(--herdr-subtext0, #98a99f); font-size: 11px; }
 .rail-search input { width: 100%; margin-top: 5px; padding: 7px; }
 aside nav button[data-badge]:not([data-badge=""])::after { content: '[' attr(data-badge) ']'; display: block; margin-top: 3px; color: var(--herdr-overlay1, #85968e); font-size: 10px; }
@@ -137,3 +137,20 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
   #settings-fields fieldset, #settings-colors { grid-template-columns: 1fr; }
   .settings-actions { bottom: -18px; flex-wrap: wrap; }
 }
+
+/* Native split geometry owns terminal placement. Chrome stays outside pixels. */
+#terminal { position: relative; }
+.terminal-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; outline: 1px solid var(--herdr-overlay1); outline-offset: -1px; }
+.terminal-pane[hidden] { display: none; }
+.terminal-pane.pane-active { outline-color: var(--herdr-accent); }
+.pane-title { flex: 0 0 24px; height: 24px; min-height: 24px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: var(--herdr-panel-bg); color: var(--herdr-overlay1); border: 0; border-bottom: 1px solid var(--herdr-overlay1); }
+.pane-active .pane-title { color: var(--herdr-accent); border-color: var(--herdr-accent); }
+.pane-content { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.pane-shield { position: absolute; inset: 24px 0 0; padding: 20px; background: var(--herdr-panel-bg); color: var(--herdr-text); pointer-events: none; }
+.pane-shield[hidden] { display: none; }
+.pane-divider { position: absolute; z-index: 3; background: var(--herdr-panel-bg); touch-action: none; }
+.pane-divider.right { cursor: col-resize; border-left: 1px solid var(--herdr-overlay1); border-right: 1px solid var(--herdr-overlay1); }
+.pane-divider.down { cursor: row-resize; border-top: 1px solid var(--herdr-overlay1); border-bottom: 1px solid var(--herdr-overlay1); }
+.pane-divider:focus-visible, .pane-divider:hover { background: var(--herdr-accent); outline: 1px solid var(--herdr-accent); }
+
+.pane-capacity { position: absolute; padding: 20px; text-align: left; overflow: hidden; }

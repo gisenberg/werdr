@@ -1,6 +1,5 @@
-import type { Terminal } from 'ghostty-web';
 import { BootConsole } from './boot';
-import { loadGhostty } from './terminal-loader';
+import { DesktopSurface } from './desktop-surface';
 import './style.css';
 
 import type { Agent, FleetState, HostView, Notice, Snapshot } from '../shared/fleet';
@@ -10,7 +9,7 @@ import { HostManager, hostManagerMarkup } from './host-manager';
 import { Activity, activityMarkup } from './activity';
 import { initializeAccount } from './account';
 import { Settings, settingsMarkup } from './settings';
-import { defaults, palette, fontFamilies, type Preferences } from '../shared/settings';
+import { defaults, palette, type Preferences } from '../shared/settings';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="settings" hidden>SETTINGS</button><button id="sessions" hidden>SESSIONS</button><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
 <main><aside id="rail"><div class="rail-tools"><button id="manage-hosts">MANAGE HOSTS</button><button id="activity">ACTIVITY</button><button id="commands" aria-label="Command palette" title="Command palette (Ctrl/Cmd+K)">[K]</button></div><label class="rail-search">FIND<input id="fleet-search" type="search" placeholder="Hosts, workspaces, agents" autocomplete="off"></label><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav><div class="section">AGENTS<select id="agent-filter" aria-label="Filter agents"><option value="all">ALL</option><option value="blocked">ATTENTION</option><option value="working">WORKING</option><option value="done">DONE / IDLE</option></select></div><nav id="agents" aria-label="Agents"></nav></aside>
@@ -29,7 +28,7 @@ let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = emptySnapshot();
 let fleetState: FleetState = { revision: 0, hosts: [], notices: [] };
 let pendingHost: string | undefined;
-let pendingPane: { machine: string; pane: string } | undefined;
+let pendingPane: { machine: string; pane: string; tab: string } | undefined;
 const selections = new Map<string, { workspace: string; tab: string; pane: string }>();
 try {
   const saved = JSON.parse(localStorage.getItem('werdr-selection') || '{}');
@@ -44,17 +43,16 @@ function rememberSelection() {
   const url = new URL(location.href); for (const [key, item] of Object.entries(value)) { if (item) url.searchParams.set(key, item); else url.searchParams.delete(key); }
   history.replaceState(null, '', url);
 }
-let authenticated = false, refreshing = false, refreshAgain = false, terminal: Terminal | undefined, socket: WebSocket | undefined;
-let disposeTerminal: (() => void) | undefined, generation = 0, reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-let reconnectAttempt = 0, attaching = false;
+let authenticated = false, refreshing = false, refreshAgain = false;
 const fleet = new FleetClient(applyFleet, online => { if (!online && authenticated) { status('[RECONNECTING] GATEWAY'); void refresh(); } });
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
-let fitTerminal: (() => void) | undefined;
+const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`));
+function selectPane(id: string) { if (paneId === id) return; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const settings = new Settings(api, (value, nextColors) => {
   preferences = value; colors = nextColors;
-  if (terminal) { terminal.options.fontSize = value.fontSize; terminal.options.fontFamily = fontFamilies[value.font]; terminal.options.cursorBlink = value.cursorBlink; terminal.options.theme = { background: colors.panel_bg, foreground: colors.text, cursor: colors.accent, selectionBackground: colors.selection_bg }; fitTerminal?.(); }
+  surface.updatePreferences(value, nextColors);
   renderNavigation(); renderFleetNavigation();
 });
 element('settings').onclick = () => void settings.open();
@@ -67,7 +65,7 @@ function selectHost(id: string) {
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); choose(); renderFleetNavigation();
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string) {
-  if (machineId !== machine || paneId !== pane) detach();
+  if (machineId !== machine) detach();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); choose(); renderFleetNavigation();
 }
@@ -78,9 +76,10 @@ function applyFleet(state: FleetState, added?: Notice) {
     detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
-  if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane)) { pendingPane = undefined; choose(); }
+  if (pendingPane?.machine === machineId) { const target = snapshot.panes.find(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab); if (target) { workspaceId = target.workspace_id; tabId = target.tab_id; paneId = target.pane_id; } }
+  if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) { pendingPane = undefined; choose(); }
   renderFleetNavigation(); hostManager.update(state.hosts); activity.update(state, added);
-  if (previous !== 'online' && selectedHost()?.connection === 'online' && paneId && socket?.readyState === WebSocket.CLOSED) void attach();
+  if (previous !== 'online' && selectedHost()?.connection === 'online') surface.refresh();
 }
 function renderFleetNavigation() {
   const query = element<HTMLInputElement>('fleet-search').value.trim().toLowerCase();
@@ -125,7 +124,7 @@ function navigation(id: string, items: NavigationItem[]) {
 function renderNavigation() {
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
-  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => { if (paneId === p.pane_id) return; paneId = p.pane_id; renderNavigation(); rememberSelection(); renderFleetNavigation(); void attach(); } })));
+  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   element('shield').style.top = `${element('tabs').offsetHeight + element('panes').offsetHeight}px`;
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || selectedHost()?.connection !== 'online';
@@ -136,12 +135,10 @@ function choose() {
   if (!selectedHost()?.snapshot) { renderNavigation(); element('shield').textContent = selectedHost()?.detail || 'Connecting to host...'; return; }
   if (!snapshot.workspaces.some(w => w.workspace_id === workspaceId)) workspaceId = snapshot.workspaces[0]?.workspace_id || '';
   if (!snapshot.tabs.some(t => t.tab_id === tabId && t.workspace_id === workspaceId)) tabId = snapshot.tabs.find(t => t.workspace_id === workspaceId)?.tab_id || '';
-  const old = paneId;
   if (!snapshot.panes.some(p => p.pane_id === paneId && p.tab_id === tabId)) paneId = snapshot.panes.find(p => p.tab_id === tabId)?.pane_id || '';
   renderNavigation(); rememberSelection();
-  if (selectedHost()?.connection === 'online' && (old !== paneId || (!terminal && paneId && !attaching))) void attach();
-  if (selectedHost()?.connection !== 'online') { if (!terminal) element('shield').textContent = selectedHost()?.detail || 'Connecting to host...'; }
-  else if (!paneId) { detach(); element('shield').textContent = 'No panes. Create a workspace to start a session.'; }
+  surface.sync(machineId, tabId, paneId, snapshot, selectedHost()?.connection === 'online');
+  if (!paneId && selectedHost()?.connection === 'online') { detach(); element('shield').textContent = 'No panes. Create a workspace to start a session.'; }
 }
 async function refresh() {
   if (refreshing) { refreshAgain = true; return; }
@@ -156,80 +153,19 @@ async function refresh() {
   } catch (error) { status(`[OFFLINE] ${(error as Error).message}`); }
   finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } }
 }
-function detach(resetRetry = true) {
-  fitTerminal = undefined;
-  generation++; attaching = false; clearTimeout(reconnectTimer); if (resetRetry) reconnectAttempt = 0;
-  socket?.close(); socket = undefined; disposeTerminal?.(); disposeTerminal = undefined; terminal = undefined;
-  element('terminal').replaceChildren(); element('shield').hidden = false;
-}
-async function attach(takeover = false, retry = false) {
-  detach(!retry); if (!paneId || selectedHost()?.connection !== 'online') return; attaching = true;
-  const epoch = generation;
-  const selectedMachine = machineId, selectedPane = paneId;
-  element('shield').textContent = 'Attaching to Herdr...';
-  let library: typeof import('ghostty-web');
-  try { library = await loadGhostty(); } catch { attaching = false; status('[ERROR] Terminal renderer could not load'); return; }
-  if (epoch !== generation) return;
-  const term = new library.Terminal({ fontFamily: fontFamilies[preferences.font], fontSize: preferences.fontSize, cursorBlink: preferences.cursorBlink, theme: { background: colors.panel_bg, foreground: colors.text, cursor: colors.accent, selectionBackground: colors.selection_bg } });
-  terminal = term; attaching = false;
-  const fit = new library.FitAddon(); term.loadAddon(fit); term.open(element('terminal')); fit.fit(); fitTerminal = () => fit.fit();
-  const params = new URLSearchParams({ machine: selectedMachine, pane: selectedPane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0' });
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); socket = ws;
-  const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
-  let applyingFrame = false, frameReady = false;
-  const bootScreen = element<HTMLDialogElement>('boot');
-  const reveal = () => { if (epoch === generation && frameReady && !bootScreen.open) element('shield').hidden = true; };
-  bootScreen.addEventListener('close', reveal);
-  const input = term.onData(text => send({ type: 'terminal.input', text }));
-  const resize = term.onResize(({ cols, rows }) => { if (!applyingFrame) send({ type: 'terminal.resize', cols, rows }); });
-  const observer = new ResizeObserver(() => fit.fit()); observer.observe(element('terminal'));
-  const wheel = (event: WheelEvent) => { event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * preferences.scrollLines)) }); };
-  element('terminal').addEventListener('wheel', wheel, { passive: false, capture: true });
-  let touchY: number | undefined;
-  const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined; };
-  const touchMove = (event: TouchEvent) => {
-    if (touchY === undefined || event.touches.length !== 1) return;
-    const delta = touchY - event.touches[0].clientY;
-    if (Math.abs(delta) < 12) return;
-    event.preventDefault(); event.stopImmediatePropagation(); touchY = event.touches[0].clientY;
-    send({ type: 'terminal.scroll', direction: delta < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.round(Math.abs(delta) / 14))) });
-  };
-  element('terminal').addEventListener('touchstart', touchStart, { passive: true, capture: true });
-  element('terminal').addEventListener('touchmove', touchMove, { passive: false, capture: true });
-  const textarea = element('terminal').querySelector('textarea');
-  if (textarea) for (const [key, value] of Object.entries({ autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none', spellcheck: 'false' })) textarea.setAttribute(key, value);
-  ws.onmessage = event => {
-    if (epoch !== generation) return;
-    try {
-      const frame = JSON.parse(event.data);
-      if (frame.type === 'terminal.closed') { element('shield').hidden = false; element('shield').textContent = frame.reason; return; }
-      if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
-      // Frames are already authoritative Herdr repaints. Never replay arbitrary PTY tails or reset on full=true.
-      const bytes = Uint8Array.from(atob(frame.bytes), c => c.charCodeAt(0));
-      applyingFrame = true;
-      try { if (term.cols !== frame.width || term.rows !== frame.height) term.resize(frame.width, frame.height); }
-      finally { applyingFrame = false; }
-      term.write(bytes, () => { if (epoch === generation) { frameReady = true; reveal(); reconnectAttempt = 0; } });
-    } catch { ws.close(1002, 'Invalid frame'); }
-  };
-  ws.onclose = () => {
-    if (epoch !== generation) return;
-    element('shield').hidden = false;
-    if (reconnectAttempt >= 5) { element('shield').textContent = 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; return; }
-    element('shield').textContent = 'Connection lost. Reattaching...';
-    reconnectTimer = setTimeout(() => { if (epoch === generation && authenticated) void attach(false, true); }, Math.min(1000 * 2 ** reconnectAttempt++, 10000));
-  };
-  disposeTerminal = () => { bootScreen.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); element('terminal').removeEventListener('wheel', wheel, true); element('terminal').removeEventListener('touchstart', touchStart, true); element('terminal').removeEventListener('touchmove', touchMove, true); term.dispose(); };
-}
+function detach() { surface.clear(); }
+async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId) {
   try {
-    const result = await api('/api/action', { machine: selected, action, id, ...extra });
+    const response = await api('/api/action', { machine: selected, action, id, ...extra });
+    const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
     if (machineId !== selected) return;
     const created = result.root_pane || result.pane;
     if (created && action !== 'pane.close') {
-      detach(); workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; pendingPane = { machine: selected, pane: paneId }; element('shield').textContent = 'Waiting for native workspace update...';
+      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; pendingPane = { machine: selected, pane: paneId, tab: tabId }; element('shield').textContent = 'Waiting for native workspace update...';
     }
-    closeRail(); await refresh(); fleet.resync();
+    if (result.focused_pane_id) paneId = result.focused_pane_id;
+    closeRail(); await refresh(); surface.refresh(); fleet.resync();
   }
   catch (error) { status(`[ERROR] ${(error as Error).message}`); }
 }
@@ -297,6 +233,22 @@ function openCommands() {
     { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
     { label: 'Split right (Ctrl/Cmd+D)', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'right' }, machine); } },
     { label: 'Split down (Ctrl/Cmd+Shift+D)', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'down' }, machine); } },
+    { label: 'Zoom / restore pane', disabled: !pane || !online, run: () => { void action('pane.zoom', pane, { mode: 'toggle' }, machine); } },
+    ...(['left', 'right', 'up', 'down'] as const).flatMap(direction => [
+      { label: `Focus pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.focus_direction', pane, { direction }, machine); } },
+      { label: `Swap pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.swap', pane, { direction }, machine); } },
+      { label: `Resize pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.resize', pane, { direction }, machine); } },
+    ]),
+    { label: 'Move pane to new tab', disabled: !pane || !online, run: () => { void action('pane.move', pane, { destination: 'new_tab' }, machine); } },
+    { label: 'Move pane to new workspace', disabled: !pane || !online, run: () => { void action('pane.move', pane, { destination: 'new_workspace' }, machine); } },
+    ...snapshot.tabs.filter(item => item.tab_id !== tab).map(item => ({ label: `Move pane to tab: ${item.label || item.tab_id}`, disabled: !pane || !online, run: () => { void action('pane.move', pane, { destination: 'tab', tab: item.tab_id, direction: 'right' }, machine); } })),
+    ...(['earlier', 'later'] as const).flatMap((direction, index) => {
+      const tabs = snapshot.tabs.filter(item => item.workspace_id === workspace), tabIndex = tabs.findIndex(item => item.tab_id === tab), workspaceIndex = snapshot.workspaces.findIndex(item => item.workspace_id === workspace);
+      return [
+        { label: `Move tab ${direction}`, disabled: !online || (index === 0 ? tabIndex <= 0 : tabIndex >= tabs.length - 1), run: () => { void action('tab.move', tab, { index: tabIndex + (index === 0 ? -1 : 2) }, machine); } },
+        { label: `Move workspace ${direction}`, disabled: !online || (index === 0 ? workspaceIndex <= 0 : workspaceIndex >= snapshot.workspaces.length - 1), run: () => { void action('workspace.move', workspace, { index: workspaceIndex + (index === 0 ? -1 : 2) }, machine); } },
+      ];
+    }),
     { label: 'Start or prompt agent', disabled: !pane || !online, run: () => openAgent(machine, pane) },
     { label: 'Rename workspace', disabled: !workspace || !online, run: () => rename('workspace.rename', workspace, snapshot.workspaces.find(item => item.workspace_id === workspace)?.label || '', machine) },
     { label: 'Rename tab', disabled: !tab || !online, run: () => rename('tab.rename', tab, snapshot.tabs.find(item => item.tab_id === tab)?.label || '', machine) },

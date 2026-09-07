@@ -192,13 +192,13 @@ export class Fleet extends EventEmitter {
     this.noticeQueue = task.catch(() => {}); return task;
   }
   markNoticesRead(id?: string) { return this.updateNotices(notices => { for (const notice of notices) if (!id || notice.id === id) notice.read = true; }); }
-  async request(machineId: string, method: string, params: object = {}) {
+  async request(machineId: string, method: string, params: object = {}, invalidate = true) {
     const host = this.hosts.get(machineId);
     if (!host?.api || host.view.connection !== 'online' || !host.view.machine.enabled) throw new NativeApiError('Selected host is not connected', 'offline');
     const epoch = host.epoch;
     const result = await host.api.request(method, params);
     if (host.epoch !== epoch) throw new NativeApiError('Host changed while the action was running; refresh before retrying.', 'interrupted');
-    this.invalidate(host, 0); return result;
+    if (invalidate) this.invalidate(host, 0); return result;
   }
   retry(machineId: string) {
     const host = this.hosts.get(machineId);

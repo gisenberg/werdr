@@ -14,6 +14,7 @@ import { bootArtwork } from './boot-artwork.ts';
 import { bootFonts } from './boot-fonts.ts';
 import { Fleet } from './fleet.ts';
 import { MachineManagement, ManagementError } from './machine-management.ts';
+import { browserLayout } from './layout.ts';
 import { browserAction } from './browser-actions.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
@@ -152,6 +153,10 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/snapshot' && req.method === 'GET') {
         const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
         return reply(res, 200, await command(machine, ['api', 'snapshot']));
+      }
+      if (url.pathname === '/api/layout' && req.method === 'GET') {
+        const result = await fleet.request(publicId(url.searchParams.get('machine')), 'layout.export', { tab_id: publicId(url.searchParams.get('tab')) }, false);
+        return reply(res, 200, browserLayout(result));
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req); const { method, params } = browserAction(value);

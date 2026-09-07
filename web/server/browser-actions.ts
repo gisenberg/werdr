@@ -15,6 +15,31 @@ export function browserAction(value: Record<string, unknown>): { method: string;
     case 'tab.create': return { method, params: { workspace_id: id(), ...(value.label ? { label: text(value.label) } : {}) } };
     case 'tab.close': return { method, params: { tab_id: id() } };
     case 'tab.rename': return { method, params: { tab_id: id(), label: text(value.label) } };
+    case 'layout.set_split_ratio':
+      if (!Array.isArray(value.path) || value.path.length > 64 || value.path.some(item => typeof item !== 'boolean') || typeof value.ratio !== 'number' || !Number.isFinite(value.ratio) || value.ratio < .05 || value.ratio > .95) throw new ManagementError('Invalid split ratio.');
+      return { method, params: { tab_id: id(), path: value.path, ratio: value.ratio } };
+    case 'pane.zoom':
+      if (!['toggle', 'on', 'off'].includes(String(value.mode))) throw new ManagementError('Invalid zoom mode.');
+      return { method, params: { pane_id: id(), mode: value.mode } };
+    case 'pane.focus_direction':
+    case 'pane.swap':
+    case 'pane.resize':
+      if (!['left', 'right', 'up', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid pane direction.');
+      return { method, params: { pane_id: id(), direction: value.direction, ...(method === 'pane.resize' ? { amount: .05 } : {}) } };
+    case 'tab.move':
+    case 'workspace.move':
+      if (!Number.isSafeInteger(value.index) || Number(value.index) < 0 || Number(value.index) > 10000) throw new ManagementError('Invalid position.');
+      return { method, params: { [method === 'tab.move' ? 'tab_id' : 'workspace_id']: id(), insert_index: value.index } };
+    case 'pane.move': {
+      let destination: object;
+      if (value.destination === 'tab') {
+        if (!['right', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid split direction.');
+        destination = { type: 'tab', tab_id: publicId(value.tab), split: value.direction };
+      } else if (value.destination === 'new_tab') destination = { type: 'new_tab' };
+      else if (value.destination === 'new_workspace') destination = { type: 'new_workspace' };
+      else throw new ManagementError('Invalid pane destination.');
+      return { method, params: { pane_id: id(), destination, focus: true } };
+    }
     case 'pane.close': return { method, params: { pane_id: id() } };
     case 'pane.rename': return { method, params: { pane_id: id(), label: text(value.label) } };
     case 'pane.split':
