@@ -64,6 +64,8 @@ test('password login generates a persistent replacement token with credential-on
   await expect(page.locator('#boot')).not.toBeVisible();
   await expect(page.locator('#access-token')).toBeHidden();
   expect(await page.evaluate(value => Object.values(localStorage).includes(value), token)).toBe(false);
+  await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
+  await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
   } finally { ws.terminate(); }
 });
 

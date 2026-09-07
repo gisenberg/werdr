@@ -67,7 +67,7 @@ export class BootConsole {
     const first = !this.challenge || !this.screen.open;
     this.challenge = true;
     if (!this.screen.open) this.screen.showModal();
-    if (!this.booting && first) { this.write(this.profile.auth.required); this.prompt(); }
+    if (!this.booting && first) { this.passwordMode = this.passwordEnabled; this.write(this.profile.auth.required); this.prompt(); }
   }
   async complete() {
     if (!this.screen.open) return;
@@ -93,7 +93,7 @@ export class BootConsole {
     this.switchMode.disabled = false;
     this.switchMode.textContent = this.passwordMode ? 'USE ACCESS TOKEN' : 'USE USERNAME AND PASSWORD';
     this.write(this.passwordMode ? this.profile.auth.usernamePrompt : 'ACCESS TOKEN> ');
-    this.terminal?.focus();
+    this.terminal?.focus(); this.setStage(this.stage);
   }
   private accept(data: string) {
     if (!['username', 'password', 'token'].includes(this.stage) || data.includes('\x1b')) return;
