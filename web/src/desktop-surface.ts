@@ -76,7 +76,7 @@ export class DesktopSurface {
     if (!this.pendingSelection && this.active?.ready && this.focusTarget === this.pane) {
       if (document.querySelector<HTMLDialogElement>('#boot')?.open) return;
       this.focusTarget = undefined;
-      if (!document.querySelector('dialog[open]')) this.active.focus();
+      if (!document.querySelector('dialog[open], .context-menu:not([hidden])')) this.active.focus();
     }
   };
   private render() {

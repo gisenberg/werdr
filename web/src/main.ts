@@ -1,3 +1,4 @@
+import { ContextMenu, type ContextAction } from './context-menu';
 import { navigationTargets, resolveNavigationTarget } from './navigation-targets';
 import { BootConsole } from './boot';
 import { RuntimeSettings, runtimeSettingsMarkup } from './runtime-settings';
@@ -26,6 +27,7 @@ ${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}${integr
 <dialog id="command-dialog"><h1>COMMANDS</h1><label>FIND ACTION<input id="command-search" type="search" autocomplete="off" placeholder="Search actions, hosts, workspaces, agents"></label><div id="command-list"></div><button id="command-done">DONE</button></dialog>
 <dialog id="rename-dialog"><form id="rename-form"><h1 id="rename-title">RENAME</h1><label>LABEL<input id="rename-value" required maxlength="256"></label><button type="submit">SAVE</button><button id="rename-cancel" type="button">CANCEL</button><p id="rename-error" role="alert"></p></form></dialog>
 <dialog id="agent-dialog"><h1>AGENT</h1><p id="agent-context"></p><form id="agent-start-form"><label>AGENT KIND<input id="agent-kind" value="claude" list="agent-kinds" required maxlength="80" autocomplete="off"><datalist id="agent-kinds"><option value="claude"><option value="codex"><option value="opencode"><option value="aider"><option value="gemini"></datalist></label><label>NAME<input id="agent-name" required maxlength="256" autocomplete="off"></label><button type="submit">START AGENT IN THIS PANE</button></form><form id="agent-prompt-form"><label>PROMPT<textarea id="agent-prompt" required maxlength="32768" rows="5"></textarea></label><button type="submit">SEND PROMPT</button></form><p id="agent-error" role="alert"></p><button id="agent-done">DONE</button></dialog>`;
+const contextMenu = new ContextMenu();
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const boot = new BootConsole(value => api('/api/login', value), refresh);
 const status = (text: string) => { element('status').textContent = text; };
@@ -125,14 +127,14 @@ function applyFleet(state: FleetState, added?: Notice) {
   }
   if (pendingPane?.machine === machineId) { const target = snapshot.panes.find(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab); if (target) { workspaceId = target.workspace_id; tabId = target.tab_id; paneId = target.pane_id; } }
   if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) { pendingPane = undefined; choose(); }
-  renderFleetNavigation(); hostManager.update(state.hosts); activity.update(state, added);
+  renderFleetNavigation(); contextMenu.refresh(); hostManager.update(state.hosts); activity.update(state, added);
   if (previous !== 'online' && selectedHost()?.connection === 'online') surface.recover();
 }
 function renderFleetNavigation() {
   const query = element<HTMLInputElement>('fleet-search').value.trim().toLowerCase();
   const match = (text: string) => text.toLowerCase().includes(query);
   navigation('hosts', fleetState.hosts.filter(host => match(host.machine.label + ' ' + (host.machine.target || ''))).map(host => ({ id: host.machine.id, label: host.machine.label, badge: host.connection.toUpperCase(), active: host.machine.id === machineId, disabled: !host.machine.enabled, title: `${host.machine.target || host.machine.label} / ${host.connection}${host.version ? ' / ' + host.version : ''}${host.detail ? ' / ' + host.detail : ''}`, select: () => selectHost(host.machine.id) })));
-  navigation('workspaces', fleetState.hosts.flatMap(host => (host.snapshot?.workspaces || []).filter(workspace => match(`${host.machine.label} ${workspace.label} ${workspace.workspace_id}`)).map(workspace => ({ id: `${host.machine.id}/${workspace.workspace_id}`, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, badge: host.connection === 'online' ? workspace.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') }))));
+  navigation('workspaces', fleetState.hosts.flatMap(host => (host.snapshot?.workspaces || []).filter(workspace => match(`${host.machine.label} ${workspace.label} ${workspace.workspace_id}`)).map(workspace => ({ id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace', machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, badge: host.connection === 'online' ? workspace.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') }))));
   const filter = element<HTMLSelectElement>('agent-filter').value;
   const rank = (status: string) => status === 'blocked' ? 0 : status === 'working' ? 1 : 2;
   const agents = fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).map(agent => ({ host, agent })))
@@ -155,7 +157,7 @@ async function api(path: string, data?: object): Promise<any> {
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
-interface NavigationItem { id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string }
+interface NavigationItem { id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
 function navigation(id: string, items: NavigationItem[]) {
   const parent = element(id);
   const existing = new Map([...parent.querySelectorAll('button')].map(node => [node.dataset.id, node]));
@@ -167,14 +169,17 @@ function navigation(id: string, items: NavigationItem[]) {
     node.dataset.badge = item.badge || ''; node.setAttribute('aria-label', item.label);
     node.classList.toggle('active', item.active); node.disabled = !!item.disabled;
     node.title = item.title || item.label; node.onclick = item.select;
+    node.oncontextmenu = item.context ? event => { event.preventDefault(); openNavigationMenu(node, item.context!, { x: event.clientX, y: event.clientY }); } : null;
+    node.onkeydown = item.context ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openNavigationMenu(node, item.context!); } } : null;
+    if (item.context) node.setAttribute('aria-haspopup', 'menu'); else node.removeAttribute('aria-haspopup');
     if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] || null);
   });
   for (const node of existing.values()) node.remove();
 }
 function renderNavigation() {
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
-  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
-  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
+  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
+  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   element('shield').style.top = `${element('tabs').offsetHeight + element('panes').offsetHeight}px`;
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || !!pendingPane || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || !!pendingPane || selectedHost()?.connection !== 'online';
@@ -242,6 +247,35 @@ element('manage-hosts').onclick = () => hostManager.open();
 element('activity').onclick = () => activity.open();
 element('fleet-search').oninput = () => renderFleetNavigation();
 element('agent-filter').onchange = () => renderFleetNavigation();
+type MenuTarget = NonNullable<NavigationItem['context']>;
+function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: { x: number; y: number }) {
+  const current = () => {
+    const host = fleetState.hosts.find(host => host.machine.id === target.machine && host.machine.enabled && host.connection === 'online');
+    return target.kind === 'workspace' ? host?.snapshot?.workspaces.find(item => item.workspace_id === target.id) : target.kind === 'tab' ? host?.snapshot?.tabs.find(item => item.tab_id === target.id) : host?.snapshot?.panes.find(item => item.pane_id === target.id);
+  };
+  const item = current(); if (!item) return;
+  const invoke = (name: string, id = target.id, params = {}) => { void action(name, id, params, target.machine); };
+  const items: ContextAction[] = [
+    { label: 'RENAME', run: () => rename(target.kind + '.rename', target.id, current()?.label || '', target.machine) },
+  ];
+  if (target.kind === 'tab') {
+    const tab = item as Snapshot['tabs'][number];
+    items.unshift({ label: 'NEW TAB', run: () => invoke('tab.create', tab.workspace_id) });
+  }
+  if (target.kind === 'pane') items.push(
+    { label: 'SPLIT RIGHT', run: () => invoke('pane.split', target.id, { direction: 'right' }) },
+    { label: 'SPLIT DOWN', run: () => invoke('pane.split', target.id, { direction: 'down' }) },
+    { label: 'ZOOM / RESTORE', run: () => invoke('pane.zoom', target.id, { mode: 'toggle' }) },
+  );
+  items.push({ label: 'CLOSE ' + target.kind.toUpperCase(), run: () => { if (!preferences.confirmClose || confirm(`Close this ${target.kind} and end its running processes?`)) invoke(target.kind + '.close'); } });
+  contextMenu.open(origin, `${target.kind.toUpperCase()} ${item.label || target.id}`, items, () => authenticated && !!current(), position);
+}
+for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addEventListener(type, event => {
+  const origin = (event.target as Element).closest<HTMLElement>('.pane-title'); if (!origin) return;
+  if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+  const id = origin.closest<HTMLElement>('.terminal-pane')?.dataset.pane; if (!id) return;
+  event.preventDefault(); openNavigationMenu(origin, { kind: 'pane', machine: machineId, id }, event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : undefined);
+});
 interface Command { label: string; disabled?: boolean; run(): void }
 let commands: Command[] = [];
 let renameTarget: { machine: string; action: string; id: string } | undefined;
@@ -375,7 +409,7 @@ document.addEventListener('keydown', event => {
   if (event.target instanceof Element && event.target.closest('.copy-layer, .copy-toolbar') && event.key.toLowerCase() !== 'k') return;
   if (!authenticated || !(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); if (!document.querySelector('dialog[open]')) openCommands(); }
-  else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open]') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
+  else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open], .context-menu:not([hidden])') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
 }, true);
 async function start() {
   const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });

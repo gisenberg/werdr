@@ -243,3 +243,7 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 #command-dialog label { margin: 12px 0; }
 #command-list { max-height: min(55vh, 520px); overflow: auto; }
 #command-list button { text-align: left; overflow-wrap: anywhere; flex-shrink: 0; }
+.context-menu { position: fixed; z-index: 1000; width: max-content; max-width: calc(100vw - 16px); max-height: calc(var(--viewport, 100dvh) - 16px); overflow: auto; border: 1px solid var(--herdr-overlay1); background: var(--herdr-panel-bg); padding: 4px; }
+.context-menu-title { max-width: 320px; overflow-wrap: anywhere; font-size: 11px; color: var(--herdr-subtext0); padding: 6px 8px; border-bottom: 1px solid var(--herdr-surface1); }
+.context-menu button { display: block; width: 100%; text-align: left; border: 0; }
+.context-menu button:focus { background: var(--herdr-surface1); outline: 1px solid var(--herdr-accent); outline-offset: -1px; }
