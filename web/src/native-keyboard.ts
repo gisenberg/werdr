@@ -36,15 +36,18 @@ export class NativeKeyboard {
     const value = this.library.Key[name as keyof typeof this.library.Key];
     return typeof value === 'number' ? value : undefined;
   }
+  private modifiers(event: KeyboardEvent) {
+    const { Mods } = this.library;
+    return (event.shiftKey ? Mods.SHIFT : 0) | (event.ctrlKey ? Mods.CTRL : 0) | (event.altKey ? Mods.ALT : 0) | (event.metaKey ? Mods.SUPER : 0)
+      | (event.getModifierState('CapsLock') ? Mods.CAPSLOCK : 0) | (event.getModifierState('NumLock') ? Mods.NUMLOCK : 0);
+  }
   private down = (event: KeyboardEvent) => {
     if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === 'Dead') return;
     // Let the browser and existing clipboard handler complete paste/copy gestures.
     if (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC')) return;
     const key = this.key(event.code); if (key === undefined) return;
-    const { Mods, KeyAction, KeyEncoderOption } = this.library;
-    let mods = (event.shiftKey ? Mods.SHIFT : 0) | (event.ctrlKey ? Mods.CTRL : 0) | (event.altKey ? Mods.ALT : 0) | (event.metaKey ? Mods.SUPER : 0);
-    if (event.getModifierState('CapsLock')) mods |= Mods.CAPSLOCK;
-    if (event.getModifierState('NumLock')) mods |= Mods.NUMLOCK;
+    const { KeyAction, KeyEncoderOption } = this.library;
+    const mods = this.modifiers(event);
     const utf8 = [...event.key].length === 1 ? event.key : undefined;
     const input: KeyEvent = { key, mods, action: event.repeat ? KeyAction.REPEAT : KeyAction.PRESS, utf8, unshiftedCodepoint: utf8?.toLowerCase().codePointAt(0) };
     this.encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, this.terminal.getMode(1));
@@ -54,6 +57,6 @@ export class NativeKeyboard {
   private up = (event: KeyboardEvent) => {
     const input = this.held.get(event.code); if (!input) return;
     event.preventDefault(); event.stopImmediatePropagation(); this.held.delete(event.code);
-    this.emit({ ...input, action: this.library.KeyAction.RELEASE });
+    this.emit({ ...input, mods: this.modifiers(event), action: this.library.KeyAction.RELEASE });
   };
 }
