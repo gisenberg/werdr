@@ -348,17 +348,16 @@ herdr terminal title clear
 ```
 
 Detach from direct attach with `ctrl+b q`. Send literal `ctrl+b` with `ctrl+b ctrl+b`.
-`terminal session control` opens a writable live terminal stream for a pane,
-terminal, or agent target. It prints the same newline-delimited
-`terminal.frame` and `terminal.closed` records as observe mode. It reads
-newline-delimited JSON commands on stdin: `terminal.input`, `terminal.resize`,
-`terminal.scroll`, and `terminal.release`. One controller can own a terminal at
-a time; use `--takeover` to replace it.
-`terminal session observe` opens a read-only live terminal stream for a pane,
-terminal, or agent target. It prints newline-delimited JSON `terminal.frame`
-records with base64-encoded ANSI bytes, then a `terminal.closed` record when
-the server closes the stream. Multiple observers can watch the same terminal
-without taking input, resize, scroll, or takeover authority.
+`terminal session control` opens a writable live terminal stream for a pane, terminal, or agent target.
+It prints the same newline-delimited `terminal.frame` and `terminal.closed` records as observe mode.
+It also forwards optional `terminal.mouse` records with boolean `enabled` and `sgr_pixels` fields, and `terminal.keyboard` records with numeric `flags` and `modify_other_keys_level` fields.
+These records carry the server's requested input modes in stream order; disabled mouse capture and zero keyboard flags restore ordinary input behavior.
+Consumers should ignore unknown record types for forward compatibility.
+It reads newline-delimited JSON commands on stdin: `terminal.input`, `terminal.resize`, `terminal.scroll`, and `terminal.release`.
+One controller can own a terminal at a time; use `--takeover` to replace it.
+`terminal session observe` opens a read-only live terminal stream for a pane, terminal, or agent target.
+It prints newline-delimited JSON `terminal.frame` records with base64-encoded ANSI bytes, then a `terminal.closed` record when the server closes the stream.
+Multiple observers can watch the same terminal without taking input, resize, scroll, or takeover authority.
 `terminal title clear` hands the outer terminal window title back to `ui.window_title`.
 
 ## Output waits

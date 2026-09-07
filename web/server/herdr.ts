@@ -15,20 +15,22 @@ for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSI
 if (process.env.WERDR_SOCKET_PATH) environment.HERDR_SOCKET_PATH = process.env.WERDR_SOCKET_PATH;
 
 export function quotePosix(value: string): string { return "'" + value.replaceAll("'", "'\\''") + "'"; }
-export function invocation(machine: Machine, args: string[]): [string, string[]] {
+export function invocation(machine: Machine, args: string[], role: 'runtime' | 'terminal-client' = 'runtime'): [string, string[]] {
   const scoped = machine.session ? ['--session', machine.session, ...args] : args;
-  if (!machine.target) return [binary, scoped];
+  if (!machine.target) return [role === 'terminal-client' ? process.env.WERDR_TERMINAL_CLIENT_BIN || binary : binary, scoped];
   if (machine.target.startsWith('-') || /[\r\n\0]/.test(machine.target)) throw new Error('Invalid saved SSH target');
   // Herdr's catalog deliberately has no OS field. An explicit deployment override
   // selects PowerShell without creating another inventory or guessing from names.
   const windows = isWindows(machine);
   const quotePowerShell = (value: string) => "'" + value.replaceAll("'", "''") + "'";
-  const windowsBinary = process.env.WERDR_WINDOWS_HERDR_BIN || (machine.platform === 'windows' ? managedWindowsBinary : undefined);
-  if (windowsBinary && (windowsBinary.length > 4096 || /[\r\n\0]/.test(windowsBinary))) throw new Error('Invalid Windows Herdr executable path');
+  const windowsBinary = (role === 'terminal-client' ? process.env.WERDR_WINDOWS_TERMINAL_CLIENT_BIN : undefined) || process.env.WERDR_WINDOWS_HERDR_BIN || (machine.platform === 'windows' ? managedWindowsBinary : undefined);
+  const posixBinary = (role === 'terminal-client' ? process.env.WERDR_POSIX_TERMINAL_CLIENT_BIN : undefined) || 'herdr';
+  if (!windows && (posixBinary.length > 4096 || /[\r\n\0]/.test(posixBinary))) throw new Error('Invalid POSIX Herdr executable path');
+  if (windows && windowsBinary && (windowsBinary.length > 4096 || /[\r\n\0]/.test(windowsBinary))) throw new Error('Invalid Windows Herdr executable path');
   const executable = windowsBinary ? `([Environment]::ExpandEnvironmentVariables(${quotePowerShell(windowsBinary)}))` : quotePowerShell('herdr');
   const remoteCommand = windows
     ? 'pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from('& ' + [executable, ...scoped.map(quotePowerShell)].join(' ') + '; exit $LASTEXITCODE', 'utf16le').toString('base64')
-    : ['herdr', ...scoped].map(quotePosix).join(' ');
+    : [posixBinary, ...scoped].map(quotePosix).join(' ');
   return ['ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '--', machine.target, remoteCommand]];
 }
 export async function command(machine: Machine, args: string[]): Promise<any> {
@@ -71,6 +73,6 @@ export function actionArgs(body: Record<string, unknown>): string[] {
   }
 }
 export function terminalProcess(machine: Machine, id: string, cols: number, rows: number, takeover: boolean) {
-  const [file, argv] = invocation(machine, ['terminal', 'session', 'control', publicId(id), '--cols', String(cols), '--rows', String(rows), ...(takeover ? ['--takeover'] : [])]);
+  const [file, argv] = invocation(machine, ['terminal', 'session', 'control', publicId(id), '--cols', String(cols), '--rows', String(rows), ...(takeover ? ['--takeover'] : [])], 'terminal-client');
   return spawn(file, argv, { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
 }

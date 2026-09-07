@@ -123,36 +123,57 @@ fn write_terminal_session_output(mut stream: LocalStream) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     loop {
         match protocol::read_message(&mut stream, MAX_GRAPHICS_FRAME_SIZE) {
-            Ok(ServerMessage::Terminal(frame)) => {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&frame.bytes);
-                let line = serde_json::json!({
-                    "type": "terminal.frame",
-                    "seq": frame.seq,
-                    "encoding": "ansi",
-                    "width": frame.width,
-                    "height": frame.height,
-                    "full": frame.full,
-                    "bytes": encoded,
-                });
-                serde_json::to_writer(&mut stdout, &line)?;
-                stdout.write_all(b"\n")?;
-                stdout.flush()?;
+            Ok(message) => {
+                let closed = matches!(message, ServerMessage::ServerShutdown { .. });
+                if let Some(line) = terminal_session_record(message) {
+                    serde_json::to_writer(&mut stdout, &line)?;
+                    stdout.write_all(b"\n")?;
+                    stdout.flush()?;
+                }
+                if closed {
+                    return Ok(());
+                }
             }
-            Ok(ServerMessage::ServerShutdown { reason }) => {
-                let line = serde_json::json!({
-                    "type": "terminal.closed",
-                    "reason": reason,
-                });
-                serde_json::to_writer(&mut stdout, &line)?;
-                stdout.write_all(b"\n")?;
-                stdout.flush()?;
-                return Ok(());
-            }
-            Ok(ServerMessage::Graphics { .. }) => {}
-            Ok(_) => {}
             Err(protocol::FramingError::UnexpectedEof) => return Ok(()),
             Err(err) => return Err(io::Error::other(err.to_string())),
         }
+    }
+}
+
+/// Translate existing private messages into optional, ordered JSON stream records.
+/// Keep presentation state beside frames so consumers apply mode changes in order.
+fn terminal_session_record(message: ServerMessage) -> Option<serde_json::Value> {
+    match message {
+        ServerMessage::Terminal(frame) => Some(serde_json::json!({
+            "type": "terminal.frame",
+            "seq": frame.seq,
+            "encoding": "ansi",
+            "width": frame.width,
+            "height": frame.height,
+            "full": frame.full,
+            "bytes": base64::engine::general_purpose::STANDARD.encode(&frame.bytes),
+        })),
+        ServerMessage::MouseCapture {
+            enabled,
+            sgr_pixels,
+        } => Some(serde_json::json!({
+            "type": "terminal.mouse",
+            "enabled": enabled,
+            "sgr_pixels": sgr_pixels,
+        })),
+        ServerMessage::DirectTerminalKeyboardProtocol {
+            flags,
+            modify_other_keys_level,
+        } => Some(serde_json::json!({
+            "type": "terminal.keyboard",
+            "flags": flags,
+            "modify_other_keys_level": modify_other_keys_level,
+        })),
+        ServerMessage::ServerShutdown { reason } => Some(serde_json::json!({
+            "type": "terminal.closed",
+            "reason": reason,
+        })),
+        _ => None,
     }
 }
 
@@ -273,5 +294,75 @@ pub(super) fn terminal_control_command_from_json(raw: &str) -> Result<ClientMess
             })
         }
         TerminalControlCommand::Release {} => Ok(ClientMessage::Detach),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_session_preserves_frame_bytes_and_shutdown() {
+        let bytes = vec![0, 27, b'[', b'm', 255];
+        assert_eq!(
+            terminal_session_record(ServerMessage::Terminal(crate::protocol::TerminalFrame {
+                seq: 42,
+                width: 80,
+                height: 24,
+                full: true,
+                bytes: bytes.clone(),
+            })),
+            Some(serde_json::json!({
+                "type": "terminal.frame", "seq": 42, "encoding": "ansi",
+                "width": 80, "height": 24, "full": true,
+                "bytes": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }))
+        );
+        assert_eq!(
+            terminal_session_record(ServerMessage::ServerShutdown {
+                reason: Some("detached".into())
+            }),
+            Some(serde_json::json!({ "type": "terminal.closed", "reason": "detached" }))
+        );
+        assert!(terminal_session_record(ServerMessage::ReloadSoundConfig).is_none());
+    }
+
+    #[test]
+    fn terminal_session_preserves_mouse_enable_and_reset() {
+        for enabled in [true, false] {
+            assert_eq!(
+                terminal_session_record(ServerMessage::MouseCapture {
+                    enabled,
+                    sgr_pixels: false,
+                }),
+                Some(serde_json::json!({
+                    "type": "terminal.mouse", "enabled": enabled, "sgr_pixels": false,
+                }))
+            );
+        }
+        assert_eq!(
+            terminal_session_record(ServerMessage::MouseCapture {
+                enabled: true,
+                sgr_pixels: true,
+            })
+            .unwrap()["sgr_pixels"],
+            true
+        );
+    }
+
+    #[test]
+    fn terminal_session_preserves_exact_keyboard_flags_and_reset() {
+        for (flags, level) in [(31, 2), (1, 1), (0, 0)] {
+            assert_eq!(
+                terminal_session_record(ServerMessage::DirectTerminalKeyboardProtocol {
+                    flags,
+                    modify_other_keys_level: level,
+                }),
+                Some(serde_json::json!({
+                    "type": "terminal.keyboard", "flags": flags,
+                    "modify_other_keys_level": level,
+                }))
+            );
+        }
     }
 }

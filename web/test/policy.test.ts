@@ -71,3 +71,32 @@ test('managed Windows runtime paths expand environment variables without interpr
     if (binary === undefined) delete process.env.WERDR_WINDOWS_HERDR_BIN; else process.env.WERDR_WINDOWS_HERDR_BIN = binary;
   }
 });
+
+test('terminal companion overrides never replace runtime commands on any platform', () => {
+  const values = {
+    WERDR_TERMINAL_CLIENT_BIN: '/private/tools/terminal client',
+    WERDR_POSIX_TERMINAL_CLIENT_BIN: "/private/tools/user's $(literal) client",
+    WERDR_WINDOWS_TERMINAL_CLIENT_BIN: "%LOCALAPPDATA%\\werdr\\user's $(literal)\\client.exe",
+  };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  const local = { id: 'local', label: 'Host', enabled: true };
+  const posix = { id: 'posix', label: 'POSIX', target: 'trusted-posix', enabled: true, session: 'werdr' };
+  const windows = { id: 'windows', label: 'Windows', target: 'trusted-windows', enabled: true, session: 'werdr', platform: 'windows' as const };
+  const runtimeBefore = [local, posix, windows].map(machine => invocation(machine, ['api', 'snapshot']));
+  try {
+    Object.assign(process.env, values);
+    assert.deepEqual([local, posix, windows].map(machine => invocation(machine, ['api', 'snapshot'])), runtimeBefore);
+    assert.deepEqual(invocation(local, ['terminal'], 'terminal-client'), [values.WERDR_TERMINAL_CLIENT_BIN, ['terminal']]);
+    assert.equal(invocation(posix, ['terminal'], 'terminal-client')[1].at(-1), [values.WERDR_POSIX_TERMINAL_CLIENT_BIN, '--session', 'werdr', 'terminal'].map(quotePosix).join(' '));
+    const encoded = invocation(windows, ['terminal'], 'terminal-client')[1].at(-1)!;
+    assert.equal(Buffer.from(encoded.split(' ').at(-1)!, 'base64').toString('utf16le'), "& ([Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\\werdr\\user''s $(literal)\\client.exe')) '--session' 'werdr' 'terminal'; exit $LASTEXITCODE");
+    for (const invalid of ['bad\npath', 'bad\rpath', 'x'.repeat(4097)]) {
+      process.env.WERDR_POSIX_TERMINAL_CLIENT_BIN = invalid;
+      process.env.WERDR_WINDOWS_TERMINAL_CLIENT_BIN = invalid;
+      assert.throws(() => invocation(posix, [], 'terminal-client'));
+      assert.throws(() => invocation(windows, [], 'terminal-client'));
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
