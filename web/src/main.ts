@@ -1,4 +1,5 @@
 import { BootConsole } from './boot';
+import { Worktrees, worktreesMarkup } from './worktrees';
 import { DesktopSurface } from './desktop-surface';
 import './style.css';
 
@@ -17,7 +18,7 @@ app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-con
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="pane-actions">ACTIONS</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
 <dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><button id="revoke-token">REVOKE ACCESS TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>
 <dialog id="sessions-dialog"><h1>Signed-in browsers</h1><p>Browser tokens stay valid for 90 days, including across restarts. Revoking a browser disconnects it immediately.</p><div id="session-list"></div><p id="session-error" role="alert"></p><button id="revoke-others">REVOKE OTHER BROWSERS</button><button id="sessions-done">DONE</button></dialog>
-${hostManagerMarkup}${activityMarkup}${settingsMarkup}
+${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}
 <dialog id="command-dialog"><h1>COMMANDS</h1><label>FIND ACTION<input id="command-search" type="search" autocomplete="off" placeholder="Search actions, hosts, workspaces, agents"></label><div id="command-list"></div><button id="command-done">DONE</button></dialog>
 <dialog id="rename-dialog"><form id="rename-form"><h1 id="rename-title">RENAME</h1><label>LABEL<input id="rename-value" required maxlength="256"></label><button type="submit">SAVE</button><button id="rename-cancel" type="button">CANCEL</button><p id="rename-error" role="alert"></p></form></dialog>
 <dialog id="agent-dialog"><h1>AGENT</h1><p id="agent-context"></p><form id="agent-start-form"><label>AGENT KIND<input id="agent-kind" value="claude" list="agent-kinds" required maxlength="80" autocomplete="off"><datalist id="agent-kinds"><option value="claude"><option value="codex"><option value="opencode"><option value="aider"><option value="gemini"></datalist></label><label>NAME<input id="agent-name" required maxlength="256" autocomplete="off"></label><button type="submit">START AGENT IN THIS PANE</button></form><form id="agent-prompt-form"><label>PROMPT<textarea id="agent-prompt" required maxlength="32768" rows="5"></textarea></label><button type="submit">SEND PROMPT</button></form><p id="agent-error" role="alert"></p><button id="agent-done">DONE</button></dialog>`;
@@ -50,6 +51,7 @@ let preferences: Preferences = structuredClone(defaults), colors = palette(defau
 const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`));
 function selectPane(id: string) { if (paneId === id) return; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
+const worktrees = new Worktrees(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId, cwd: snapshot.panes.find(pane => pane.pane_id === paneId)?.cwd } : undefined; }, (machine, pane) => { if (!pane) return; selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true); }, () => { fleet.resync(); void refresh(); });
 const settings = new Settings(api, (value, nextColors) => {
   preferences = value; colors = nextColors;
   surface.updatePreferences(value, nextColors);
@@ -60,14 +62,15 @@ function selectedHost() { return fleetState.hosts.find(host => host.machine.id =
 function selectHost(id: string) {
   if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = id; fleet.resync(); return; }
   if (machineId === id) return;
-  rememberSelection(); const saved = selections.get(id);
+  pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
-  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); choose(); renderFleetNavigation();
+  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
 }
-function selectTarget(machine: string, workspace: string, tab: string, pane: string) {
+function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
+  pendingPane = waitForSnapshot ? { machine, pane, tab } : undefined;
   if (machineId !== machine) detach();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
-  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); choose(); renderFleetNavigation();
+  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
 }
 function applyFleet(state: FleetState, added?: Notice) {
   const previous = selectedHost()?.connection; fleetState = state;
@@ -229,6 +232,7 @@ function openCommands() {
   commands = [
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
+    { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
     { label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
     { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
     { label: 'Split right (Ctrl/Cmd+D)', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'right' }, machine); } },

@@ -30,7 +30,7 @@ export class DesktopSurface {
     ++this.epoch; this.loading = false; this.dirty = false; clearTimeout(this.retry); this.drag = undefined;
     for (const controller of this.controllers.values()) controller.dispose(); this.controllers.clear();
     for (const node of this.overflow.values()) node.remove(); this.overflow.clear();
-    this.layout = undefined; this.fingerprint = ''; this.machine = ''; this.tab = ''; this.pane = ''; this.panes = []; this.separators.replaceChildren(); this.shield.hidden = false;
+    this.layout = undefined; this.fingerprint = ''; this.machine = ''; this.tab = ''; this.pane = ''; this.panes = []; this.separators.replaceChildren(); this.shield.hidden = false; this.shield.textContent = 'Attaching to Herdr...';
   }
   updatePreferences(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; for (const controller of this.controllers.values()) controller.update(preferences, colors); this.render(); }
   sync(machine: string, tab: string, pane: string, snapshot: Snapshot, online: boolean) {

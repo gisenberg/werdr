@@ -158,3 +158,12 @@ The command palette includes zoom, directional focus, resize and swap, pane move
 Chrome updates and focus changes retain existing terminal elements and controller connections.
 On phones, only the selected pane is visible and hidden panes retain their last terminal size.
 Layout exports sent to browsers include only geometry and public identities, excluding native commands and environment variables.
+
+## Native worktrees
+
+Open **Worktrees** from the command palette to list, create, open, or remove a worktree on the selected host.
+The current pane directory is suggested, and an explicit repository path can be entered.
+Branch, base ref, checkout path, and workspace label are passed to herdr; blank optional fields use native defaults.
+Repository trust explicitly overrides Git ownership checks for that operation and does not suppress Git hooks.
+Removal uses the native workspace-scoped worktree operation, requires confirmation, and preserves dirty checkouts unless force is explicitly selected.
+Closed worktrees can be opened before removal.

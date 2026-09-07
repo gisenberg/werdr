@@ -127,7 +127,8 @@ export async function nativeEndpoint(machine: Machine): Promise<NativeEndpoint> 
     request(method, params = {}) {
       return new Promise((resolve, reject) => {
         let close = () => {};
-        const timer = setTimeout(() => { close(); reject(new Error('Native API request timed out')); }, method === 'agent.start' ? 65_000 : 10_000); timer.unref();
+        const worktreeMutation = ['worktree.create', 'worktree.open', 'worktree.remove'].includes(method);
+        const timer = setTimeout(() => { close(); reject(new Error(worktreeMutation ? 'Native worktree request timed out. It may still be running; refresh before retrying.' : 'Native API request timed out')); }, worktreeMutation ? 120_000 : method === 'agent.start' ? 65_000 : 10_000); timer.unref();
         const fail = (error: Error) => { clearTimeout(timer); close(); reject(error); };
         try { close = open(method, params, value => {
           clearTimeout(timer); close();

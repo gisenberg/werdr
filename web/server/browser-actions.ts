@@ -1,3 +1,4 @@
+import { worktreeAction } from './worktree-actions.ts';
 import { publicId } from './herdr.ts';
 import { ManagementError } from './machine-management.ts';
 
@@ -7,6 +8,7 @@ const text = (value: unknown, max = 256): string => {
 };
 export function browserAction(value: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
   const method = String(value.action);
+  if (method.startsWith('worktree.')) return worktreeAction(value);
   const id = () => publicId(value.id);
   switch (method) {
     case 'workspace.create': return { method, params: { ...(value.label ? { label: text(value.label) } : {}), ...(value.source ? { source_workspace_id: publicId(value.source) } : {}) } };

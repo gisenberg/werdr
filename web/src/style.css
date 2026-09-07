@@ -154,3 +154,17 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 .pane-divider:focus-visible, .pane-divider:hover { background: var(--herdr-accent); outline: 1px solid var(--herdr-accent); }
 
 .pane-capacity { position: absolute; padding: 20px; text-align: left; overflow: hidden; }
+
+.worktree-row { padding: 8px 0; border-top: 1px solid var(--herdr-surface1); overflow-wrap: anywhere; }
+#worktree-repository, #worktree-remove-description { overflow-wrap: anywhere; }
+#worktrees-dialog { width: min(900px, calc(100vw - 32px)); }
+dialog .check-label { display: flex; align-items: center; gap: 8px; }
+dialog .check-label input[type=checkbox] { flex: 0 0 auto; width: auto; margin: 0; }
+#worktree-source label { margin: 12px 0; }
+#worktree-create { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#worktree-create h2, #worktree-create p, #worktree-create button { grid-column: 1 / -1; }
+#worktree-create label { margin: 0; }
+#worktree-create h2, .worktree-row h2 { margin: 8px 0; }
+.worktree-row button { display: inline-block; width: auto; margin-right: 8px; }
+#worktree-done { position: sticky; bottom: 0; background: var(--herdr-panel-bg); }
+@media (max-width: 700px) { #worktree-create { grid-template-columns: minmax(0, 1fr); } }

@@ -16,7 +16,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 | Preferences | Durable user settings with device overrides, sidebar geometry/group state/sorting, status indicators, tab/border behavior, shortcuts and confirmations | Partial: settings store, appearance, font/device override, sidebar width/density, agent order, indicators, confirmations and notification controls; shortcuts/group state/border controls remain |
 | Terminal interaction | Native copy mode and search, selection/copy, scrollback editing, links, mouse behavior and image paste | Partial: basic controller input/scroll only |
 | Workspace navigation | Native workspace/tab/pane actions, pickers, keyboard navigation and context menus | Partial: create/rename/close and limited palette |
-| Worktrees | Native list/create/open/remove flows with host and repository scope and native errors | Missing |
+| Worktrees | Native list/create/open/remove flows with host and repository scope and native errors | Implemented native repository picker and create/open/remove; isolated Git browser test verifies branch and checkout identity, dirty removal rejection, explicit force, normal native checkout hooks, and repository retention |
 | Agents | Start/prompt/rename, native ordering/views, detail/status metadata and attention navigation | Partial: basic actions and fleet list |
 | Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Partial: durable fleet activity and desktop opt-in |
 | Integrations | Native readiness list and explicit installation/uninstallation with results | Missing |

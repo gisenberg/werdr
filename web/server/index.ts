@@ -160,7 +160,7 @@ const handler: RequestListener = async (req, res) => {
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req); const { method, params } = browserAction(value);
-        return reply(res, 200, await fleet.request(publicId(value.machine), method, params));
+        return reply(res, 200, await fleet.request(publicId(value.machine), method, params, method !== 'worktree.list'));
       }
       return reply(res, 404, { error: 'Unknown route' });
     }
