@@ -64,3 +64,17 @@ dialog button { width: 100%; color: #b6ef9c; }
 }
 
 @media (max-width: 700px) { header { gap: 6px; padding: 6px; } header strong { font-size: 16px; } .account-actions { gap: 3px; } .account-actions button { padding: 8px 5px; font-size: 10px; } }
+
+#boot-visual { position: absolute; top: 0; left: 0; transform-origin: top left; pointer-events: none; }
+#boot-visual button { pointer-events: auto; }
+#boot-terminal { position: absolute; left: 0; }
+#boot .retro-graphical-actions button { width: auto; min-width: 70px; border: 2px outset #eee; padding: 3px 10px; text-align: center; background: #d6d6d6; color: #111; }
+#boot .retro-amiga-guru { color: #f22; background: #000; }
+#boot .retro-graphical-input { font-size: 16px; }
+@media (prefers-reduced-motion: reduce) { #boot, #boot * { animation: none !important; } }
+#boot:not([open]) { display: none; }
+/* Explicit artwork sizes avoid percentage images collapsing inside centered grid tracks. */
+#boot .retro-graphical-logo-boot img { width: 180px; max-height: none; }
+#boot .retro-next-boot img { width: 110px; }
+#boot .retro-os2-boot img { width: 390px; }
+#boot .retro-amiga-guru-alert { font-size: 14px; }

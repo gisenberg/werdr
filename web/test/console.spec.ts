@@ -8,13 +8,13 @@ test.afterAll(async () => { await runtime.close(); });
 
 for (const [index, family, file] of [
   [0, 'C64 Pro Mono', '/fonts/c64/C64_Pro_Mono-STYLE.woff2'],
-  [1, 'Retro Apple II', '/fonts/retro/Apple_2.woff2'],
-  [2, 'Retro IBM CGA', '/fonts/retro/IBM_CGA.woff2'],
+  [2, 'Retro Apple II', '/fonts/retro/Apple_2.woff2'],
+  [3, 'Retro IBM CGA', '/fonts/retro/IBM_CGA.woff2'],
 ] as const) {
   for (const width of [1440, 390]) test(`${family} keeps the same terminal geometry through auth at ${width}px`, async ({ page }) => {
     test.skip(index > 0 && !process.env.WERDR_TEST_BOOT_FONT_DIR, 'Private embedded fonts are provisioned by the deployment.');
     await page.setViewportSize({ width, height: 900 });
-    await page.addInitScript(index => { localStorage.removeItem('werdr-last-boot'); Math.random = () => (index + .1) / 3; }, index);
+    await page.addInitScript(index => { localStorage.removeItem('werdr-last-boot'); Math.random = () => (index + .1) / 36; }, index);
     await page.goto(runtime.url);
     await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'boot');
     await expect(page.locator('#boot-output')).not.toBeEmpty();
@@ -47,7 +47,7 @@ for (const [index, family, file] of [
 }
 
 test('missing fonts cannot block terminal authentication and logout clears secret input', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.removeItem('werdr-last-boot'); Math.random = () => .4; });
+  await page.addInitScript(() => { localStorage.removeItem('werdr-last-boot'); Math.random = () => 2.1 / 36; });
   await page.route('**/fonts/retro/*.woff2', route => route.abort());
   await page.goto(runtime.url);
   await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');

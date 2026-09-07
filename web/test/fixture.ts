@@ -42,7 +42,7 @@ export async function fixture(passwordLogin = false) {
   };
   let gateway: ChildProcess;
   const startGateway = async () => {
-    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
+    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
     await wait(async () => (await fetch(url)).ok);
   };
   const close = async () => {

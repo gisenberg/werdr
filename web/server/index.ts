@@ -8,6 +8,7 @@ import { actionArgs, command, machines, publicId, resolveMachine, terminalProces
 import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 import { authentication, LoginLimiter } from './auth.ts';
+import { bootArtwork } from './boot-artwork.ts';
 import { bootFonts } from './boot-fonts.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,6 +20,7 @@ const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_
 const tokenPath = resolve(root, process.env.WERDR_TOKEN_FILE || '.auth-token');
 const auth = await authentication(tokenPath, process.env.WERDR_CREDENTIALS_FILE ? resolve(root, process.env.WERDR_CREDENTIALS_FILE) : undefined);
 const fonts = await bootFonts(process.env.WERDR_BOOT_FONT_DIR);
+const artwork = await bootArtwork(process.env.WERDR_BOOT_ASSET_DIR);
 const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
 const sessions = new Map<string, { expiry: number; method: 'password' | 'token' }>();
@@ -115,6 +117,10 @@ const server = createServer(async (req, res) => {
       return reply(res, 404, { error: 'Unknown route' });
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply(res, 405, { error: 'Method not allowed' });
+    if (url.pathname === '/boot-assets/workbench13-bootscreen.gif' && artwork) {
+      res.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'private, max-age=86400' });
+      return res.end(req.method === 'HEAD' ? undefined : artwork);
+    }
     const font = fonts.get(url.pathname);
     if (font) {
       res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'private, max-age=86400' });
@@ -122,7 +128,7 @@ const server = createServer(async (req, res) => {
     }
     const path = resolve(root, 'dist', '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     if (!path.startsWith(resolve(root, 'dist') + sep)) return reply(res, 404, { error: 'Not found' });
-    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.woff2': 'font/woff2' };
     let data: Buffer;
     try { data = await readFile(path); } catch { return reply(res, 404, { error: 'Not found' }); }
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });

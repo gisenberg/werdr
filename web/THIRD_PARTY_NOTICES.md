@@ -5,7 +5,7 @@ The upstream herdr runtime remains Apache-2.0-licensed under the repository root
 
 ## Wmux-derived code
 
-`src/wmux/retro-boot-profiles.ts` and `src/wmux/retro-boot-audio.ts` were copied from wmux commit `5dd1affd1230479ac36519f77811dc64aeaaf80f`.
+`src/wmux/retro-boot-profiles.ts`, `src/wmux/retro-boot-audio.ts`, `src/wmux/RetroBootArtwork.tsx`, the adapted graphical desktop renderer, and boot CSS were copied from wmux commit `5dd1affd1230479ac36519f77811dc64aeaaf80f`.
 Their original MIT notice is retained in `src/wmux/LICENSE`.
 The UI adapts selected profile text and authentication prompts at display time.
 The terminal-backed authentication flow in `src/boot.ts` adapts wmux's `RetroBootScreen.tsx` and terminal input configuration under the same retained MIT notice.
@@ -25,7 +25,7 @@ Other JavaScript dependencies retain the licenses declared in their installed pa
 Its original filename and [license](public/fonts/c64/license.txt) are preserved, along with [provenance](public/fonts/c64/UPSTREAM.md).
 The font permits embedding in websites and inclusion in software freely provided to end users; it remains outside werdr's MIT license.
 
-The Apple II and IBM CGA faces can be provisioned privately for embedded website use through `WERDR_BOOT_FONT_DIR`.
+The 17 ZX Origins font files used across the historical profiles can be provisioned privately for embedded website use through `WERDR_BOOT_FONT_DIR`.
 They are unmodified WOFF2 conversions from Damien Guard's ZX Origins Micropack, copyright 1988-2023 Damien Guard.
 Credit: [DamienG / ZX Origins](https://damieng.com/zx-origins/).
 Their terms permit embedded website use with attribution but restrict standalone redistribution, rehosting for direct font download, and inclusion in asset collections.
@@ -35,6 +35,10 @@ See [private-font provenance](../werdr/BOOT_FONTS.md) for setup and source infor
 
 ## Historical material
 
-The unlicensed Amiga Workbench screenshot is not included.
+The Amiga Workbench screenshot is not included in the public repository or release archive.
+It has no identified source-redistribution license and is provisioned separately for private deployment through `WERDR_BOOT_ASSET_DIR`.
+Its exact source and status are recorded in [asset provenance](src/wmux/assets/retro/UPSTREAM.md).
+The TOS screenshot and boot logos are included with their original public-domain or CC BY-SA terms and attribution in the [asset provenance](src/wmux/assets/retro/UPSTREAM.md) and [logo provenance](src/wmux/assets/retro/logos/UPSTREAM.md).
+The artwork renderer preserves the wmux raster palettes and transparency normalization; those asset changes remain under their respective source licenses.
 Historical product names in boot text identify the systems being simulated and do not imply endorsement.
-Any future imported artwork or fonts need their own redistribution terms and provenance.
+React and React DOM are MIT-licensed and are used to retain wmux's existing artwork and graphical desktop presentation without duplicating its vector renderer.

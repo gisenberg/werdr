@@ -40,7 +40,8 @@ To enable username/password login, set `WERDR_CREDENTIALS_FILE` to an owner-only
 The hash format is wmux-compatible `scrypt$<32 hex salt characters>$<64 hex hash characters>`; plaintext passwords are never stored.
 A private copy of an existing wmux `auth.json` can be used as this file.
 When configured, the selected boot console prompts for a username, then a password after Enter, and also offers token login.
-Authentication writes into the same Ghostty terminal as boot, without changing its cell grid, font size, or canvas dimensions.
+Text profiles authenticate in the same fixed-grid Ghostty terminal as boot; the six graphical profiles use their matching desktop login windows.
+Both keep the selected display geometry through username, password, retries, and access granted.
 It stays in that machine's console through retries and access granted; password and token characters are not echoed into the console.
 After password login, **ACCESS TOKEN** lets you generate a replacement token for another browser.
 Generation atomically updates `WERDR_TOKEN_FILE`, invalidates the old token, and revokes sessions and terminal sockets authenticated with it.
@@ -48,7 +49,7 @@ Password-authenticated sessions remain signed in, and token-authenticated sessio
 
 Use the workspace `[+]` control to launch a shell.
 On phones, `[H] HOSTS` opens the navigation drawer.
-The C64 font is bundled; provision the other two faces privately using the [font setup](werdr/BOOT_FONTS.md) to match wmux.
+The C64 font and redistributable artwork are bundled; provision the other faces and Workbench screenshot privately using the [asset setup](werdr/BOOT_FONTS.md) to match wmux.
 
 For an existing herdr installation, set `WERDR_HERDR_BIN` to its executable and omit the trial configuration override.
 Build the Rust binary using upstream's documented toolchain when the pinned Linux fixture is unsuitable.
@@ -59,13 +60,14 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 - Workspace/tab creation, pane splitting and closure, and explicit terminal takeover.
 - Live terminal input, resize, and scroll through herdr's controller stream.
 - Desktop and phone layouts with a collapsed mobile host drawer.
-- Full-screen Commodore 64, Apple IIe, and IBM PC AT startup sequences using wmux's original embedded fonts when provisioned, randomly chosen each page load without consecutive repeats when browser storage is available.
+- All 36 wmux startup profiles, including six graphical desktops, Amiga Workbench/Guru recovery, Spectrum tape borders, original fonts and artwork, and synthesized POST/floppy sounds.
+  A profile is randomly chosen each page load without consecutive repeats when browser storage is available.
 - Startup has no visible settings or prompts; any key or click dismisses it, and reduced-motion preferences shorten it.
 - Authenticated REST and WebSocket access with logout revocation.
 
 The browser displays one selected pane at a time, including on desktop.
 Metadata is refreshed for the selected host every five seconds.
-Simultaneous split surfaces, event-driven fleet metadata, browser settings persistence, full wmux media/clipboard integration, and the complete historical boot-artwork collection are not implemented.
+Simultaneous split surfaces, event-driven fleet metadata, browser settings persistence, full wmux media/clipboard integration are not implemented.
 This is a working first version, not feature parity with wmux.
 
 ## Configuration and operations
@@ -78,7 +80,8 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_HOST` | Private IP literal, default `127.0.0.1`. |
 | `WERDR_ALLOWED_HOSTS` | Comma-separated exact DNS names or IP literals accepted in addition to the bind address, without ports or wildcards. |
 | `WERDR_PORT` | Gateway port, default `3480`. |
-| `WERDR_BOOT_FONT_DIR` | Optional private directory containing `Apple_2.woff2` and `IBM_CGA.woff2`; see [font provisioning](werdr/BOOT_FONTS.md). |
+| `WERDR_BOOT_ASSET_DIR` | Private directory containing the Workbench GIF; never bundled in the public fork. |
+| `WERDR_BOOT_FONT_DIR` | Optional private directory containing the 17 ZX Origins WOFF2 files; see [font provisioning](werdr/BOOT_FONTS.md). |
 | `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |

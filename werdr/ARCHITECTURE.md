@@ -22,6 +22,9 @@ Gateway-only credential and token files remain separate from herdr runtime state
 Username/password or access-token login issues an opaque HttpOnly SameSite cookie; only password-authenticated sessions may rotate the durable access token.
 Token replacement revokes token-authenticated sessions and their terminal controllers while herdr retains the shells.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
+Startup and authentication are browser presentation: `BootConsole` owns credential stages and fixed display geometry, while the retained wmux React artwork and desktop components provide the historical visuals.
+Text profiles use one Ghostty terminal throughout login; graphical profiles use a DOM input with the same credential stages and matching desktop fields.
+The gateway serves only explicitly provisioned private font and screenshot paths; redistributable artwork remains in the web build with its license provenance.
 Machine ID plus pane ID identifies a browser target; pane IDs alone are not globally unique.
 
 The gateway launches `herdr terminal session control` with a pinned machine snapshot.

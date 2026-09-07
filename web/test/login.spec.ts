@@ -80,14 +80,14 @@ test('network login throttling rejects excessive attempts and never trusts forwa
 });
 
 
-test('BIOS memory count overwrites its row and the display retains a 4:3 shape', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.setItem('werdr-last-boot', 'apple-iie'); Math.random = () => .99; });
+test('BIOS memory count overwrites its row and the display retains its native framebuffer shape', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.removeItem('werdr-last-boot'); Math.random = () => 3.1 / 36; });
   await page.goto(runtime.url);
   await expect(page.locator('#boot-output')).toContainText('Keyboard');
   const text = await page.locator('#boot-output').textContent();
   expect(text).toContain('016384 KB OK');
   expect(text!.match(/KB OK/g)).toHaveLength(1);
   const box = await page.locator('#boot-frame').boundingBox();
-  expect(box!.width / box!.height).toBeCloseTo(4 / 3, 2);
+  expect(box!.width / box!.height).toBeCloseTo(720 / 400, 2);
   await page.screenshot({ path: 'test-results/boot-bios.png' });
 });
