@@ -8,8 +8,8 @@ Its multi-machine foundation is upstream PR #3670, merged as `9e9bc8a144667a6b7d
 flowchart LR
   Browser[Browser controls and Ghostty WASM] <-->|Authenticated HTTP and WebSocket| Gateway[werdr Node gateway]
   Gateway -->|machine list| Catalog[herdr saved machine catalog]
-  Gateway <-->|CLI snapshots and terminal controller| Local[Local herdr runtime]
-  Gateway <-->|Noninteractive SSH| Remote[Remote herdr runtime]
+  Gateway <-->|Native API events and terminal controller| Local[Local herdr runtime]
+  Gateway <-->|SSH IPC forwarding and terminal controller| Remote[Remote herdr runtime]
   Local --> LocalPTY[Native PTYs and shells]
   Remote --> RemotePTY[Native PTYs and ConPTY]
 ```
@@ -35,9 +35,22 @@ Browser disconnection releases the controller rather than closing the pane.
 Takeover is an explicit action and is never part of automatic reconnect.
 Herdr's rendered frames are authoritative; a `full` frame is not permission to reset a live terminal or replay a raw PTY tail.
 
-The first version uses CLI wrappers for cross-platform API transport instead of duplicating Unix-socket and Windows-named-pipe handling.
-It polls selected-host metadata, while terminal output remains streamed.
-A later event-driven cache should subscribe before taking a snapshot, buffer intervening events, and resynchronize after reconnect as specified by herdr's socket API.
+`Fleet` owns independent metadata connections, bounded handshake concurrency, reconnect backoff, and ordered browser deltas.
+It subscribes before taking native snapshots, reconciles changes during bootstrap, subscribes to per-pane agent status, and takes a ten-second health snapshot.
+Local metadata uses the existing Unix socket; POSIX SSH forwards that socket to an owner-only temporary directory.
+Windows SSH multiplexes bounded channels to the existing named pipe through a PowerShell/C# IPC client.
+Neither path adds a TCP listener or a second session runtime.
+Agent status transitions create bounded, atomically persisted notification history; bootstrap does not announce existing work.
+Notifications cover observed transitions while the gateway is running, rather than reconstructing events missed during downtime.
+The browser applies ordered fleet revisions and resynchronizes after gaps or reconnects.
+Host identity is pinned across in-flight operations, and disabling/removing a host retires metadata and terminal clients without terminating native sessions.
+
+`MachineManagement` serializes browser catalog edits and setup jobs while retaining the last valid catalog during temporary failures.
+POSIX onboarding delegates compatibility and installation decisions to the upstream interactive CLI.
+Windows onboarding stages the fork's checksum-pinned installer only after explicit consent and never forcibly replaces a running runtime.
+Platform hints are separate from the native catalog and only apply while ID, target, and named session match.
+Setup logs and input are bounded, jobs are scoped to their browser-session owner, and session revocation cancels their work.
+The browser action adapter exposes an explicit native-method allowlist instead of a general RPC proxy.
 
 ## Why a fork
 

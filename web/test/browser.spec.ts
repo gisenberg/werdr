@@ -55,6 +55,10 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await expect(page.locator('#rail')).toBeVisible();
   await page.getByRole('button', { name: '[H] HOSTS', exact: true }).click();
   await page.screenshot({ path: 'test-results/mobile.png' });
+  // Return to the shell whose environment this test owns. Selection now survives reload.
+  await page.locator('#tabs button').first().click();
+  await page.locator('#panes button').first().click();
+  await expect(page.locator('#shield')).toBeHidden();
   await runtime.restartGateway();
   await page.reload();
   await expect(page.locator('#boot')).toBeHidden();

@@ -45,6 +45,9 @@ The task does not expose a new network listener: the browser gateway reaches the
 Set `WERDR_WINDOWS_MACHINES` to the saved herdr machine IDs and `WERDR_WINDOWS_HERDR_BIN` to `%LOCALAPPDATA%\werdr\herdr\<version>\herdr.exe` on the gateway.
 The remote adapter expands environment variables as a path without interpreting shell expressions, so hosts with different Windows usernames share one deployment setting.
 Use `werdr` as each remote catalog entry's explicit session.
-Herdr's automatic `machine add` bootstrap still emits POSIX shell commands, so Windows entries must be provisioned in its schema-versioned private `client/endpoints.json` catalog after verifying the server explicitly.
-Preserve existing catalog entries, refuse future schema versions, and use an owner-only atomic update with a backup.
+Herdr's automatic `machine add` bootstrap still emits POSIX shell commands.
+Werdr's **MANAGE HOSTS** Windows flow verifies the named runtime and writes its schema-versioned private `client/endpoints.json` catalog with an owner-only atomic update, preserving existing entries and refusing future schemas.
+It persists the selected platform against the native endpoint identity, so new browser-managed hosts do not need the environment ID override.
+The installer accepts `-Session` for isolated named sessions and keeps the default task name unchanged.
+Background fleet metadata uses an SSH named-pipe relay; browser terminal attachments continue using the native controller CLI.
 The installation script's success sentinel confirms an actual API snapshot, not only a running task.

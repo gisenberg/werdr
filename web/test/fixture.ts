@@ -46,7 +46,7 @@ export async function fixture(passwordLogin = false, secure = false) {
   };
   let gateway: ChildProcess;
   const startGateway = async () => {
-    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_SESSION_FILE: resolve(directory, 'browser-sessions.json'), WERDR_CERT_FILE: secure ? certPath : '', WERDR_KEY_FILE: secure ? keyPath : '', WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
+    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_NOTIFICATION_FILE: resolve(directory, 'notifications.json'), WERDR_MACHINE_PLATFORM_FILE: resolve(directory, 'machine-platforms.json'), WERDR_SESSION_FILE: resolve(directory, 'browser-sessions.json'), WERDR_CERT_FILE: secure ? certPath : '', WERDR_KEY_FILE: secure ? keyPath : '', WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
     await wait(async () => secure ? new Promise<boolean>((resolve, reject) => { httpsGet(url, { ca: certificate }, response => { response.resume(); resolve(response.statusCode === 200); }).on('error', reject); }) : (await fetch(url)).ok);
   };
   const close = async () => {
@@ -61,7 +61,7 @@ export async function fixture(passwordLogin = false, secure = false) {
     start(binary, ['server']);
     await wait(async () => !!(await cli('api', 'snapshot')));
     await startGateway();
-    return { url, cli, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
+    return { url, cli, directory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
       restartGateway: async () => { await stop(gateway); await startGateway(); } };
   } catch (error) { await close(); throw error; }
 }

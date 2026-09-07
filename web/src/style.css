@@ -84,3 +84,31 @@ dialog button { width: 100%; color: #b6ef9c; }
 .session-row div { margin: 6px 0; }
 
 @media (max-width: 700px) { header { display: grid; grid-template-columns: auto 1fr; } header strong { text-align: right; } .account-actions { grid-column: 1 / -1; } .account-actions button { flex: 1; white-space: nowrap; } }
+
+/* Fleet chrome keeps terminal pixels untouched and follows the console grid. */
+.rail-tools { display: flex; flex-wrap: wrap; border-bottom: 1px solid #35413d; }
+.rail-tools button { flex: 1; padding: 8px 5px; font-size: 11px; }
+.rail-search { display: block; padding: 10px 12px; color: #98a99f; font-size: 11px; }
+.rail-search input { width: 100%; margin-top: 5px; padding: 7px; }
+aside nav button[data-badge]:not([data-badge=""])::after { content: '[' attr(data-badge) ']'; display: block; margin-top: 3px; color: #85968e; font-size: 10px; }
+aside nav button[data-badge="BLOCKED"]::after, aside nav button[data-badge="OFFLINE"]::after, aside nav button[data-badge="INCOMPATIBLE"]::after { color: #edb789; }
+aside .section select { padding: 3px; font-size: 10px; max-width: 120px; }
+dialog:not(#boot) { max-height: calc(var(--viewport, 100dvh) - 24px); overflow: auto; }
+dialog:not(#boot) h2 { font-size: 15px; margin: 16px 0 8px; }
+dialog:not(#boot) select, dialog:not(#boot) textarea { width: 100%; margin-top: 10px; font: inherit; color: inherit; background: #14191b; border: 1px solid #35413d; padding: 9px; border-radius: 0; }
+dialog:not(#boot) textarea { resize: vertical; }
+#host-manager, #activity-dialog, #setup-dialog { width: min(740px, calc(100vw - 24px)); }
+.managed-host, .notice-row { border-top: 1px solid #35413d; padding: 12px 0; overflow-wrap: anywhere; }
+.notice-row[data-read="true"] { opacity: .7; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.inline-actions button { width: auto; flex: 1 0 auto; }
+#setup-output { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 38vh; min-height: 120px; border: 1px solid #35413d; padding: 12px; }
+#command-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+#notice-toast { position: fixed; right: 12px; top: 64px; z-index: 50; max-width: min(480px, calc(100vw - 24px)); padding: 14px; border-color: #edb789; }
+footer > div { display: flex; flex-shrink: 0; }
+@media (max-width: 700px) {
+  #notice-toast { top: 88px; }
+  dialog:not(#boot) { padding: 18px; }
+  dialog:not(#boot) input, dialog:not(#boot) select, dialog:not(#boot) textarea { font-size: 16px; }
+  footer { overflow-x: auto; }
+}

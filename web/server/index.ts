@@ -6,12 +6,17 @@ import { sessionStore, SESSION_SECONDS } from './sessions.ts';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { actionArgs, command, machines, publicId, resolveMachine, terminalProcess } from './herdr.ts';
+import { command, publicId, resolveMachine, terminalProcess } from './herdr.ts';
 import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 import { authentication, LoginLimiter } from './auth.ts';
 import { bootArtwork } from './boot-artwork.ts';
 import { bootFonts } from './boot-fonts.ts';
+import { Fleet } from './fleet.ts';
+import { MachineManagement, ManagementError } from './machine-management.ts';
+import { browserAction } from './browser-actions.ts';
+import { NativeApiError } from './native-api.ts';
+import type { FleetEvent } from '../shared/fleet.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
@@ -29,7 +34,13 @@ const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
 const sessions = await sessionStore(process.env.WERDR_SESSION_FILE || resolve(dirname(tokenPath), 'browser-sessions.json'));
 const sessionTokens = new Map<string, string>();
+const fleet = new Fleet(() => management.catalog(), process.env.WERDR_NOTIFICATION_FILE || resolve(dirname(tokenPath), 'fleet-notifications.json'));
+const management = new MachineManagement(process.env.WERDR_MACHINE_PLATFORM_FILE || resolve(dirname(tokenPath), 'machine-platforms.json'), async () => { await fleet.reloadCatalog(); for (const host of fleet.state().hosts) if (host.machine.enabled) fleet.retry(host.machine.id); });
+await management.start();
+fleet.on('diagnostic', error => console.error(error.message));
+await fleet.start();
 const sockets = new Map<WebSocket, string>();
+const terminalMachines = new Map<WebSocket, { id: string; target?: string; session?: string }>();
 const controllers = new Map<WebSocket, () => void>();
 const alive = new WeakSet<WebSocket>();
 function closeSocket(ws: WebSocket, code: number, reason?: string) {
@@ -37,6 +48,7 @@ function closeSocket(ws: WebSocket, code: number, reason?: string) {
   ws.close(code, reason);
 }
 function disconnectSessions(ids: string[], reason: string) {
+  management.revoke(ids);
   for (const [ws, owner] of sockets) if (ids.includes(owner)) closeSocket(ws, 1008, reason);
 }
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
@@ -58,6 +70,11 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   }
   const value = JSON.parse(Buffer.concat(chunks).toString());
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected object');
+  return value;
+}
+async function authorizedBody(req: IncomingMessage) {
+  const value = await body(req);
+  if (!session(req)) throw new ManagementError('Sign in required', 401);
   return value;
 }
 let requests = 0;
@@ -95,7 +112,7 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/session' && req.method === 'GET') return reply(res, 200, { canGenerateToken: id.method === 'password' });
       if (url.pathname === '/api/sessions' && req.method === 'GET') return reply(res, 200, { sessions: sessions.list(id.id, auth.tokenVersion) });
       if (url.pathname === '/api/sessions/revoke' && req.method === 'POST') {
-        const value = await body(req);
+        const value = await authorizedBody(req);
         if (value.others !== true && (typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id))) return reply(res, 400, { error: 'Expected a session ID or others=true' });
         if (!session(req)) return reply(res, 401, { error: 'Sign in required' });
         const revoked = await sessions.revoke(record => value.others === true ? record.id !== id.id : record.id === value.id);
@@ -116,14 +133,24 @@ const handler: RequestListener = async (req, res) => {
         res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
         return reply(res, 200, { ok: true });
       }
-      if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: await machines() });
+      if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: fleet.state().hosts.map(host => host.machine) });
+      if (url.pathname === '/api/fleet' && req.method === 'GET') return reply(res, 200, fleet.state());
+      if (url.pathname === '/api/hosts/edit' && req.method === 'POST') { await management.edit(await authorizedBody(req)); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/hosts/setup' && req.method === 'POST') return reply(res, 200, { job: await management.begin(id.id, await authorizedBody(req)) });
+      if (url.pathname === '/api/setup/jobs' && req.method === 'GET') return reply(res, 200, { jobs: management.list(id.id) });
+      if (url.pathname === '/api/setup/job' && req.method === 'GET') return reply(res, 200, { job: management.get(id.id, publicId(url.searchParams.get('id'))) });
+      if (url.pathname === '/api/setup/input' && req.method === 'POST') { const value = await authorizedBody(req); management.input(id.id, publicId(value.id), value.input); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/setup/cancel' && req.method === 'POST') { const value = await authorizedBody(req); management.cancel(id.id, publicId(value.id)); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/hosts/retry' && req.method === 'POST') { const value = await authorizedBody(req); fleet.retry(publicId(value.id)); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/notices/read' && req.method === 'POST') { const value = await authorizedBody(req); await fleet.markNoticesRead(value.id === undefined ? undefined : publicId(value.id)); return reply(res, 200, { ok: true }); }
+
       if (url.pathname === '/api/snapshot' && req.method === 'GET') {
         const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
         return reply(res, 200, await command(machine, ['api', 'snapshot']));
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
-        const value = await body(req); const args = actionArgs(value);
-        return reply(res, 200, await command(await resolveMachine(publicId(value.machine)), args));
+        const value = await authorizedBody(req); const { method, params } = browserAction(value);
+        return reply(res, 200, await fleet.request(publicId(value.machine), method, params));
       }
       return reply(res, 404, { error: 'Unknown route' });
     }
@@ -145,6 +172,7 @@ const handler: RequestListener = async (req, res) => {
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : data);
   } catch (error) {
+    if (!res.headersSent && (error instanceof ManagementError || error instanceof NativeApiError)) return reply(res, error instanceof ManagementError ? error.status : error.code === 'offline' ? 503 : 409, { error: error.message });
     console.error(error instanceof Error ? error.message : error);
     if (!res.headersSent) reply(res, 502, { error: 'Herdr request failed. Check the gateway log and host availability.' });
   } finally { requests--; }
@@ -166,17 +194,41 @@ server.on('upgrade', async (req, socket, head) => {
   socket.on('error', () => socket.destroy());
   const id = session(req);
   const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins, scheme);
-  if (!id || !browserOrigin || req.headers.origin !== browserOrigin || sockets.size + upgrades >= 16) { socket.destroy(); return; }
+  if (!id || !browserOrigin || req.headers.origin !== browserOrigin || sockets.size + upgrades >= 64) { socket.destroy(); return; }
   upgrades++;
   try {
     const url = new URL(req.url || '/', origin);
-    if (url.pathname !== '/ws/terminal') throw new Error('Unknown socket');
+    if (url.pathname === '/ws/fleet') {
+      if (socket.destroyed || !session(req)) { socket.destroy(); return; }
+      wsServer.handleUpgrade(req, socket, head, ws => {
+        sockets.set(ws, id.id);
+        sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
+        alive.add(ws); ws.on('pong', () => alive.add(ws));
+        const send = (event: FleetEvent) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.bufferedAmount > 8 * 1024 * 1024) { closeSocket(ws, 1013, 'Metadata viewer too slow'); return; }
+          ws.send(JSON.stringify(event));
+        };
+        const snapshot = () => send({ type: 'fleet.snapshot', state: fleet.state() });
+        fleet.on('event', send); snapshot();
+        ws.on('message', (data, binary) => {
+          try { if (binary || !session(req) || JSON.parse(data.toString()).type !== 'fleet.resync') throw new Error(); snapshot(); }
+          catch { closeSocket(ws, 1008, 'Invalid fleet command'); }
+        });
+        controllers.set(ws, () => fleet.off('event', send));
+        ws.on('error', () => ws.terminate());
+        ws.on('close', () => { fleet.off('event', send); controllers.delete(ws); sockets.delete(ws); if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id); });
+      });
+      return;
+    }
+    if (url.pathname !== '/ws/terminal' || terminalMachines.size >= 16) throw new Error('Unknown or unavailable socket');
     const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
     const pane = publicId(url.searchParams.get('pane'));
     const cols = dimension(Number(url.searchParams.get('cols'))), rows = dimension(Number(url.searchParams.get('rows')));
-    if (socket.destroyed || !session(req)) { socket.destroy(); return; }
+    if (socket.destroyed || !session(req) || terminalMachines.size >= 16) { socket.destroy(); return; }
     wsServer.handleUpgrade(req, socket, head, ws => {
       sockets.set(ws, id.id);
+      terminalMachines.set(ws, { id: machine.id, target: machine.target, session: machine.session });
       sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
@@ -221,13 +273,20 @@ server.on('upgrade', async (req, socket, head) => {
       });
       ws.on('error', () => ws.terminate());
       ws.on('close', () => {
-        sockets.delete(ws);
+        sockets.delete(ws); terminalMachines.delete(ws);
         if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id);
         controllers.get(ws)?.(); controllers.delete(ws);
       });
     });
   } catch { socket.destroy(); }
   finally { upgrades--; }
+});
+fleet.on('event', (event: FleetEvent) => {
+  if (event.type !== 'fleet.catalog') return;
+  for (const [ws, machine] of terminalMachines) {
+    const current = event.hosts.find(host => host.machine.id === machine.id)?.machine;
+    if (!current?.enabled || current.target !== machine.target || current.session !== machine.session) closeSocket(ws, 1001, 'Host removed, disabled, or changed');
+  }
 });
 const cleanup = setInterval(() => {
   for (const [ws, owner] of sockets) if (!sessions.get(sessionTokens.get(owner), auth.tokenVersion)) closeSocket(ws, 1008, 'Session expired or revoked');
@@ -239,6 +298,7 @@ const cleanup = setInterval(() => {
 }, 30_000);
 cleanup.unref();
 function shutdown() {
+  management.stop(); fleet.stop();
   for (const ws of sockets.keys()) closeSocket(ws, 1001, 'Gateway restarting');
   server.close(); clearInterval(cleanup); clearInterval(certificateTimer);
   setTimeout(() => process.exit(0), 3000).unref();

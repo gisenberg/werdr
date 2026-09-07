@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$Session = 'werdr')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $version = '0.8.2-preview.2026-09-06-9e9bc8a14466'
@@ -8,8 +8,8 @@ $digest = '991abaf23ef7008a6ef91e6c0dbc6caac7f8bfebe9d14e54294ccc6b5352d99e'
 $base = Join-Path $env:LOCALAPPDATA 'werdr\herdr'
 $release = Join-Path $base $version
 $binary = Join-Path $release 'herdr.exe'
-$taskName = 'Werdr Herdr Server'
-$description = 'Managed by werdr/install-windows-server.ps1; owns the werdr session only.'
+$taskName = if ($Session -eq 'werdr') { 'Werdr Herdr Server' } else { 'Werdr Herdr Server ' + $Session }
+$description = 'Managed by werdr/install-windows-server.ps1; owns the ' + $Session + ' session only.'
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'This release requires x64 Windows.' }
 New-Item -ItemType Directory -Force -Path $base | Out-Null
 if (-not (Test-Path $release)) {
@@ -30,7 +30,7 @@ if (-not (Test-Path $binary) -or (Get-Content -LiteralPath (Join-Path $release '
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing -and ($existing.Description -ne $description -or $existing.Actions.Execute -ne $binary)) { throw 'Existing task differs; a live-runtime upgrade requires an explicit handoff.' }
 if (-not $existing) {
-    $action = New-ScheduledTaskAction -Execute $binary -Argument '--session werdr server' -WorkingDirectory $env:USERPROFILE
+    $action = New-ScheduledTaskAction -Execute $binary -Argument ('--session ' + $Session + ' server') -WorkingDirectory $env:USERPROFILE
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
@@ -53,7 +53,7 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
     Start-Sleep -Seconds 1
     $output = Join-Path $base '.readiness.json'
     $errorLog = Join-Path $base '.readiness-error.txt'
-    $probe = Start-Process -FilePath $binary -ArgumentList '--session werdr api snapshot' -PassThru -WindowStyle Hidden -RedirectStandardOutput $output -RedirectStandardError $errorLog
+    $probe = Start-Process -FilePath $binary -ArgumentList ('--session ' + $Session + ' api snapshot') -PassThru -WindowStyle Hidden -RedirectStandardOutput $output -RedirectStandardError $errorLog
     if (-not $probe.WaitForExit(10000)) { $probe.Kill(); throw 'Herdr API readiness probe timed out.' }
     if ($probe.ExitCode -eq 0) { $snapshot = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json; if ($snapshot.result -and -not $snapshot.error) { $ready = $true; break } }
 }

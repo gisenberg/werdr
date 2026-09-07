@@ -11,7 +11,8 @@ Start here for the web application; the root README describes upstream herdr.
 
 Use Node.js 22.12 or newer and a herdr build with `terminal session control` and multi-machine support.
 PR [#3670](https://github.com/herdrdev/herdr/pull/3670) is already included in this fork.
-The web gateway does not install, upgrade, or restart remote herdr servers.
+Background connections never install or restart a remote server.
+Use **MANAGE HOSTS** to add a host or explicitly run compatibility setup and answer native installation prompts.
 
 For a Linux x64 trial, fetch the checksum-pinned official preview used by the integration tests:
 
@@ -58,7 +59,11 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 
 ## Current behavior
 
-- Native host, workspace, tab, and pane navigation.
+- Fleet-wide host, workspace, and agent navigation with search, attention filters, connection health, and independent background reconnects.
+- Native host add/setup, rename, enable, disable, and removal through **MANAGE HOSTS**.
+- Durable attention/completion activity with pane links and optional desktop notifications.
+- Workspace, tab, pane, and agent rename; agent start and prompt actions through `Ctrl/Cmd+K`.
+- Shareable host/workspace/tab/pane URLs and selection restored after reload.
 - Workspace/tab creation, pane splitting and closure, and explicit terminal takeover.
 - Live terminal input, resize, and scroll through herdr's controller stream.
 - Desktop and phone layouts with a collapsed mobile host drawer.
@@ -68,8 +73,9 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 - Authenticated REST and WebSocket access with logout revocation.
 
 The browser displays one selected pane at a time, including on desktop.
-Metadata is refreshed for the selected host every five seconds.
-Simultaneous split surfaces, event-driven fleet metadata, browser settings persistence, full wmux media/clipboard integration are not implemented.
+Metadata stays connected for every enabled saved host through native event subscriptions, with a ten-second reconciliation heartbeat.
+Only the selected pane attaches a terminal controller.
+Simultaneous split surfaces, general browser settings persistence, and full wmux media/clipboard integration are not implemented.
 This is a working first version, not feature parity with wmux.
 
 ## Configuration and operations
@@ -88,13 +94,22 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_HERDR_BIN` | Optional Windows executable path; remote environment variables such as `%LOCALAPPDATA%` are expanded without shell evaluation. |
+| `WERDR_NOTIFICATION_FILE` | Owner-only versioned activity history, default `fleet-notifications.json` beside the access token. |
+| `WERDR_MACHINE_PLATFORM_FILE` | Owner-only platform hints pinned to native host ID, target, and session, default `machine-platforms.json` beside the access token. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |
 
-Add and manage remote machines using `herdr machine` commands.
-Werdr reads that existing catalog; OpenSSH owns credentials and host-key verification.
-POSIX shells are the default remote adapter.
-Windows must be explicitly selected by saved machine ID because herdr's catalog has no operating-system field.
-Real remote SSH and Windows validation remain outstanding; see [Windows and terminal compatibility](werdr/WINDOWS.md).
+Add and manage remote machines in **MANAGE HOSTS** or using `herdr machine` commands.
+Both use the same native catalog; this is explicit registration, without LAN scanning or heartbeat discovery.
+Stable private LAN aliases are supported alongside Tailscale names, and may be preferable on the same network.
+OpenSSH owns credentials and host-key verification on the gateway; establish trusted key-based login before browser onboarding.
+New browser targets must resolve exclusively to private addresses.
+Choose Linux/macOS or Windows explicitly during setup.
+POSIX setup runs native `herdr machine add` in a temporary interactive console and forwards its compatibility/install prompts.
+Windows setup checks the existing named runtime, asks before installing the pinned release and supervised task, and saves the validated endpoint in the native catalog.
+Setup jobs belong to the initiating browser session; revoking that session cancels its active setup.
+Closing the setup dialog leaves a running job available to reopen; **CANCEL SETUP** cancels it explicitly.
+Disable or remove disconnects browser access without deleting remote workspaces or stopping their processes.
+See [Windows and terminal compatibility](werdr/WINDOWS.md) for the managed installation and remaining terminal acceptance criteria.
 
 Only loopback and private-network IPs may be bound.
 Set `WERDR_ALLOWED_HOSTS` to explicitly allow the service's short hostname and full Tailscale DNS name while keeping `WERDR_HOST` on its private IP.
