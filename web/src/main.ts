@@ -1,5 +1,5 @@
 import type { Terminal } from 'ghostty-web';
-import { RETRO_BOOT_PROFILES } from './wmux/retro-boot-profiles';
+import { boot } from './boot';
 import './style.css';
 
 interface Machine { id: string; label: string; enabled: boolean; target?: string }
@@ -8,11 +8,12 @@ interface Tab { tab_id: string; workspace_id: string; label: string }
 interface Pane { pane_id: string; workspace_id: string; tab_id: string; label?: string; title?: string; agent_status: string; cwd?: string }
 interface Snapshot { workspaces: Workspace[]; tabs: Tab[]; panes: Pane[] }
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><button id="logout">[X] SIGN OUT</button></header>
+app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
 <main><aside id="rail"><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav></aside>
 <section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
-<dialog id="login"><form><div id="boot" aria-hidden="true"></div><label class="boot-options">BOOT SCREEN<select id="boot-profile"></select></label><h1>werdr</h1><p>Herdr sessions. Anywhere on your network.</p><label>ACCESS TOKEN<input id="token" type="password" required autocomplete="current-password"></label><button type="submit">[ENTER] CONNECT</button><p id="login-error" role="alert"></p></form></dialog>`;
+<dialog id="login"><form><h1>werdr</h1><p>Herdr sessions. Anywhere on your network.</p><div id="credentials" hidden><label>USERNAME<input id="username" autocomplete="username" maxlength="256" autocapitalize="none" spellcheck="false"></label><label>PASSWORD<input id="password" type="password" autocomplete="current-password" maxlength="4096"></label></div><label id="token-field">ACCESS TOKEN<input id="token" type="password" required autocomplete="off" maxlength="4096"></label><button type="submit">[ENTER] CONNECT</button><button id="login-mode" type="button" hidden>USE ACCESS TOKEN</button><p id="login-error" role="alert"></p></form></dialog>
+<dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>`;
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const login = element<HTMLDialogElement>('login');
 const status = (text: string) => { element('status').textContent = text; };
@@ -29,7 +30,7 @@ function loadGhostty() {
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();
-  if (res.status === 401) { authenticated = false; detach(); if (!login.open) login.showModal(); }
+  if (res.status === 401) { authenticated = false; detach(); element('access-token').hidden = true; element<HTMLDialogElement>('token-dialog').close(); if (!login.open) login.showModal(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -74,6 +75,8 @@ async function refresh() {
   try {
     const { machines }: { machines: Machine[] } = await api('/api/machines');
     authenticated = true;
+    const session = await api('/api/session');
+    element('access-token').hidden = !session.canGenerateToken;
     navigation('hosts', machines.map(m => ({ id: m.id, label: `${m.label}${m.enabled ? '' : ' [DISABLED]'}`, active: m.id === machineId, disabled: !m.enabled, title: m.target || 'Gateway host', select: () => {
         if (machineId === m.id) return;
         detach(); machineId = m.id; workspaceId = ''; tabId = ''; paneId = ''; snapshot = { workspaces: [], tabs: [], panes: [] }; renderNavigation(); closeRail();
@@ -172,28 +175,53 @@ element('takeover').onclick = () => void attach(true);
 element('close').onclick = () => { if (confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
 element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; detach(); login.showModal(); } catch (error) { status(String(error)); } };
 login.addEventListener('cancel', e => e.preventDefault());
+let passwordLogin = false;
+function setLoginMode(password: boolean) {
+  passwordLogin = password;
+  element('credentials').hidden = !password; element('token-field').hidden = password;
+  element<HTMLInputElement>('username').required = password;
+  element<HTMLInputElement>('password').required = password;
+  element<HTMLInputElement>('token').required = !password;
+  element<HTMLInputElement>('password').value = ''; element<HTMLInputElement>('token').value = '';
+  element('login-mode').textContent = password ? 'USE ACCESS TOKEN' : 'USE USERNAME AND PASSWORD';
+  element('login-error').textContent = '';
+}
+element('login-mode').onclick = () => { setLoginMode(!passwordLogin); element<HTMLInputElement>(passwordLogin ? 'username' : 'token').focus(); };
 login.querySelector('form')!.onsubmit = async event => {
   event.preventDefault();
-  try { await api('/api/login', { token: element<HTMLInputElement>('token').value }); element<HTMLInputElement>('token').value = ''; login.close(); await refresh(); }
-  catch (error) { element('login-error').textContent = (error as Error).message; }
+  const submit = login.querySelector<HTMLButtonElement>('button[type="submit"]')!; submit.disabled = true;
+  try {
+    await api('/api/login', passwordLogin ? { username: element<HTMLInputElement>('username').value, password: element<HTMLInputElement>('password').value } : { token: element<HTMLInputElement>('token').value });
+    element<HTMLInputElement>('token').value = ''; element<HTMLInputElement>('password').value = '';
+    element('login-error').textContent = ''; login.close(); await refresh();
+  } catch (error) { element('login-error').textContent = (error as Error).message; }
+  finally { submit.disabled = false; }
 };
-// Reuse portable wmux boot text with system fonts. Restricted historical fonts and artwork are not bundled.
-const profiles = RETRO_BOOT_PROFILES.filter(p => ['commodore-64', 'apple-iie', 'ibm-pc-at'].includes(p.id));
-element('boot-profile').replaceChildren(...profiles.map(p => { const option = document.createElement('option'); option.value = p.id; option.textContent = p.name; return option; }));
-let bootGeneration = 0;
-async function boot() {
-  const profile = profiles.find(p => p.id === element<HTMLSelectElement>('boot-profile').value)!;
-  const epoch = ++bootGeneration;
-  const target = element('boot'); target.textContent = ''; target.style.color = profile.colors.foreground; target.style.background = profile.colors.background;
-  for (const step of profile.boot) {
-    if (epoch !== bootGeneration) return;
-    if (step.clear) target.textContent = '';
-    target.textContent += step.text.replaceAll('WMUX', 'WERDR'); target.scrollTop = target.scrollHeight;
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise(resolve => setTimeout(resolve, Math.min(step.delay, 160)));
-  }
+const tokenDialog = element<HTMLDialogElement>('token-dialog');
+element('access-token').onclick = () => tokenDialog.showModal();
+element('token-done').onclick = () => tokenDialog.close();
+tokenDialog.addEventListener('close', () => {
+  element<HTMLInputElement>('generated-token').value = ''; element('generated-token-field').hidden = true;
+  element('token-error').textContent = '';
+});
+element('generate-token').onclick = async () => {
+  const button = element<HTMLButtonElement>('generate-token'); button.disabled = true;
+  try {
+    const { token } = await api('/api/token', {});
+    if (!tokenDialog.open) return;
+    element('generated-token-field').hidden = false;
+    const input = element<HTMLInputElement>('generated-token'); input.value = token; input.focus(); input.select();
+  } catch (error) { element('token-error').textContent = (error as Error).message; }
+  finally { button.disabled = false; }
+};
+async function start() {
+  const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });
+  const configured = config.then(value => ({ value }), () => ({ value: { passwordEnabled: false } }));
+  await boot();
+  const { value } = await configured;
+  setLoginMode(value.passwordEnabled); element('login-mode').hidden = !value.passwordEnabled;
+  await refresh();
 }
-element('boot-profile').onchange = () => void boot();
-void boot();
 function closeRail() { app.classList.remove('hosts-open'); element('host-toggle').setAttribute('aria-expanded', 'false'); }
 element('host-toggle').onclick = () => { const open = app.classList.toggle('hosts-open'); element('host-toggle').setAttribute('aria-expanded', String(open)); };
 function viewport() {
@@ -205,4 +233,4 @@ visualViewport?.addEventListener('resize', viewport); viewport();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh(); });
 window.addEventListener('online', () => { void refresh(); if (paneId) void attach(); });
 setInterval(() => { if (authenticated) void refresh(); }, 5000);
-void refresh();
+void start();

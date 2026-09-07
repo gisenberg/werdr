@@ -36,6 +36,14 @@ XDG_CONFIG_HOME="$PWD/../.local/trial-config" WERDR_HERDR_BIN="$PWD/../.local/bi
 
 Open `http://127.0.0.1:3480` and enter the access token from `web/.auth-token`.
 The gateway creates that ignored, owner-only file on first start.
+To enable username/password login, set `WERDR_CREDENTIALS_FILE` to an owner-only JSON file outside the checkout containing `username` and `passwordHash`.
+The hash format is wmux-compatible `scrypt$<32 hex salt characters>$<64 hex hash characters>`; plaintext passwords are never stored.
+A private copy of an existing wmux `auth.json` can be used as this file.
+When configured, the login form defaults to credentials and also offers token login.
+After password login, **ACCESS TOKEN** lets you generate a replacement token for another browser.
+Generation atomically updates `WERDR_TOKEN_FILE`, invalidates the old token, and revokes sessions and terminal sockets authenticated with it.
+Password-authenticated sessions remain signed in, and token-authenticated sessions cannot generate tokens.
+
 Use the workspace `[+]` control to launch a shell.
 On phones, `[H] HOSTS` opens the navigation drawer.
 
@@ -48,7 +56,8 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 - Workspace/tab creation, pane splitting and closure, and explicit terminal takeover.
 - Live terminal input, resize, and scroll through herdr's controller stream.
 - Desktop and phone layouts with a collapsed mobile host drawer.
-- Commodore 64, Apple IIe, and IBM PC AT boot text using system fonts.
+- Full-screen Commodore 64, Apple IIe, and IBM PC AT startup sequences using system fonts, randomly chosen each page load without consecutive repeats when browser storage is available.
+- Startup has no visible settings or prompts; any key or click dismisses it, and reduced-motion preferences shorten it.
 - Authenticated REST and WebSocket access with logout revocation.
 
 The browser displays one selected pane at a time, including on desktop.
@@ -66,6 +75,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_HOST` | Private IP literal, default `127.0.0.1`. |
 | `WERDR_ALLOWED_HOSTS` | Comma-separated exact DNS names or IP literals accepted in addition to the bind address, without ports or wildcards. |
 | `WERDR_PORT` | Gateway port, default `3480`. |
+| `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |
 
@@ -80,6 +90,7 @@ Set `WERDR_ALLOWED_HOSTS` to explicitly allow the service's short hostname and f
 The browser Origin must match the requested host and port, even when both aliases are individually allowed.
 The gateway does not yet support a separate reverse-proxy or HTTPS origin.
 Access tokens never go into URLs or local storage.
+Login attempts are limited by the actual peer IP, and password verification concurrency is bounded.
 Browser sessions are held in gateway memory and expire after 12 hours.
 Restarting the gateway requires signing in again and releases terminal controllers; herdr continues owning the running shells.
 Closing a pane explicitly terminates its process.

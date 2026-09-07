@@ -1,15 +1,20 @@
+import { scryptSync, randomBytes } from 'node:crypto';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 
 const exec = promisify(execFile);
-export async function fixture() {
+export async function fixture(passwordLogin = false) {
   const directory = await mkdtemp(resolve(tmpdir(), 'werdr-e2e-'));
+  const username = 'test-user', password = randomBytes(24).toString('hex');
+  const salt = randomBytes(16);
+  const credentialsPath = resolve(directory, 'credentials.json');
+  if (passwordLogin) await writeFile(credentialsPath, JSON.stringify({ username, passwordHash: `scrypt$${salt.toString('hex')}$${scryptSync(password, salt, 32).toString('hex')}` }), { mode: 0o600 });
   const binary = resolve(process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
-  const env = { ...process.env, XDG_CONFIG_HOME: directory, SHELL: '/bin/bash', WERDR_HERDR_BIN: binary };
+  const env = { ...process.env, XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary };
   for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSION', 'WERDR_SOCKET_PATH', 'WERDR_SESSION']) delete (env as Record<string, string | undefined>)[key];
   const listener = createServer(); await new Promise<void>(r => listener.listen(0, '127.0.0.1', r));
   const port = (listener.address() as { port: number }).port;
@@ -37,7 +42,7 @@ export async function fixture() {
   };
   let gateway: ChildProcess;
   const startGateway = async () => {
-    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
+    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
     await wait(async () => (await fetch(url)).ok);
   };
   const close = async () => {
@@ -52,7 +57,7 @@ export async function fixture() {
     start(binary, ['server']);
     await wait(async () => !!(await cli('api', 'snapshot')));
     await startGateway();
-    return { url, cli, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
+    return { url, cli, username, password, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
       restartGateway: async () => { await stop(gateway); await startGateway(); } };
   } catch (error) { await close(); throw error; }
 }

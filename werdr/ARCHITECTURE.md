@@ -18,6 +18,9 @@ flowchart LR
 
 Herdr owns process lifetime, runtime state, workspace/tab/pane identity, agent detection, the SSH catalog, and native terminal parsing.
 The gateway authenticates browsers and routes bounded requests to explicit saved machines.
+Gateway-only credential and token files remain separate from herdr runtime state.
+Username/password or access-token login issues an opaque HttpOnly SameSite cookie; only password-authenticated sessions may rotate the durable access token.
+Token replacement revokes token-authenticated sessions and their terminal controllers while herdr retains the shells.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
 Machine ID plus pane ID identifies a browser target; pane IDs alone are not globally unique.
 

@@ -1,12 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { actionArgs, command, machines, publicId, resolveMachine, terminalProcess } from './herdr.ts';
-import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, equalToken, terminalInput } from './policy.ts';
+import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
+import { authentication, LoginLimiter } from './auth.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
@@ -15,14 +16,10 @@ if (!allowedBind(host) || !Number.isInteger(port) || port < 1 || port > 65535) t
 const origin = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
 const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_HOSTS);
 const tokenPath = resolve(root, process.env.WERDR_TOKEN_FILE || '.auth-token');
-await mkdir(dirname(tokenPath), { recursive: true, mode: 0o700 });
-try { await writeFile(tokenPath, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); }
-catch (error: any) { if (error.code !== 'EEXIST') throw error; }
-const tokenStat = await stat(tokenPath);
-if (process.platform !== 'win32' && (tokenStat.mode & 0o077)) throw new Error('Token file must be owner-only (chmod 600)');
-const token = (await readFile(tokenPath, 'utf8')).trim();
-if (token.length < 32) throw new Error('Token must contain at least 32 characters');
-const sessions = new Map<string, number>();
+const auth = await authentication(tokenPath, process.env.WERDR_CREDENTIALS_FILE ? resolve(root, process.env.WERDR_CREDENTIALS_FILE) : undefined);
+const loginLimiter = new LoginLimiter();
+let passwordChecks = 0;
+const sessions = new Map<string, { expiry: number; method: 'password' | 'token' }>();
 const sockets = new Map<WebSocket, string>();
 const controllers = new Map<WebSocket, () => void>();
 const alive = new WeakSet<WebSocket>();
@@ -33,7 +30,7 @@ function closeSocket(ws: WebSocket, code: number, reason?: string) {
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
 function session(req: IncomingMessage): string | undefined {
   const id = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6);
-  return id && (sessions.get(id) ?? 0) > Date.now() ? id : undefined;
+  return id && (sessions.get(id)?.expiry ?? 0) > Date.now() ? id : undefined;
 }
 function reply(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -62,17 +59,42 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', browserOrigin);
     if (req.method === 'POST' && req.headers.origin !== browserOrigin) return reply(res, 403, { error: 'Origin required' });
+    if (url.pathname === '/api/auth' && req.method === 'GET') return reply(res, 200, { passwordEnabled: auth.passwordEnabled });
     if (url.pathname === '/api/login' && req.method === 'POST') {
+      if (!loginLimiter.take(req.socket.remoteAddress || 'unknown')) {
+        res.setHeader('Retry-After', '60'); return reply(res, 429, { error: 'Too many sign-in attempts. Try again in a minute.' });
+      }
       const value = await body(req);
-      if (typeof value.token !== 'string' || !equalToken(value.token, token)) return reply(res, 401, { error: 'Invalid access token' });
+      const method = value.token === undefined ? 'password' : 'token';
+      let valid = false;
+      if (method === 'password') {
+        if (passwordChecks >= 4) return reply(res, 503, { error: 'Sign-in busy. Try again shortly.' });
+        passwordChecks++;
+        try { valid = await auth.verifyPassword(value.username, value.password); } finally { passwordChecks--; }
+      } else valid = auth.verifyToken(value.token);
+      if (!valid) return reply(res, 401, { error: 'Invalid credentials' });
+      for (const [id, record] of sessions) if (record.expiry <= Date.now()) {
+        sessions.delete(id);
+        for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Session expired');
+      }
       if (sessions.size >= 64) return reply(res, 503, { error: 'Session limit reached' });
-      const id = randomBytes(32).toString('hex'); sessions.set(id, Date.now() + 12 * 3600_000);
+      const id = randomBytes(32).toString('hex'); sessions.set(id, { expiry: Date.now() + 12 * 3600_000, method });
       res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
       return reply(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/api/')) {
       const id = session(req);
       if (!id) return reply(res, 401, { error: 'Sign in required' });
+      if (url.pathname === '/api/session' && req.method === 'GET') return reply(res, 200, { canGenerateToken: sessions.get(id)?.method === 'password' });
+      if (url.pathname === '/api/token' && req.method === 'POST') {
+        if (sessions.get(id)?.method !== 'password') return reply(res, 403, { error: 'Sign in with your username and password to generate a token.' });
+        const token = await auth.rotateToken();
+        for (const [owner, record] of sessions) if (record.method === 'token') {
+          sessions.delete(owner);
+          for (const [ws, socketOwner] of sockets) if (socketOwner === owner) closeSocket(ws, 1008, 'Token replaced');
+        }
+        return reply(res, 200, { token });
+      }
       if (url.pathname === '/api/logout' && req.method === 'POST') {
         sessions.delete(id);
         for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Signed out');
@@ -172,7 +194,7 @@ server.on('upgrade', async (req, socket, head) => {
   finally { upgrades--; }
 });
 const cleanup = setInterval(() => {
-  for (const [id, expiry] of sessions) if (expiry <= Date.now()) {
+  for (const [id, record] of sessions) if (record.expiry <= Date.now()) {
     sessions.delete(id);
     for (const [ws, owner] of sockets) if (owner === id) closeSocket(ws, 1008, 'Session expired');
   }

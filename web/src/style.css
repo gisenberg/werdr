@@ -34,8 +34,14 @@ dialog p { color: #98a99f; line-height: 1.6; }
 dialog label { display: block; margin: 25px 0 14px; color: #98a99f; }
 dialog input { display: block; width: 100%; margin-top: 10px; }
 dialog button { width: 100%; color: #b6ef9c; }
-#boot { white-space: pre; height: 150px; padding: 14px 5px; overflow: hidden; font-size: 11px; line-height: 1.5; }
-dialog .boot-options { margin: 10px 0; display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
+[hidden] { display: none !important; }
+.account-actions { display: flex; gap: 6px; }
+#boot { outline: none; position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+#boot::backdrop { background: #000; }
+#boot pre { margin: 0; padding: 0; overflow: hidden; white-space: pre; font-family: 'Courier New', monospace; font-weight: bold; line-height: 1.25; }
+#login-mode { margin-top: 12px; }
+#generated-token { font-size: 12px; }
+#token-error { color: #f4ac99; }
 #login-error { color: #f4ac99; }
 @media (max-width: 700px) {
   header span { display: none; }
@@ -51,3 +57,5 @@ dialog .boot-options { margin: 10px 0; display: flex; align-items: center; justi
   .keyboard-open aside { display: none; }
   .keyboard-open #shield { inset: 0; }
 }
+
+@media (max-width: 700px) { header { gap: 6px; padding: 6px; } header strong { font-size: 16px; } .account-actions { gap: 3px; } .account-actions button { padding: 8px 5px; font-size: 10px; } }
