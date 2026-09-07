@@ -1,3 +1,4 @@
+import { paneChrome, paneBorderLabel } from '../shared/pane-chrome';
 import type { Pane, Snapshot } from '../shared/fleet';
 import { geometry, type Layout, type LayoutNode, type Rect, type Divider } from '../shared/layout';
 import { palette, type Preferences } from '../shared/settings';
@@ -22,8 +23,11 @@ export class DesktopSurface {
   private separators = document.createElement('div');
   private retry?: ReturnType<typeof setTimeout>;
   private drag?: { path: boolean[]; original: number; node: Extract<LayoutNode, { type: 'split' }> };
-  constructor(private container: HTMLElement, private shield: HTMLElement, private api: Api, preferences: Preferences, colors: ReturnType<typeof palette>, private select: (id: string) => void, private error: (message: string) => void, private notice: (message: string) => void) {
+  constructor(private container: HTMLElement, private shield: HTMLElement, private toolbarHost: HTMLElement, private api: Api, preferences: Preferences, colors: ReturnType<typeof palette>, private select: (id: string) => void, private error: (message: string) => void, private notice: (message: string) => void) {
     this.preferences = preferences; this.colors = colors; this.separators.className = 'pane-separators'; container.append(this.separators);
+    document.addEventListener('focusin', event => {
+      if (event.target instanceof Node && !container.contains(event.target)) this.focusTarget = undefined;
+    });
     new ResizeObserver(() => this.render()).observe(container);
     matchMedia('(max-width: 700px)').addEventListener('change', () => this.render());
   }
@@ -42,7 +46,8 @@ export class DesktopSurface {
     const selectionChanged = machine !== this.machine || tab !== this.tab || pane !== this.pane;
     this.pendingSelection = false; this.container.inert = false;
     if (machine !== this.machine || tab !== this.tab) { const focusTarget = this.focusTarget; this.clear(); if (focusTarget === pane) this.focusTarget = focusTarget; this.machine = machine; this.tab = tab; }
-    if (selectionChanged) this.focusTarget = pane || undefined;
+    const editingChrome = document.activeElement instanceof Element && !this.container.contains(document.activeElement) && !!document.activeElement.closest('input, textarea, select, [contenteditable=true]');
+    if (selectionChanged && (!editingChrome || this.focusTarget === pane)) this.focusTarget = pane || undefined;
     else if (this.focusTarget !== pane) this.focusTarget = undefined;
     this.pane = pane; this.panes = snapshot.panes.filter(item => item.tab_id === tab);
     for (const [id, controller] of this.controllers) if (!this.panes.some(item => item.pane_id === id && item.terminal_id === controller.terminalId)) { controller.dispose(); this.controllers.delete(id); }
@@ -80,11 +85,12 @@ export class DesktopSurface {
     }
   };
   private render() {
-    if (!this.layout || !this.container.clientWidth || !this.container.clientHeight) return;
+    const width = this.container.clientWidth, height = this.container.clientHeight;
+    if (!this.layout || !width || !height) return;
     const mobile = matchMedia('(max-width: 700px)').matches;
     const selected = this.panes.find(item => item.pane_id === this.pane);
     const root: LayoutNode = (mobile || this.layout.zoomed) && selected ? { type: 'pane', pane_id: selected.pane_id } : this.layout.root;
-    const { panes, dividers } = geometry(root, this.container.clientWidth, this.container.clientHeight);
+    const { panes, dividers } = geometry(root, width, height, this.preferences.paneGaps ? 5 : 0);
     // Controller capacity matches the surface attachment limit. Hidden panes keep
     // their live geometry; a phone never resizes a background pane to zero.
     const visible = [...panes.keys()];
@@ -98,7 +104,7 @@ export class DesktopSurface {
         if (hidden) { hidden[1].dispose(); this.controllers.delete(hidden[0]); }
       }
       if (!controller && this.controllers.size < 16) {
-        controller = new TerminalController(this.machine, id, pane.terminal_id, this.preferences, this.colors, () => this.select(id), this.readiness, this.api, (message, failed) => failed ? this.error(message) : this.notice(message));
+        controller = new TerminalController(this.machine, id, pane.terminal_id, this.toolbarHost, this.preferences, this.colors, () => this.select(id), this.readiness, this.api, (message, failed) => failed ? this.error(message) : this.notice(message));
         this.controllers.set(id, controller); this.container.append(controller.element);
       }
       if (!controller) {
@@ -107,7 +113,9 @@ export class DesktopSurface {
         position(node, rect); continue;
       }
       this.overflow.get(id)?.remove(); this.overflow.delete(id);
-      position(controller.element, rect); controller.label(`${pane.label || pane.title || id} [${pane.agent_status.toUpperCase()}]`, id === this.pane); controller.show(true);
+      position(controller.element, rect);
+      controller.chrome(paneChrome(rect, width, height, this.panes.length > 1 && !mobile, this.preferences), paneBorderLabel(pane, this.preferences), `${pane.label || pane.title || id} [${pane.agent_status.toUpperCase()}]`, id === this.pane);
+      controller.show(true);
     }
     if (!this.drag) this.renderSeparators(dividers);
     this.readiness();
@@ -118,7 +126,7 @@ export class DesktopSurface {
       const key = JSON.stringify(divider.path); const node = existing.get(key) || document.createElement('div'); existing.delete(key);
       node.className = `pane-divider ${divider.direction}`; node.dataset.path = key; node.tabIndex = 0;
       node.setAttribute('role', 'separator'); node.setAttribute('aria-label', 'Resize split'); node.setAttribute('aria-orientation', divider.direction === 'right' ? 'vertical' : 'horizontal');
-      node.setAttribute('aria-valuemin', '5'); node.setAttribute('aria-valuemax', '95'); node.setAttribute('aria-valuenow', String(Math.round(divider.ratio * 100))); position(node, divider.rect);
+      node.setAttribute('aria-valuemin', '5'); node.setAttribute('aria-valuemax', '95'); node.setAttribute('aria-valuenow', String(Math.round(divider.ratio * 100))); position(node, dividerHitRect(divider));
       node.onkeydown = event => {
         const negative = divider.direction === 'right' ? 'ArrowLeft' : 'ArrowUp', positive = divider.direction === 'right' ? 'ArrowRight' : 'ArrowDown';
         if (![negative, positive, 'Home', 'End'].includes(event.key)) return;
@@ -138,13 +146,15 @@ export class DesktopSurface {
     event.preventDefault(); element.setPointerCapture(event.pointerId);
     this.drag = { path: divider.path, original: node.ratio, node }; const drag = this.drag;
     const bounds = this.container.getBoundingClientRect();
+    const gap = this.preferences.paneGaps ? 5 : 0;
+    const offset = divider.direction === 'right' ? event.clientX - bounds.left - divider.rect.x : event.clientY - bounds.top - divider.rect.y;
     const move = (event: PointerEvent) => {
       if (this.drag !== drag) return;
       const horizontal = divider.direction === 'right'; const point = horizontal ? event.clientX - bounds.left - divider.area.x : event.clientY - bounds.top - divider.area.y;
       const size = horizontal ? divider.area.width : divider.area.height;
-      drag.node.ratio = Math.max(.05, Math.min(.95, point / Math.max(1, size - 5))); this.render();
-      const current = geometry(this.layout!.root, this.container.clientWidth, this.container.clientHeight).dividers.find(item => JSON.stringify(item.path) === JSON.stringify(divider.path));
-      if (current) position(element, current.rect);
+      drag.node.ratio = Math.max(.05, Math.min(.95, (point - offset) / Math.max(1, size - gap))); this.render();
+      const current = geometry(this.layout!.root, this.container.clientWidth, this.container.clientHeight, gap).dividers.find(item => JSON.stringify(item.path) === JSON.stringify(divider.path));
+      if (current) position(element, dividerHitRect(current));
     };
     const end = (event: PointerEvent) => {
       element.removeEventListener('pointermove', move); element.removeEventListener('pointerup', end); element.removeEventListener('pointercancel', end); element.removeEventListener('lostpointercapture', end);
@@ -163,3 +173,11 @@ export class DesktopSurface {
   }
 }
 function position(element: HTMLElement, rect: Rect) { Object.assign(element.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` }); }
+
+function dividerHitRect(divider: Divider): Rect {
+  // Shared borders still need a usable pointer target without consuming pane space.
+  const rect = { ...divider.rect };
+  if (divider.direction === 'right' && rect.width < 5) { rect.x -= (5 - rect.width) / 2; rect.width = 5; }
+  if (divider.direction === 'down' && rect.height < 5) { rect.y -= (5 - rect.height) / 2; rect.height = 5; }
+  return rect;
+}

@@ -13,6 +13,8 @@ const motions: Record<string, string> = { End: 'line_end', '$': 'line_end', '^':
 export class NativeCopyMode {
   readonly layer = document.createElement('div');
   readonly toolbar = document.createElement('div');
+  private toolbarScroll = 0;
+  private initialSearch?: { query: string; direction: Direction; repeat: boolean; generation: number };
   private readonly marks = document.createElement('div');
   private readonly status: HTMLElement;
   private readonly query: HTMLInputElement;
@@ -46,7 +48,7 @@ export class NativeCopyMode {
   private dragTimer?: ReturnType<typeof setInterval>;
   active = false;
 
-  constructor(private host: HTMLElement, private content: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void) {
+  constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void) {
     this.layer.className = 'copy-layer'; this.layer.tabIndex = 0; this.layer.setAttribute('role', 'region'); this.layer.setAttribute('aria-label', 'Terminal copy mode');
     this.marks.className = 'copy-marks'; this.layer.append(this.marks);
     this.toolbar.className = 'copy-toolbar'; this.toolbar.setAttribute('role', 'toolbar'); this.toolbar.setAttribute('aria-label', 'Terminal copy controls');
@@ -93,7 +95,14 @@ export class NativeCopyMode {
     this.hide();
   }
   focus() { if (this.active) (this.form.hidden ? this.layer : this.query).focus({ preventScroll: true }); }
-  private hide() { this.help.close(); this.help.remove(); this.toolbar.remove(); this.layer.remove(); this.notice.remove(); this.host.classList.remove('copy-active'); }
+  private hide() {
+    const ownsToolbar = this.toolbar.parentElement === this.toolbarHost;
+    this.help.close(); this.help.remove(); this.toolbar.remove();
+    if (ownsToolbar && !this.toolbarHost.querySelector('.copy-toolbar')) {
+      this.toolbarHost.classList.remove('copy-controls-open'); this.toolbarHost.scrollLeft = this.toolbarScroll;
+    }
+    this.layer.remove(); this.notice.remove(); this.host.classList.remove('copy-active');
+  }
   async start(search = false) {
     if (this.active) { if (search) { if (this.context) this.openSearch('forward'); else this.startSearch = true; } else this.focus(); return; }
     await this.restore;
@@ -101,7 +110,7 @@ export class NativeCopyMode {
     if (!this.terminal() || !this.host.isConnected) return;
     this.active = true; const generation = ++this.generation;
     this.context = undefined; this.entryOffset = undefined; this.dirty = false; this.awaitingFrame = false; this.startSearch = search; this.clearSelection(); this.form.hidden = true; this.notice.hidden = true;
-    this.host.classList.add('copy-active'); this.content.append(this.layer); this.host.append(this.toolbar, this.notice, this.help); this.status.textContent = 'COPY...'; this.focus();
+    this.host.classList.add('copy-active'); this.content.append(this.layer); this.host.append(this.notice, this.help); this.toolbarScroll = this.toolbarHost.scrollLeft; this.toolbarHost.scrollLeft = 0; this.toolbarHost.append(this.toolbar); this.toolbarHost.classList.add('copy-controls-open'); this.status.textContent = 'COPY...'; this.focus();
     this.enqueue(async () => {
       const context: Context = await this.request('pane.copy_context');
       if (generation !== this.generation) return;
@@ -109,7 +118,7 @@ export class NativeCopyMode {
       this.context = context; this.entryOffset = context.scroll.offset_from_bottom;
       const term = this.terminal()!;
       this.cursor = { row: this.top + Math.min(context.scroll.viewport_rows - 1, term.buffer.active.cursorY), col: Math.min(term.cols - 1, term.buffer.active.cursorX) };
-      this.draw(); if (this.startSearch) { this.startSearch = false; this.openSearch('forward'); }
+      this.draw(); this.resumeInitialSearch();
     });
   }
   exit(restore = true, focus = true) {
@@ -127,14 +136,16 @@ export class NativeCopyMode {
     this.pending++;
     const result = this.tail.then(async () => { if (this.active && generation === this.generation) await operation(); }).finally(() => { this.pending--; });
     this.tail = result.catch(error => { if (this.active && generation === this.generation) {
-      this.clearSelection(); this.message((error as Error).message); this.draw();
+      if (this.context) this.clearSelection();
+      this.message((error as Error).message); this.draw();
       if (/content changed|stale_content|content is changing|viewport changed/i.test((error as Error).message)) this.afterFrame();
     } });
     return result;
   }
   private message(text: string) { this.notice.textContent = text; this.notice.hidden = !text; }
   private get top() { return this.context ? this.context.scroll.max_offset_from_bottom - this.context.scroll.offset_from_bottom : 0; }
-  private clearSelection() { ++this.searchGeneration; this.searchRequested = false; this.anchor = undefined; this.selectionVisible = false; this.matches = []; this.current = undefined; this.total = 0; this.currentGlobal = undefined; this.searchQuery = ''; this.marks.replaceChildren(); }
+  private clearSelection() {
+    this.initialSearch = undefined; ++this.searchGeneration; this.searchRequested = false; this.anchor = undefined; this.selectionVisible = false; this.matches = []; this.current = undefined; this.total = 0; this.currentGlobal = undefined; this.searchQuery = ''; this.marks.replaceChildren(); }
   afterFrame() {
     if (!this.active) return;
     this.awaitingFrame = false;
@@ -151,12 +162,13 @@ export class NativeCopyMode {
       if (!matchesNativeViewport(this.terminal(), context)) { this.waitForFrame(); return; }
       if (this.notice.textContent === 'Waiting for a matching native terminal frame.') this.message('');
       if (!this.context) {
+        this.message('');
         this.entryOffset = context.scroll.offset_from_bottom;
         this.cursor = { row: context.scroll.max_offset_from_bottom - context.scroll.offset_from_bottom + Math.min(context.scroll.viewport_rows - 1, this.terminal()?.buffer.active.cursorY || 0), col: this.terminal()?.buffer.active.cursorX || 0 };
       }
       if (this.context && (context.content_revision !== this.context.content_revision || context.scroll.viewport_rows !== this.context.scroll.viewport_rows)) { this.clearSelection(); this.message('Content changed. Selection and search cleared.'); }
       this.context = context; this.clamp(); if (!this.dirty) this.draw();
-      if (this.startSearch) { this.startSearch = false; this.openSearch('forward'); }
+      this.resumeInitialSearch();
     }).catch(() => {}).finally(() => { this.checking = false; if (this.active && this.dirty && !this.awaitingFrame) this.afterFrame(); });
   }
   private waitForFrame() { this.dirty = true; this.awaitingFrame = true; this.marks.replaceChildren(); this.status.textContent = 'COPY WAIT'; this.message('Waiting for a matching native terminal frame.'); }
@@ -197,10 +209,17 @@ export class NativeCopyMode {
   private openSearch(direction: Direction) { this.direction = direction; this.form.hidden = false; this.query.value = this.searchQuery; this.query.focus({ preventScroll: true }); this.query.select(); }
   private closeSearch() { this.form.hidden = true; this.focus(); }
   private repeat(reverse: boolean) { if (this.searchQuery) this.search(this.searchQuery, reverse ? (this.direction === 'forward' ? 'backward' : 'forward') : this.direction, true); }
+  private resumeInitialSearch() {
+    const pending = this.initialSearch; this.initialSearch = undefined;
+    if (pending && pending.generation === this.searchGeneration) {
+      this.startSearch = false; this.search(pending.query, pending.direction, pending.repeat);
+    } else if (this.startSearch) { this.startSearch = false; this.openSearch('forward'); }
+  }
   private search(query: string, direction: Direction, repeat: boolean) {
     const searchGeneration = this.searchGeneration; this.searchRequested = true;
     void this.enqueue(async () => {
-      if (!this.context || searchGeneration !== this.searchGeneration) return;
+      if (searchGeneration !== this.searchGeneration) return;
+      if (!this.context) { this.initialSearch = { query, direction, repeat, generation: searchGeneration }; this.afterFrame(); return; }
       const generation = this.generation;
       const current = this.current === undefined ? undefined : this.matches[this.current];
       const previous = repeat && current?.start.row === this.cursor.row && current.start.col === this.cursor.col ? current : undefined;

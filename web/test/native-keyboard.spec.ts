@@ -24,7 +24,7 @@ test('browser encodes native Kitty press, repeat, release and reset', async ({ p
     await page.keyboard.down('Shift'); await page.keyboard.down('A'); await page.keyboard.up('Shift'); await page.keyboard.up('A');
     await expect.poll(() => inputs.some(text => /^\x1b\[97.*;1:3.*u$/.test(text))).toBe(true);
     inputs.length = 0;
-    await page.keyboard.down('b'); await page.locator('.pane-active .pane-title').focus();
+    await page.keyboard.down('b'); await page.locator('#panes > button.active').focus();
     await expect.poll(() => inputs.some(text => /^\x1b\[98.*:3.*u$/.test(text))).toBe(true);
     await page.keyboard.up('b'); await page.locator('.pane-active textarea').focus();
     await runtime.cli('pane', 'send-text', pane, "printf '\\033[<uKEYBOARD_%s\\n' RESET\n");

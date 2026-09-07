@@ -54,7 +54,7 @@ function rememberSelection() {
 let authenticated = false, refreshing = false, refreshAgain = false;
 let interactionRevision = 0;
 let closingFocus: { machine: string; workspace: string; tab: string } | undefined;
-for (const type of ['pointerdown', 'keydown', 'paste']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
+for (const type of ['pointerdown', 'keydown', 'paste', 'focusin']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
 let gatewayOnline = false;
 const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
@@ -64,7 +64,7 @@ const fleet = new FleetClient(applyFleet, online => {
 });
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
-const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
+const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
 function selectPane(id: string) { if (paneId === id && !pendingPane) return; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
@@ -86,7 +86,7 @@ function selectHost(id: string) {
   if (machineId === id) return;
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
-  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
+  snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
@@ -94,7 +94,7 @@ function selectTarget(machine: string, workspace: string, tab: string, pane: str
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
-  if (waitForSnapshot) surface.requestFocus(pane);
+  surface.requestFocus(pane);
 }
 let pendingPaneTimer: ReturnType<typeof setTimeout> | undefined;
 function waitForPane(machine: string, pane: string, tab: string, closedNotice = 'Requested pane closed before it could attach.') {
@@ -162,7 +162,7 @@ async function api(path: string, data?: object): Promise<any> {
 interface NavigationItem { id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
 function navigation(id: string, items: NavigationItem[]) {
   const parent = element(id);
-  const existing = new Map([...parent.querySelectorAll('button')].map(node => [node.dataset.id, node]));
+  const existing = new Map([...parent.querySelectorAll<HTMLButtonElement>(':scope > button')].map(node => [node.dataset.id, node]));
   items.forEach((item, index) => {
     const node = existing.get(item.id) || document.createElement('button');
     existing.delete(item.id);
@@ -182,10 +182,16 @@ function renderNavigation() {
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
-  element('shield').style.top = `${element('tabs').offsetHeight + element('panes').offsetHeight}px`;
+  updateShieldBounds();
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || !!pendingPane || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || !!pendingPane || selectedHost()?.connection !== 'online';
 }
+function updateShieldBounds() {
+  const terminal = element('terminal');
+  element('shield').style.top = `${terminal.offsetTop}px`;
+  element('shield').style.bottom = `${element('surface').clientHeight - terminal.offsetTop - terminal.offsetHeight}px`;
+}
+new ResizeObserver(updateShieldBounds).observe(element('terminal'));
 function choose() {
   // Connecting hosts have no snapshot yet. Preserve deep links and saved selection
   // until the native server can authoritatively reconcile those IDs.
@@ -229,9 +235,9 @@ async function action(action: string, id?: string, extra: object = {}, selected 
     if (action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
     if (created && action !== 'pane.close') {
-      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
+      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); if (interactionRevision === interaction) surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
     }
-    if (result.focused_pane_id) paneId = result.focused_pane_id;
+    if (result.focused_pane_id) { paneId = result.focused_pane_id; if (interactionRevision === interaction) surface.requestFocus(paneId); }
     closeRail(); await refresh(); surface.refresh(); fleet.resync();
     if (response.notice) status(`[NOTICE] ${response.notice}`);
   }

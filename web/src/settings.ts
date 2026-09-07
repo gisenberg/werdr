@@ -13,6 +13,9 @@ const groups: [string, Control[]][] = [
     { key: 'sidebarSectionPercent', label: 'WORKSPACE SECTION (%)', min: 10, max: 90 },
     { key: 'compact', label: 'COMPACT CHROME' }, { key: 'indicators', label: 'STATUS INDICATORS', choices: ['text', 'dots', 'symbols'] },
     { key: 'hideSingleTab', label: 'HIDE TAB BAR FOR ONE TAB' },
+    { key: 'tabBarPosition', label: 'DESKTOP TAB BAR POSITION', choices: ['top', 'bottom'] },
+    { key: 'paneBorders', label: 'SPLIT PANE BORDERS' }, { key: 'paneOuterBorders', label: 'OUTER PANE BORDERS' },
+    { key: 'paneGaps', label: 'GAPS BETWEEN PANES' }, { key: 'showAgentLabelsOnPaneBorders', label: 'AGENT LABELS ON PANE BORDERS' },
   ]],
   ['NAVIGATION', [{ key: 'agentSort', label: 'AGENT ORDER', choices: ['priority', 'native'] }, { key: 'confirmClose', label: 'CONFIRM PROCESS CLOSURE' }, { key: 'scrollLines', label: 'SCROLL LINES', min: 1, max: 20 }]],
   ['NOTIFICATIONS', [{ key: 'notificationAttention', label: 'ATTENTION ALERTS' }, { key: 'notificationFinished', label: 'COMPLETION ALERTS' }, { key: 'notificationSound', label: 'ALERT SOUND' }, { key: 'toastSeconds', label: 'TOAST SECONDS (0 DISABLES TOASTS)', min: 0, max: 60 }, { key: 'toastPosition', label: 'TOAST POSITION', choices: ['top-right', 'bottom-right'] }]],
@@ -119,6 +122,7 @@ export class Settings {
     const rgb = colors.panel_bg.slice(1).match(/../g)!.map(value => parseInt(value, 16));
     root.style.colorScheme = rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 > 128 ? 'light' : 'dark';
     root.style.setProperty('--sidebar-width', `${preferences.sidebarWidth}px`); root.style.setProperty('--wmux-mono-font', fontFamilies[preferences.font]);
+    root.dataset.tabBarPosition = preferences.tabBarPosition;
     root.dataset.density = preferences.compact ? 'compact' : 'comfortable'; root.dataset.indicators = preferences.indicators; root.dataset.toastPosition = preferences.toastPosition;
     this.changed(this.preferences, colors);
   }

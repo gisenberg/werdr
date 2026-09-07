@@ -9,9 +9,9 @@ async function login(page: Page) { await page.goto(runtime.url); await consoleIn
 async function create(page: Page) { const previous = new URL(page.url()).searchParams.get('pane'); await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(previous); await expect(page.locator('#shield')).toBeHidden(); return new URL(page.url()).searchParams.get('pane')!; }
 async function open(page: Page, search = false) {
   await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: search ? 'Terminal: search native scrollback' : 'Terminal: copy mode (native scrollback)', exact: true }).click();
-  await expect(page.locator('.pane-active .copy-status')).toContainText(/COPY \d+:/);
+  await expect(page.locator('#panes .copy-status')).toContainText(/COPY \d+:/);
 }
-async function find(page: Page, query: string) { await page.locator('.pane-active .copy-search input').fill(query); await page.locator('.pane-active .copy-search').getByRole('button', { name: 'FIND', exact: true }).click(); }
+async function find(page: Page, query: string) { await page.locator('#panes .copy-search input').fill(query); await page.locator('#panes .copy-search').getByRole('button', { name: 'FIND', exact: true }).click(); }
 
 test('copy mode searches native history without resizing, copies Unicode and restores the original scroll position', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']); await login(page); const id = await create(page);
@@ -105,4 +105,27 @@ test('Escape clears an in-flight search without allowing its delayed result to r
   await expect(page.locator('.copy-layer')).toHaveCount(1);
   const completed = page.waitForResponse(response => response.url().endsWith('/api/action') && response.request().postDataJSON()?.action === 'pane.copy_search'); release(); await completed;
   await expect(page.locator('.copy-status')).not.toContainText('/'); await expect(page.locator('.copy-current')).toHaveCount(0); await page.keyboard.press('Escape'); await expect(page.locator('.copy-layer')).toHaveCount(0);
+});
+
+test('Escape cancels a search submitted before the first matching native frame', async ({ page }) => {
+  await login(page); await create(page);
+  let release!: () => void, held = false, searches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/action', async route => {
+    const action = route.request().postDataJSON()?.action;
+    if (action === 'pane.copy_search') searches++;
+    if (action === 'pane.copy_context' && !held) {
+      held = true; await gate;
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'pane content changed' }) });
+    } else await route.continue();
+  });
+  await page.keyboard.press('Control+k');
+  await page.locator('#command-list').getByRole('button', { name: 'Terminal: copy mode (native scrollback)', exact: true }).click();
+  await expect.poll(() => held).toBe(true);
+  await page.locator('.copy-toolbar [data-copy=find]').click(); await find(page, 'cancelled before frame');
+  await page.keyboard.press('Escape'); release();
+  await expect(page.locator('.copy-status')).toContainText(/COPY \d+:/);
+  expect(searches).toBe(0); await expect(page.locator('.copy-layer')).toHaveCount(1);
+  await expect(page.locator('.copy-current')).toHaveCount(0);
+  await page.keyboard.press('q'); await expect(page.locator('.copy-layer')).toHaveCount(0);
 });

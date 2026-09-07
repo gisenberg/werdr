@@ -1,3 +1,4 @@
+import { type PaneChrome } from '../shared/pane-chrome';
 import type { Terminal } from 'ghostty-web';
 import { loadGhostty } from './terminal-loader';
 import { fontFamilies, type Preferences, palette } from '../shared/settings';
@@ -11,6 +12,7 @@ export class TerminalController {
   private readonly content = document.createElement('div');
   private readonly shield = document.createElement('div');
   private readonly title = document.createElement('button');
+  private readonly titleLabel = document.createElement('span');
   readonly copyMode: NativeCopyMode;
   private readonly links: NativeLinks;
   private readonly mouse: NativeMouse;
@@ -23,21 +25,37 @@ export class TerminalController {
   private failure?: string;
   private timer?: ReturnType<typeof setTimeout>;
   private visible = true;
+  private chromeMask = -1;
+  private description = '';
   ready = false;
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   get selection() { return this.terminal?.getSelection() || ''; }
-  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, report: (message: string, failed?: boolean) => void) {
+  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, report: (message: string, failed?: boolean) => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
+    this.title.append(this.titleLabel);
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
-    this.copyMode = new NativeCopyMode(this.element, this.content, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report);
+    this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report);
     this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, text => { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: 'terminal.input', text })); });
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
   activate(active: boolean) { if (!active) { this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); } this.element.classList.toggle('pane-active', active); }
-  label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.activate(active); this.element.setAttribute('aria-label', label); }
+  chrome(chrome: PaneChrome, label: string, description: string, active: boolean) {
+    const mask = Number(chrome.top) | Number(chrome.right) << 1 | Number(chrome.bottom) << 2 | Number(chrome.left) << 3;
+    if (mask !== this.chromeMask) {
+      this.chromeMask = mask;
+      for (const edge of ['right', 'bottom', 'left'] as const) this.element.style.setProperty(`--pane-border-${edge}`, chrome[edge] ? '1px' : '0px');
+      this.element.dataset.topBorder = String(chrome.top); this.title.hidden = !chrome.top;
+    }
+    if (this.titleLabel.textContent !== label) this.titleLabel.textContent = label;
+    if (this.title.title !== (label || description)) this.title.title = label || description;
+    if (description !== this.description) {
+      this.description = description; this.title.setAttribute('aria-label', description); this.element.setAttribute('aria-label', description);
+    }
+    this.activate(active);
+  }
   show(visible: boolean) {
     const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.links.cancel(); this.mouse.release(); }
     if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }

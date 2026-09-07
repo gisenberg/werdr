@@ -94,12 +94,23 @@ test('one and fifteen visible panes retain controller identity through metadata 
 
 test('rapid pane focus changes cannot reclaim focus from the navigation search', async ({ page }) => {
   await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
-  await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
+  const previousWorkspace = new URL(page.url()).searchParams.get('workspace');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).not.toBe(previousWorkspace);
+  await expect(page.locator('#shield')).toBeHidden();
+  let releaseSplit!: () => void;
+  const splitGate = new Promise<void>(resolve => { releaseSplit = resolve; });
+  await page.route('**/api/action', async route => {
+    if (route.request().postDataJSON()?.action === 'pane.split') {
+      const response = await route.fetch(); await splitGate; await route.fulfill({ response });
+    } else await route.continue();
+  });
   await page.keyboard.press('Control+d'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('.pane-shield:not([hidden])')).toHaveCount(0);
   await page.evaluate(() => {
     const inputs = document.querySelectorAll<HTMLTextAreaElement>('.terminal-pane textarea');
     inputs[0].focus(); inputs[1].focus(); document.querySelector<HTMLInputElement>('#fleet-search')!.focus();
   });
+  releaseSplit();
   await page.keyboard.type('focus remains in navigation while background terminals receive frames');
   await expect(page.locator('#fleet-search')).toHaveValue('focus remains in navigation while background terminals receive frames');
   await expect(page.locator('#fleet-search')).toBeFocused();

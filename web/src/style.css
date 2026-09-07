@@ -140,14 +140,17 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 
 /* Native split geometry owns terminal placement. Chrome stays outside pixels. */
 #terminal { position: relative; }
-.terminal-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; outline: 1px solid var(--herdr-overlay1); outline-offset: -1px; }
+.terminal-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; --pane-border-color: var(--herdr-overlay1); border-style: solid; border-color: var(--pane-border-color); border-width: 0 var(--pane-border-right, 0px) var(--pane-border-bottom, 0px) var(--pane-border-left, 0px); }
 .terminal-pane[hidden] { display: none; }
-.terminal-pane.pane-active { outline-color: var(--herdr-accent); }
-.pane-title { flex: 0 0 24px; height: 24px; min-height: 24px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: var(--herdr-panel-bg); color: var(--herdr-overlay1); border: 0; border-bottom: 1px solid var(--herdr-overlay1); }
+.terminal-pane.pane-active { --pane-border-color: var(--herdr-accent); }
+.pane-title { position: relative; flex: 0 0 24px; height: 24px; min-height: 24px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: var(--herdr-panel-bg); color: var(--herdr-overlay1); border: 0; }
+.pane-title::before { content: ''; position: absolute; top: 50%; left: 0; right: 0; border-top: 1px solid var(--pane-border-color); }
+.pane-title > span:not(:empty) { position: relative; background: var(--herdr-panel-bg); padding: 0 4px; }
 .pane-active .pane-title { color: var(--herdr-accent); border-color: var(--herdr-accent); }
 .pane-content { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .copy-layer { position: absolute; inset: 0; z-index: 3; outline: none; touch-action: none; cursor: text; }
-.copy-active > .pane-title { visibility: hidden; }
+#panes { position: relative; }
+#panes.copy-controls-open > button { visibility: hidden; }
 .copy-layer:focus-visible { outline: 1px solid var(--herdr-accent); outline-offset: -1px; }
 .copy-marks { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .copy-marks span { position: absolute; box-sizing: border-box; }
@@ -166,11 +169,12 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 .copy-help { width: min(650px, calc(100vw - 32px)); }
 .copy-help dt { color: var(--herdr-accent); margin-top: 10px; }
 .copy-help dd { margin: 2px 0; }
-.pane-shield { position: absolute; inset: 24px 0 0; padding: 20px; background: var(--herdr-panel-bg); color: var(--herdr-text); pointer-events: none; }
+.pane-shield { position: absolute; inset: 0; padding: 20px; background: var(--herdr-panel-bg); color: var(--herdr-text); pointer-events: none; }
+.terminal-pane[data-top-border=true] > .pane-shield { top: 24px; }
 .pane-shield[hidden] { display: none; }
-.pane-divider { position: absolute; z-index: 3; background: var(--herdr-panel-bg); touch-action: none; }
-.pane-divider.right { cursor: col-resize; border-left: 1px solid var(--herdr-overlay1); border-right: 1px solid var(--herdr-overlay1); }
-.pane-divider.down { cursor: row-resize; border-top: 1px solid var(--herdr-overlay1); border-bottom: 1px solid var(--herdr-overlay1); }
+.pane-divider { position: absolute; z-index: 3; background: transparent; touch-action: none; }
+.pane-divider.right { cursor: col-resize; }
+.pane-divider.down { cursor: row-resize; }
 .pane-divider:focus-visible, .pane-divider:hover { background: var(--herdr-accent); outline: 1px solid var(--herdr-accent); }
 
 .pane-capacity { position: absolute; padding: 20px; text-align: left; overflow: hidden; }
@@ -262,3 +266,7 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
   #rail-divider[aria-disabled=true] { cursor: wait; }
 }
 @media (max-width: 700px) { #rail-divider { display: none; } }
+
+@media (min-width: 701px) {
+  :root[data-tab-bar-position=bottom] #tabs { order: 3; border-bottom: 0; border-top: 1px solid var(--herdr-surface1); }
+}
