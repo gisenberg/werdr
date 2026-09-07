@@ -9,14 +9,16 @@ import { FleetClient } from './fleet-client';
 import { HostManager, hostManagerMarkup } from './host-manager';
 import { Activity, activityMarkup } from './activity';
 import { initializeAccount } from './account';
+import { Settings, settingsMarkup } from './settings';
+import { defaults, palette, fontFamilies, type Preferences } from '../shared/settings';
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="sessions" hidden>SESSIONS</button><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
+app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="settings" hidden>SETTINGS</button><button id="sessions" hidden>SESSIONS</button><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
 <main><aside id="rail"><div class="rail-tools"><button id="manage-hosts">MANAGE HOSTS</button><button id="activity">ACTIVITY</button><button id="commands" aria-label="Command palette" title="Command palette (Ctrl/Cmd+K)">[K]</button></div><label class="rail-search">FIND<input id="fleet-search" type="search" placeholder="Hosts, workspaces, agents" autocomplete="off"></label><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav><div class="section">AGENTS<select id="agent-filter" aria-label="Filter agents"><option value="all">ALL</option><option value="blocked">ATTENTION</option><option value="working">WORKING</option><option value="done">DONE / IDLE</option></select></div><nav id="agents" aria-label="Agents"></nav></aside>
 <section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="pane-actions">ACTIONS</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
 <dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><button id="revoke-token">REVOKE ACCESS TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>
 <dialog id="sessions-dialog"><h1>Signed-in browsers</h1><p>Browser tokens stay valid for 90 days, including across restarts. Revoking a browser disconnects it immediately.</p><div id="session-list"></div><p id="session-error" role="alert"></p><button id="revoke-others">REVOKE OTHER BROWSERS</button><button id="sessions-done">DONE</button></dialog>
-${hostManagerMarkup}${activityMarkup}
+${hostManagerMarkup}${activityMarkup}${settingsMarkup}
 <dialog id="command-dialog"><h1>COMMANDS</h1><label>FIND ACTION<input id="command-search" type="search" autocomplete="off" placeholder="Search actions, hosts, workspaces, agents"></label><div id="command-list"></div><button id="command-done">DONE</button></dialog>
 <dialog id="rename-dialog"><form id="rename-form"><h1 id="rename-title">RENAME</h1><label>LABEL<input id="rename-value" required maxlength="256"></label><button type="submit">SAVE</button><button id="rename-cancel" type="button">CANCEL</button><p id="rename-error" role="alert"></p></form></dialog>
 <dialog id="agent-dialog"><h1>AGENT</h1><p id="agent-context"></p><form id="agent-start-form"><label>AGENT KIND<input id="agent-kind" value="claude" list="agent-kinds" required maxlength="80" autocomplete="off"><datalist id="agent-kinds"><option value="claude"><option value="codex"><option value="opencode"><option value="aider"><option value="gemini"></datalist></label><label>NAME<input id="agent-name" required maxlength="256" autocomplete="off"></label><button type="submit">START AGENT IN THIS PANE</button></form><form id="agent-prompt-form"><label>PROMPT<textarea id="agent-prompt" required maxlength="32768" rows="5"></textarea></label><button type="submit">SEND PROMPT</button></form><p id="agent-error" role="alert"></p><button id="agent-done">DONE</button></dialog>`;
@@ -47,7 +49,15 @@ let disposeTerminal: (() => void) | undefined, generation = 0, reconnectTimer: R
 let reconnectAttempt = 0, attaching = false;
 const fleet = new FleetClient(applyFleet, online => { if (!online && authenticated) { status('[RECONNECTING] GATEWAY'); void refresh(); } });
 const hostManager = new HostManager(api, id => selectHost(id));
-const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }));
+let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
+let fitTerminal: (() => void) | undefined;
+const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
+const settings = new Settings(api, (value, nextColors) => {
+  preferences = value; colors = nextColors;
+  if (terminal) { terminal.options.fontSize = value.fontSize; terminal.options.fontFamily = fontFamilies[value.font]; terminal.options.cursorBlink = value.cursorBlink; terminal.options.theme = { background: colors.panel_bg, foreground: colors.text, cursor: colors.accent, selectionBackground: colors.selection_bg }; fitTerminal?.(); }
+  renderNavigation(); renderFleetNavigation();
+});
+element('settings').onclick = () => void settings.open();
 function selectedHost() { return fleetState.hosts.find(host => host.machine.id === machineId); }
 function selectHost(id: string) {
   if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = id; fleet.resync(); return; }
@@ -81,7 +91,7 @@ function renderFleetNavigation() {
   const rank = (status: string) => status === 'blocked' ? 0 : status === 'working' ? 1 : 2;
   const agents = fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).map(agent => ({ host, agent })))
     .filter(({ host, agent }) => (agent.agent || agent.name || agent.agent_status !== 'unknown') && match(`${host.machine.label} ${agent.name || ''} ${agent.agent || ''} ${agent.title || ''}`) && (filter === 'all' || filter === agent.agent_status || filter === 'done' && agent.agent_status === 'idle'))
-    .sort((a, b) => rank(a.agent.agent_status) - rank(b.agent.agent_status));
+    .sort((a, b) => preferences.agentSort === 'native' ? 0 : rank(a.agent.agent_status) - rank(b.agent.agent_status));
   navigation('agents', agents.map(({ host, agent }) => ({ id: `${host.machine.id}/${agent.pane_id}`, label: `${host.machine.label} / ${agent.name || agent.display_agent || agent.agent || agent.pane_id}`, badge: host.connection === 'online' ? agent.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && agent.pane_id === paneId, disabled: !host.machine.enabled, title: agent.title || agent.cwd, select: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) })));
   const current = selectedHost(); const online = current?.connection === 'online';
   element<HTMLButtonElement>('create').disabled = !online;
@@ -92,7 +102,7 @@ function renderFleetNavigation() {
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();
-  if (res.status === 401) { authenticated = false; fleet.stop(); detach(); for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close(); element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
+  if (res.status === 401) { authenticated = false; fleet.stop(); detach(); for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close(); element('settings').hidden = true; element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -113,8 +123,10 @@ function navigation(id: string, items: NavigationItem[]) {
   for (const node of existing.values()) node.remove();
 }
 function renderNavigation() {
+  element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => { if (paneId === p.pane_id) return; paneId = p.pane_id; renderNavigation(); rememberSelection(); renderFleetNavigation(); void attach(); } })));
+  element('shield').style.top = `${element('tabs').offsetHeight + element('panes').offsetHeight}px`;
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || selectedHost()?.connection !== 'online';
 }
@@ -136,7 +148,8 @@ async function refresh() {
   refreshing = true;
   try {
     const session = await api('/api/session');
-    authenticated = true; element('sessions').hidden = false; element('access-token').hidden = !session.canGenerateToken;
+    authenticated = true; element('settings').hidden = false; element('sessions').hidden = false; element('access-token').hidden = !session.canGenerateToken;
+    await settings.refresh();
     fleet.start();
     const state = await api('/api/fleet');
     if (state.revision >= fleetState.revision || !fleetState.hosts.length) applyFleet(state);
@@ -144,6 +157,7 @@ async function refresh() {
   finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } }
 }
 function detach(resetRetry = true) {
+  fitTerminal = undefined;
   generation++; attaching = false; clearTimeout(reconnectTimer); if (resetRetry) reconnectAttempt = 0;
   socket?.close(); socket = undefined; disposeTerminal?.(); disposeTerminal = undefined; terminal = undefined;
   element('terminal').replaceChildren(); element('shield').hidden = false;
@@ -156,9 +170,9 @@ async function attach(takeover = false, retry = false) {
   let library: typeof import('ghostty-web');
   try { library = await loadGhostty(); } catch { attaching = false; status('[ERROR] Terminal renderer could not load'); return; }
   if (epoch !== generation) return;
-  const term = new library.Terminal({ fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize: 14, cursorBlink: false, theme: { background: '#14191b', foreground: '#d1ddd8' } });
+  const term = new library.Terminal({ fontFamily: fontFamilies[preferences.font], fontSize: preferences.fontSize, cursorBlink: preferences.cursorBlink, theme: { background: colors.panel_bg, foreground: colors.text, cursor: colors.accent, selectionBackground: colors.selection_bg } });
   terminal = term; attaching = false;
-  const fit = new library.FitAddon(); term.loadAddon(fit); term.open(element('terminal')); fit.fit();
+  const fit = new library.FitAddon(); term.loadAddon(fit); term.open(element('terminal')); fit.fit(); fitTerminal = () => fit.fit();
   const params = new URLSearchParams({ machine: selectedMachine, pane: selectedPane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0' });
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); socket = ws;
   const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
@@ -169,7 +183,7 @@ async function attach(takeover = false, retry = false) {
   const input = term.onData(text => send({ type: 'terminal.input', text }));
   const resize = term.onResize(({ cols, rows }) => { if (!applyingFrame) send({ type: 'terminal.resize', cols, rows }); });
   const observer = new ResizeObserver(() => fit.fit()); observer.observe(element('terminal'));
-  const wheel = (event: WheelEvent) => { event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30))) }); };
+  const wheel = (event: WheelEvent) => { event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * preferences.scrollLines)) }); };
   element('terminal').addEventListener('wheel', wheel, { passive: false, capture: true });
   let touchY: number | undefined;
   const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined; };
@@ -224,7 +238,7 @@ element('create').onclick = () => void action('workspace.create', undefined, wor
 element('new-tab').onclick = () => void action('tab.create', workspaceId);
 element('split').onclick = () => void action('pane.split', paneId, { direction: 'right' });
 element('takeover').onclick = () => void attach(true);
-element('close').onclick = () => { if (confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
+element('close').onclick = () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
 element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; fleet.stop(); detach(); boot.requireAuthentication(); } catch (error) { status(String(error)); } };
 initializeAccount(api, refresh);
 element('manage-hosts').onclick = () => hostManager.open();
@@ -288,9 +302,9 @@ function openCommands() {
     { label: 'Rename tab', disabled: !tab || !online, run: () => rename('tab.rename', tab, snapshot.tabs.find(item => item.tab_id === tab)?.label || '', machine) },
     { label: 'Rename pane', disabled: !pane || !online, run: () => rename('pane.rename', pane, snapshot.panes.find(item => item.pane_id === pane)?.label || '', machine) },
     { label: 'Rename agent', disabled: !pane || !online || !snapshot.agents.some(agent => agent.pane_id === pane && agent.agent), run: () => rename('agent.rename', pane, snapshot.agents.find(agent => agent.pane_id === pane)?.name || '', machine) },
-    { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
-    { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
-    { label: 'Close workspace and end its processes', disabled: !workspace || !online, run: () => { if (confirm('Close this workspace and end all its running processes?')) void action('workspace.close', workspace, {}, machine); } },
+    { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
+    { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
+    { label: 'Close workspace and end its processes', disabled: !workspace || !online, run: () => { if (!preferences.confirmClose || confirm('Close this workspace and end all its running processes?')) void action('workspace.close', workspace, {}, machine); } },
     ...fleetState.hosts.map(host => ({ label: `Host: ${host.machine.label} [${host.connection}]`, disabled: !host.machine.enabled, run: () => selectHost(host.machine.id) })),
     ...fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).filter(agent => agent.agent || agent.name).map(agent => ({ label: `Agent: ${host.machine.label} / ${agent.name || agent.agent} [${agent.agent_status}]`, disabled: !host.machine.enabled, run: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) }))),
   ];

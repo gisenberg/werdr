@@ -59,6 +59,12 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 
 ## Current behavior
 
+**SETTINGS** provides native herdr palettes, custom semantic colors, live preview/cancel, system light/dark switching, terminal fonts, sidebar density/width, agent ordering, close confirmations, and notification options.
+Preferences are stored at the gateway with revision checks to prevent one browser overwriting another browser's edits.
+An optional device font-size override stays in that browser.
+Theme and font changes update the mounted terminal without releasing its controller.
+
+
 - Fleet-wide host, workspace, and agent navigation with search, attention filters, connection health, and independent background reconnects.
 - Native host add/setup, rename, enable, disable, and removal through **MANAGE HOSTS**.
 - Durable attention/completion activity with pane links and optional desktop notifications.
@@ -75,7 +81,8 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 The browser displays one selected pane at a time, including on desktop.
 Metadata stays connected for every enabled saved host through native event subscriptions, with a ten-second reconciliation heartbeat.
 Only the selected pane attaches a terminal controller.
-Simultaneous split surfaces, general browser settings persistence, and full wmux media/clipboard integration are not implemented.
+Simultaneous split surfaces and full wmux media/clipboard integration are not implemented.
+The remaining native desktop work is tracked in [the parity acceptance matrix](werdr/DESKTOP_PARITY.md).
 This is a working first version, not feature parity with wmux.
 
 ## Configuration and operations
@@ -94,6 +101,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_HERDR_BIN` | Optional Windows executable path; remote environment variables such as `%LOCALAPPDATA%` are expanded without shell evaluation. |
+| `WERDR_SETTINGS_FILE` | Owner-only versioned browser preferences, default `browser-settings.json` beside the access token. |
 | `WERDR_NOTIFICATION_FILE` | Owner-only versioned activity history, default `fleet-notifications.json` beside the access token. |
 | `WERDR_MACHINE_PLATFORM_FILE` | Owner-only platform hints pinned to native host ID, target, and session, default `machine-platforms.json` beside the access token. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |

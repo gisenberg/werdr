@@ -15,6 +15,8 @@ import { bootFonts } from './boot-fonts.ts';
 import { Fleet } from './fleet.ts';
 import { MachineManagement, ManagementError } from './machine-management.ts';
 import { browserAction } from './browser-actions.ts';
+import { settingsStore, SettingsConflict } from './settings.ts';
+import { SettingsValidationError } from '../shared/settings.ts';
 import { NativeApiError } from './native-api.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
 
@@ -33,6 +35,7 @@ const artwork = await bootArtwork(process.env.WERDR_BOOT_ASSET_DIR);
 const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
 const sessions = await sessionStore(process.env.WERDR_SESSION_FILE || resolve(dirname(tokenPath), 'browser-sessions.json'));
+const settings = await settingsStore(process.env.WERDR_SETTINGS_FILE || resolve(dirname(tokenPath), 'browser-settings.json'));
 const sessionTokens = new Map<string, string>();
 const fleet = new Fleet(() => management.catalog(), process.env.WERDR_NOTIFICATION_FILE || resolve(dirname(tokenPath), 'fleet-notifications.json'));
 const management = new MachineManagement(process.env.WERDR_MACHINE_PLATFORM_FILE || resolve(dirname(tokenPath), 'machine-platforms.json'), async () => { await fleet.reloadCatalog(); for (const host of fleet.state().hosts) if (host.machine.enabled) fleet.retry(host.machine.id); });
@@ -133,6 +136,8 @@ const handler: RequestListener = async (req, res) => {
         res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
         return reply(res, 200, { ok: true });
       }
+      if (url.pathname === '/api/settings' && req.method === 'GET') return reply(res, 200, settings.read());
+      if (url.pathname === '/api/settings' && req.method === 'POST') { const value = await authorizedBody(req); return reply(res, 200, await settings.update(value.revision, value.preferences)); }
       if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: fleet.state().hosts.map(host => host.machine) });
       if (url.pathname === '/api/fleet' && req.method === 'GET') return reply(res, 200, fleet.state());
       if (url.pathname === '/api/hosts/edit' && req.method === 'POST') { await management.edit(await authorizedBody(req)); return reply(res, 200, { ok: true }); }
@@ -172,6 +177,7 @@ const handler: RequestListener = async (req, res) => {
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : data);
   } catch (error) {
+    if (!res.headersSent && (error instanceof SettingsConflict || error instanceof SettingsValidationError)) return reply(res, error instanceof SettingsConflict ? 409 : 400, { error: error.message });
     if (!res.headersSent && (error instanceof ManagementError || error instanceof NativeApiError)) return reply(res, error instanceof ManagementError ? error.status : error.code === 'offline' ? 503 : 409, { error: error.message });
     console.error(error instanceof Error ? error.message : error);
     if (!res.headersSent) reply(res, 502, { error: 'Herdr request failed. Check the gateway log and host availability.' });

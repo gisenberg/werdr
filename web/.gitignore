@@ -8,3 +8,5 @@ fleet-notifications.json
 fleet-notifications.json.*.tmp
 machine-platforms.json
 machine-platforms.json.*.tmp
+
+browser-settings.json
