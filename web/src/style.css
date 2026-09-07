@@ -145,7 +145,27 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 .terminal-pane.pane-active { outline-color: var(--herdr-accent); }
 .pane-title { flex: 0 0 24px; height: 24px; min-height: 24px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: var(--herdr-panel-bg); color: var(--herdr-overlay1); border: 0; border-bottom: 1px solid var(--herdr-overlay1); }
 .pane-active .pane-title { color: var(--herdr-accent); border-color: var(--herdr-accent); }
-.pane-content { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.pane-content { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.copy-layer { position: absolute; inset: 0; z-index: 3; outline: none; touch-action: none; cursor: text; }
+.copy-active > .pane-title { visibility: hidden; }
+.copy-layer:focus-visible { outline: 1px solid var(--herdr-accent); outline-offset: -1px; }
+.copy-marks { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.copy-marks span { position: absolute; box-sizing: border-box; }
+.copy-selection { background: var(--herdr-selection-bg); opacity: .65; }
+.copy-match { background: var(--herdr-accent); opacity: .2; }
+.copy-current { opacity: .4; }
+.copy-caret { border: 1px solid var(--herdr-accent); }
+.copy-toolbar { position: absolute; top: 0; left: 0; right: 0; height: 24px; z-index: 4; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; background: var(--herdr-panel-bg); border-bottom: 1px solid var(--herdr-accent); white-space: nowrap; }
+.copy-toolbar button { min-height: 22px; height: 22px; padding: 0 4px; flex-shrink: 0; font-size: 11px; }
+.copy-status { padding: 3px 5px; color: var(--herdr-accent); font-size: 11px; flex: 1 0 auto; }
+.copy-search { position: absolute; inset: 0; display: flex; gap: 4px; align-items: center; background: var(--herdr-panel-bg); }
+.copy-search[hidden] { display: none; }
+.copy-search label { display: flex; align-items: center; gap: 4px; margin: 0; flex: 1; min-width: 0; font-size: 11px; }
+.copy-search input { min-height: 20px; height: 20px; padding: 0 4px; width: 100%; min-width: 0; font-size: 12px; }
+.copy-notice { position: absolute; bottom: 0; left: 0; right: 0; z-index: 4; padding: 4px 8px; background: var(--herdr-panel-bg); color: var(--herdr-text); border-top: 1px solid var(--herdr-accent); font-size: 12px; }
+.copy-help { width: min(650px, calc(100vw - 32px)); }
+.copy-help dt { color: var(--herdr-accent); margin-top: 10px; }
+.copy-help dd { margin: 2px 0; }
 .pane-shield { position: absolute; inset: 24px 0 0; padding: 20px; background: var(--herdr-panel-bg); color: var(--herdr-text); pointer-events: none; }
 .pane-shield[hidden] { display: none; }
 .pane-divider { position: absolute; z-index: 3; background: var(--herdr-panel-bg); touch-action: none; }

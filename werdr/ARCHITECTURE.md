@@ -34,6 +34,10 @@ It forwards complete NDJSON records and leaves base64 terminal bytes intact unti
 Browser disconnection releases the controller rather than closing the pane.
 Takeover is an explicit action and is never part of automatic reconnect.
 Herdr's rendered frames are authoritative; a `full` frame is not permission to reset a live terminal or replay a raw PTY tail.
+Browser copy mode uses native content revisions, scrollback coordinates, word/paragraph motions, search, and selection reads.
+It brackets native viewport text and scroll geometry with content checks and compares that text with Ghostty's rendered graphemes before establishing selection coordinates.
+Only the active copy pane performs these checks, and queued operations are canceled when copy mode closes or the terminal disconnects.
+The browser owns selection highlights and restores the entry scroll offset when copy mode exits normally.
 
 `Fleet` owns independent metadata connections, bounded handshake concurrency, reconnect backoff, and ordered browser deltas.
 It subscribes before taking native snapshots, reconciles changes during bootstrap, subscribes to per-pane agent status, and takes a ten-second health snapshot.

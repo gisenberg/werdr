@@ -32,18 +32,28 @@ test('copy context brackets native geometry and exposes only scroll fields', asy
   const calls: { method: string; params: any; invalidate?: boolean }[] = [];
   const result = await copyContext({ id: 'pane-1' }, async (method, params, invalidate) => {
     calls.push({ method, params, invalidate });
-    return method === 'pane.get' ? { pane: { revision: 0, cwd: '/private', scroll: { offset_from_bottom: 5, max_offset_from_bottom: 200, viewport_rows: 24 } } } : { content_revision: 42 };
+    return method === 'pane.get' ? { pane: { revision: 0, cwd: '/private', scroll: { offset_from_bottom: 5, max_offset_from_bottom: 200, viewport_rows: 24 } } } : method === 'pane.read' ? { read: { text: 'visible\n', truncated: false } } : { content_revision: 42 };
   });
-  assert.deepEqual(result, { pane_id: 'pane-1', content_revision: 42, scroll: { offset_from_bottom: 5, max_offset_from_bottom: 200, viewport_rows: 24 } });
-  assert.deepEqual(calls.map(call => call.method), ['pane.copy_motion', 'pane.get', 'pane.copy_motion']);
-  assert.equal(calls[2].params.content_revision, 42); assert.ok(calls.every(call => call.invalidate === false));
+  assert.deepEqual(result, { pane_id: 'pane-1', content_revision: 42, viewport_text: 'visible\n', scroll: { offset_from_bottom: 5, max_offset_from_bottom: 200, viewport_rows: 24 } });
+  assert.deepEqual(calls.map(call => call.method), ['pane.copy_motion', 'pane.get', 'pane.read', 'pane.get', 'pane.copy_motion']);
+  assert.equal(calls[4].params.content_revision, 42); assert.ok(calls.every(call => call.invalidate === false));
 });
 test('copy context fails when content changes during geometry acquisition', async () => {
   let reads = 0;
   await assert.rejects(copyContext({ id: 'pane-1' }, async method => {
     if (method === 'pane.get') return { pane: { scroll: { offset_from_bottom: 0, max_offset_from_bottom: 200, viewport_rows: 24 } } };
+    if (method === 'pane.read') return { read: { text: 'visible\n', truncated: false } };
     if (++reads === 2) throw new Error('stale_content');
     return { content_revision: 42 };
   }), /stale_content/);
   await assert.rejects(copyContext({ id: 'pane-1' }, async () => ({ content_revision: 43 })), /changing/);
+});
+
+test('copy context rejects viewport movement during the native text read', async () => {
+  let reads = 0;
+  await assert.rejects(copyContext({ id: 'pane-1' }, async method => {
+    if (method === 'pane.get') return { pane: { scroll: { offset_from_bottom: reads++, max_offset_from_bottom: 200, viewport_rows: 24 } } };
+    if (method === 'pane.read') return { read: { text: 'visible\n', truncated: false } };
+    return { content_revision: 42 };
+  }), /viewport changed/);
 });

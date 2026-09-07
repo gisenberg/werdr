@@ -1,12 +1,14 @@
 import type { Terminal } from 'ghostty-web';
 import { loadGhostty } from './terminal-loader';
 import { fontFamilies, type Preferences, palette } from '../shared/settings';
+import { NativeCopyMode } from './native-copy-mode';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
   private readonly content = document.createElement('div');
   private readonly shield = document.createElement('div');
   private readonly title = document.createElement('button');
+  readonly copyMode: NativeCopyMode;
   private terminal?: Terminal;
   private socket?: WebSocket;
   private cleanup?: () => void;
@@ -19,14 +21,15 @@ export class TerminalController {
   ready = false;
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   get selection() { return this.terminal?.getSelection() || ''; }
-  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void) {
+  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, report: (message: string, failed?: boolean) => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
+    this.copyMode = new NativeCopyMode(this.element, this.content, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.terminal?.focus(), report);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
-  activate(active: boolean) { this.element.classList.toggle('pane-active', active); }
+  activate(active: boolean) { if (!active) this.copyMode.exit(true, false); this.element.classList.toggle('pane-active', active); }
   label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.activate(active); this.element.setAttribute('aria-label', label); }
   show(visible: boolean) {
     const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible;
@@ -37,13 +40,14 @@ export class TerminalController {
     if (this.terminal) { Object.assign(this.terminal.options, this.options()); if (this.visible) this.fit?.(); }
   }
   private options() { return { fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
-  focus() { this.terminal?.focus(); }
+  focus() { if (this.copyMode.active) this.copyMode.focus(); else this.terminal?.focus(); }
   recover() {
     // Connectivity recovery resumes only exhausted attachments. Healthy sockets
     // and their scheduled retries retain their renderer and ownership.
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
+    this.copyMode.exit(true, false);
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
@@ -68,14 +72,15 @@ export class TerminalController {
     const boot = document.querySelector<HTMLDialogElement>('#boot')!;
     const reveal = () => { if (epoch === this.epoch && this.ready && !boot.open) { this.shield.hidden = true; this.changed(); } };
     boot.addEventListener('close', reveal);
-    const input = term.onData(text => send({ type: 'terminal.input', text }));
-    const resize = term.onResize(({ cols, rows }) => { if (!applyingFrame && this.visible) send({ type: 'terminal.resize', cols, rows }); });
+    const input = term.onData(text => { if (!this.copyMode.active) send({ type: 'terminal.input', text }); });
+    const resize = term.onResize(({ cols, rows }) => { this.copyMode.afterFrame(); if (!applyingFrame && this.visible) send({ type: 'terminal.resize', cols, rows }); });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
-    const wheel = (event: WheelEvent) => { event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * this.preferences.scrollLines)) }); };
+    const wheel = (event: WheelEvent) => { if (this.copyMode.active) return; event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * this.preferences.scrollLines)) }); };
     this.content.addEventListener('wheel', wheel, { passive: false, capture: true });
     let touchY: number | undefined;
     const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined; };
     const touchMove = (event: TouchEvent) => {
+      if (this.copyMode.active) return;
       if (touchY === undefined || event.touches.length !== 1) return;
       const delta = touchY - event.touches[0].clientY; if (Math.abs(delta) < 12) return;
       event.preventDefault(); event.stopImmediatePropagation(); touchY = event.touches[0].clientY;
@@ -88,16 +93,17 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
-        if (frame.type === 'terminal.closed') { this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
+        if (frame.type === 'terminal.closed') { this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
         if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
         const bytes = Uint8Array.from(atob(frame.bytes), c => c.charCodeAt(0));
         applyingFrame = true;
         try { if (term.cols !== frame.width || term.rows !== frame.height) term.resize(frame.width, frame.height); } finally { applyingFrame = false; }
-        term.write(bytes, () => { if (epoch === this.epoch) { this.ready = true; this.failure = undefined; this.attempt = 0; reveal(); } });
+        term.write(bytes, () => { if (epoch === this.epoch) { this.ready = true; this.failure = undefined; this.attempt = 0; this.copyMode.afterFrame(); reveal(); } });
       } catch { ws.close(1002, 'Invalid frame'); }
     };
     ws.onclose = () => {
       if (epoch !== this.epoch) return;
+      this.copyMode.exit(false, false);
       this.ready = false; this.shield.hidden = false;
       if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();

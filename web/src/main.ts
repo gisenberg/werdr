@@ -56,7 +56,7 @@ const fleet = new FleetClient(applyFleet, online => {
 });
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
-const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`));
+const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
 function selectPane(id: string) { if (paneId === id && !pendingPane) return; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
@@ -259,6 +259,8 @@ function refreshCommands() {
     { label: 'Fleet activity and notifications', run: () => activity.open() },
     { label: 'Integrations: agent hooks and readiness', disabled: !online, run: () => integrations.open() },
     { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },
+    { label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(); } },
+    { label: 'Terminal: search native scrollback', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(true); } },
     { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
     { label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
     { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
@@ -312,6 +314,7 @@ element('command-done').onclick = () => element<HTMLDialogElement>('command-dial
 element('command-search').oninput = renderCommands;
 element('command-search').onkeydown = event => { if (event.key === 'ArrowDown') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); } else if (event.key === 'Enter') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.click(); } };
 document.addEventListener('keydown', event => {
+  if (event.target instanceof Element && event.target.closest('.copy-layer, .copy-toolbar') && event.key.toLowerCase() !== 'k') return;
   if (!authenticated || !(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); if (!document.querySelector('dialog[open]')) openCommands(); }
   else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open]') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }

@@ -22,7 +22,7 @@ export class DesktopSurface {
   private separators = document.createElement('div');
   private retry?: ReturnType<typeof setTimeout>;
   private drag?: { path: boolean[]; original: number; node: Extract<LayoutNode, { type: 'split' }> };
-  constructor(private container: HTMLElement, private shield: HTMLElement, private api: Api, preferences: Preferences, colors: ReturnType<typeof palette>, private select: (id: string) => void, private error: (message: string) => void) {
+  constructor(private container: HTMLElement, private shield: HTMLElement, private api: Api, preferences: Preferences, colors: ReturnType<typeof palette>, private select: (id: string) => void, private error: (message: string) => void, private notice: (message: string) => void) {
     this.preferences = preferences; this.colors = colors; this.separators.className = 'pane-separators'; container.append(this.separators);
     new ResizeObserver(() => this.render()).observe(container);
     matchMedia('(max-width: 700px)').addEventListener('change', () => this.render());
@@ -95,7 +95,7 @@ export class DesktopSurface {
         if (hidden) { hidden[1].dispose(); this.controllers.delete(hidden[0]); }
       }
       if (!controller && this.controllers.size < 16) {
-        controller = new TerminalController(this.machine, id, pane.terminal_id, this.preferences, this.colors, () => this.select(id), this.readiness);
+        controller = new TerminalController(this.machine, id, pane.terminal_id, this.preferences, this.colors, () => this.select(id), this.readiness, this.api, (message, failed) => failed ? this.error(message) : this.notice(message));
         this.controllers.set(id, controller); this.container.append(controller.element);
       }
       if (!controller) {

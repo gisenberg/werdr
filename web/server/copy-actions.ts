@@ -32,8 +32,12 @@ export async function copyContext(value: Record<string, unknown>, request: (meth
   const max_offset_from_bottom = integer(scroll.max_offset_from_bottom, Number.MAX_SAFE_INTEGER, 'native scrollback size');
   const viewport_rows = integer(scroll.viewport_rows, 0xffffffff, 'native viewport rows');
   if (!viewport_rows || offset_from_bottom > max_offset_from_bottom) throw new ManagementError('Invalid native scrollback geometry.', 409);
+  const visible = await request('pane.read', { pane_id, source: 'visible', format: 'text', strip_ansi: true }, false);
+  if (typeof visible.read?.text !== 'string' || visible.read.truncated) throw new ManagementError('Native viewport text is unavailable.', 409);
+  const after = await request('pane.get', { pane_id }, false);
+  if (after.pane?.scroll?.offset_from_bottom !== offset_from_bottom || after.pane?.scroll?.max_offset_from_bottom !== max_offset_from_bottom || after.pane?.scroll?.viewport_rows !== viewport_rows) throw new ManagementError('Native viewport changed. Retry after scrolling finishes.', 409);
   await request('pane.copy_motion', { pane_id, cursor, motion, content_revision }, false);
-  return { pane_id, content_revision, scroll: { offset_from_bottom, max_offset_from_bottom, viewport_rows } };
+  return { pane_id, content_revision, viewport_text: visible.read.text, scroll: { offset_from_bottom, max_offset_from_bottom, viewport_rows } };
 }
 
 export function copyAction(value: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
