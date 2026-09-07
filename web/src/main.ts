@@ -47,6 +47,9 @@ function rememberSelection() {
   history.replaceState(null, '', url);
 }
 let authenticated = false, refreshing = false, refreshAgain = false;
+let interactionRevision = 0;
+let closingFocus: { machine: string; workspace: string; tab: string } | undefined;
+for (const type of ['pointerdown', 'keydown', 'paste']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
 let gatewayOnline = false;
 const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
@@ -79,12 +82,32 @@ function selectHost(id: string) {
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
-  pendingPane = waitForSnapshot ? { machine, pane, tab } : undefined;
+  if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
   if (machineId !== machine) detach();
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
   if (waitForSnapshot) surface.requestFocus(pane);
+}
+let pendingPaneTimer: ReturnType<typeof setTimeout> | undefined;
+function waitForPane(machine: string, pane: string, tab: string, closedNotice = 'Requested pane closed before it could attach.') {
+  clearTimeout(pendingPaneTimer);
+  const pending = { machine, pane, tab }; pendingPane = pending;
+  const inspect = async () => {
+    if (pendingPane !== pending || machineId !== machine || !authenticated) return;
+    try {
+      if (selectedHost()?.connection === 'online') {
+        const result = await api('/api/action', { machine, id: pane, action: 'pane.exists' });
+        if (pendingPane !== pending || machineId !== machine) return;
+        if (!result.exists) {
+          pendingPane = undefined; paneId = ''; choose(); surface.requestFocus(paneId); renderFleetNavigation(); fleet.resync();
+          status(`[NOTICE] ${closedNotice}`); return;
+        }
+      }
+    } catch { /* Reconnect and authentication retain their existing UI. */ }
+    if (pendingPane === pending && authenticated) pendingPaneTimer = setTimeout(inspect, 2000);
+  };
+  pendingPaneTimer = setTimeout(inspect, 500);
 }
 function applyFleet(state: FleetState, added?: Notice) {
   const previous = selectedHost()?.connection; fleetState = state;
@@ -93,6 +116,10 @@ function applyFleet(state: FleetState, added?: Notice) {
     detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
+  if (closingFocus?.machine === machineId && closingFocus.workspace === workspaceId && closingFocus.tab === tabId) {
+    const nativeFocus = snapshot.layouts.find(layout => layout.tab_id === tabId)?.focused_pane_id;
+    if (nativeFocus && nativeFocus !== paneId && snapshot.panes.some(pane => pane.pane_id === nativeFocus && pane.tab_id === tabId)) { paneId = nativeFocus; surface.requestFocus(paneId); }
+  }
   if (pendingPane?.machine === machineId) { const target = snapshot.panes.find(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab); if (target) { workspaceId = target.workspace_id; tabId = target.tab_id; paneId = target.pane_id; } }
   if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) { pendingPane = undefined; choose(); }
   renderFleetNavigation(); hostManager.update(state.hosts); activity.update(state, added);
@@ -184,16 +211,19 @@ async function refresh() {
 function detach() { surface.clear(); }
 async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId) {
+  const interaction = interactionRevision, source = { machine: selected, workspace: workspaceId, tab: tabId };
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
     const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
     if (machineId !== selected) return;
+    if (action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
     if (created && action !== 'pane.close') {
-      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; pendingPane = { machine: selected, pane: paneId, tab: tabId }; surface.waitForSelection(); renderNavigation(); renderFleetNavigation();
+      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
     }
     if (result.focused_pane_id) paneId = result.focused_pane_id;
     closeRail(); await refresh(); surface.refresh(); fleet.resync();
+    if (response.notice) status(`[NOTICE] ${response.notice}`);
   }
   catch (error) { status(`[ERROR] ${(error as Error).message}`); }
 }
@@ -261,6 +291,7 @@ function refreshCommands() {
     { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },
     { label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(); } },
     { label: 'Terminal: search native scrollback', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(true); } },
+    { label: 'Terminal: open scrollback in host editor', disabled: !online || !pane, run: () => { void action('pane.edit_scrollback', pane, {}, machine); } },
     { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
     { label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
     { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },

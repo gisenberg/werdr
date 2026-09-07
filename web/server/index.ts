@@ -17,6 +17,7 @@ import { MachineManagement, ManagementError } from './machine-management.ts';
 import { browserLayout } from './layout.ts';
 import { browserAction } from './browser-actions.ts';
 import { copyContext, copyReadActions } from './copy-actions.ts';
+import { openScrollbackEditor, paneExists } from './scrollback-editor.ts';
 import { pluginAction } from './plugin-actions.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
@@ -163,6 +164,8 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req);
         if (value.action === 'pane.copy_context') return reply(res, 200, await fleet.action(publicId(value.machine), request => copyContext(value, request)));
+        if (value.action === 'pane.edit_scrollback') return reply(res, 200, await fleet.action(publicId(value.machine), request => openScrollbackEditor(value, request)));
+        if (value.action === 'pane.exists') return reply(res, 200, await paneExists(value, (method, params) => fleet.request(publicId(value.machine), method, params, false)));
         if (typeof value.action === 'string' && value.action.startsWith('plugin.')) {
           const machine = publicId(value.machine);
           const read = ['plugin.list', 'plugin.action.list', 'plugin.log.list'].includes(value.action);
