@@ -1,0 +1,7 @@
+@font-face {
+  font-family: 'C64 Pro Mono';
+  src: url('/fonts/c64/C64_Pro_Mono-STYLE.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}

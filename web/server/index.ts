@@ -8,6 +8,7 @@ import { actionArgs, command, machines, publicId, resolveMachine, terminalProces
 import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 import { authentication, LoginLimiter } from './auth.ts';
+import { bootFonts } from './boot-fonts.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
@@ -17,6 +18,7 @@ const origin = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
 const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_HOSTS);
 const tokenPath = resolve(root, process.env.WERDR_TOKEN_FILE || '.auth-token');
 const auth = await authentication(tokenPath, process.env.WERDR_CREDENTIALS_FILE ? resolve(root, process.env.WERDR_CREDENTIALS_FILE) : undefined);
+const fonts = await bootFonts(process.env.WERDR_BOOT_FONT_DIR);
 const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
 const sessions = new Map<string, { expiry: number; method: 'password' | 'token' }>();
@@ -113,9 +115,14 @@ const server = createServer(async (req, res) => {
       return reply(res, 404, { error: 'Unknown route' });
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply(res, 405, { error: 'Method not allowed' });
+    const font = fonts.get(url.pathname);
+    if (font) {
+      res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'private, max-age=86400' });
+      return res.end(req.method === 'HEAD' ? undefined : font);
+    }
     const path = resolve(root, 'dist', '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     if (!path.startsWith(resolve(root, 'dist') + sep)) return reply(res, 404, { error: 'Not found' });
-    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
+    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
     let data: Buffer;
     try { data = await readFile(path); } catch { return reply(res, 404, { error: 'Not found' }); }
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });

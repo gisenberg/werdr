@@ -10,7 +10,7 @@ test('configured DNS alias supports login and terminal WebSockets without broade
   const alias = runtime.url.replace('127.0.0.1', 'localhost');
   await page.goto(alias);
   await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
   await expect(page.locator('#login')).not.toBeVisible();
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await expect(page.locator('#shield')).toBeHidden();
@@ -27,7 +27,7 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await page.goto(runtime.url);
   await expect(page.locator('#login')).toBeVisible();
   await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
   await expect(page.locator('#login')).not.toBeVisible();
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await expect(page.locator('#shield')).toBeHidden();
@@ -60,7 +60,7 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await page.reload();
   await expect(page.locator('#login')).toBeVisible();
   await page.locator('#token').fill(runtime.token);
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
   await expect(page.locator('#shield')).toBeHidden();
   expect(JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.find((p: any) => p.pane_id === pane).terminal_id).toBe(terminalId);
   await page.locator('textarea').focus(); await page.keyboard.type('printf "AFTER_%s\\n" "$WERDR_TEST_VALUE"'); await page.keyboard.press('Enter');

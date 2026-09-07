@@ -21,7 +21,7 @@ test('startup fills desktop and mobile, changes profiles, and has no settings or
   expect(await page.evaluate(() => localStorage.getItem('werdr-last-boot'))).not.toBe(first);
   await page.screenshot({ path: 'test-results/boot-mobile.png' });
   await page.keyboard.press('Escape');
-  await expect(page.locator('#boot')).toHaveCount(0);
+  await expect(page.locator('#boot')).toBeVisible();
   await expect(page.locator('#username')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   await page.screenshot({ path: 'test-results/login-mobile.png' });
@@ -41,11 +41,14 @@ test('password login generates a persistent replacement token with credential-on
   try {
   await page.goto(runtime.url);
   await page.locator('#username').fill(runtime.username);
+  await page.locator('#username').press('Enter');
   await page.locator('#password').fill('incorrect');
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
-  await expect(page.locator('#login-error')).toHaveText('Invalid credentials');
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
+  await expect(page.locator('#login-error')).toContainText('Invalid credentials');
+  await page.locator('#username').fill(runtime.username);
+  await page.locator('#username').press('Enter');
   await page.locator('#password').fill(runtime.password);
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
   await expect(page.locator('#login')).not.toBeVisible();
   await page.getByRole('button', { name: 'ACCESS TOKEN', exact: true }).click();
   await page.getByRole('button', { name: 'GENERATE TOKEN', exact: true }).click();
@@ -61,7 +64,7 @@ test('password login generates a persistent replacement token with credential-on
   await page.reload();
   await page.getByRole('button', { name: 'USE ACCESS TOKEN', exact: true }).click();
   await page.locator('#token').fill(token);
-  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await page.getByRole('button', { name: '[ENTER]', exact: true }).click();
   await expect(page.locator('#login')).not.toBeVisible();
   await expect(page.locator('#access-token')).toBeHidden();
   expect(await page.evaluate(value => Object.values(localStorage).includes(value), token)).toBe(false);
@@ -86,7 +89,7 @@ test('BIOS memory count overwrites its row and the display retains a 4:3 shape',
   const text = await page.locator('#boot pre').textContent();
   expect(text).toContain('016384 KB OK');
   expect(text!.match(/KB OK/g)).toHaveLength(1);
-  const box = await page.locator('#boot pre').boundingBox();
+  const box = await page.locator('#boot-frame').boundingBox();
   expect(box!.width / box!.height).toBeCloseTo(4 / 3, 2);
   await page.screenshot({ path: 'test-results/boot-bios.png' });
 });

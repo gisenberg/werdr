@@ -1,5 +1,5 @@
 import type { Terminal } from 'ghostty-web';
-import { boot } from './boot';
+import { BootConsole } from './boot';
 import './style.css';
 
 interface Machine { id: string; label: string; enabled: boolean; target?: string }
@@ -12,10 +12,9 @@ app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-con
 <main><aside id="rail"><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav></aside>
 <section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
-<dialog id="login"><form><h1>werdr</h1><p>Herdr sessions. Anywhere on your network.</p><div id="credentials" hidden><label>USERNAME<input id="username" autocomplete="username" maxlength="256" autocapitalize="none" spellcheck="false"></label><label>PASSWORD<input id="password" type="password" autocomplete="current-password" maxlength="4096"></label></div><label id="token-field">ACCESS TOKEN<input id="token" type="password" required autocomplete="off" maxlength="4096"></label><button type="submit">[ENTER] CONNECT</button><button id="login-mode" type="button" hidden>USE ACCESS TOKEN</button><p id="login-error" role="alert"></p></form></dialog>
 <dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>`;
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const login = element<HTMLDialogElement>('login');
+const boot = new BootConsole(value => api('/api/login', value), refresh);
 const status = (text: string) => { element('status').textContent = text; };
 let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = { workspaces: [], tabs: [], panes: [] };
@@ -30,7 +29,7 @@ function loadGhostty() {
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();
-  if (res.status === 401) { authenticated = false; detach(); element('access-token').hidden = true; element<HTMLDialogElement>('token-dialog').close(); if (!login.open) login.showModal(); }
+  if (res.status === 401) { authenticated = false; detach(); element('access-token').hidden = true; element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -173,30 +172,7 @@ element('new-tab').onclick = () => void action('tab.create', workspaceId);
 element('split').onclick = () => void action('pane.split', paneId, { direction: 'right' });
 element('takeover').onclick = () => void attach(true);
 element('close').onclick = () => { if (confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
-element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; detach(); login.showModal(); } catch (error) { status(String(error)); } };
-login.addEventListener('cancel', e => e.preventDefault());
-let passwordLogin = false;
-function setLoginMode(password: boolean) {
-  passwordLogin = password;
-  element('credentials').hidden = !password; element('token-field').hidden = password;
-  element<HTMLInputElement>('username').required = password;
-  element<HTMLInputElement>('password').required = password;
-  element<HTMLInputElement>('token').required = !password;
-  element<HTMLInputElement>('password').value = ''; element<HTMLInputElement>('token').value = '';
-  element('login-mode').textContent = password ? 'USE ACCESS TOKEN' : 'USE USERNAME AND PASSWORD';
-  element('login-error').textContent = '';
-}
-element('login-mode').onclick = () => { setLoginMode(!passwordLogin); element<HTMLInputElement>(passwordLogin ? 'username' : 'token').focus(); };
-login.querySelector('form')!.onsubmit = async event => {
-  event.preventDefault();
-  const submit = login.querySelector<HTMLButtonElement>('button[type="submit"]')!; submit.disabled = true;
-  try {
-    await api('/api/login', passwordLogin ? { username: element<HTMLInputElement>('username').value, password: element<HTMLInputElement>('password').value } : { token: element<HTMLInputElement>('token').value });
-    element<HTMLInputElement>('token').value = ''; element<HTMLInputElement>('password').value = '';
-    element('login-error').textContent = ''; login.close(); await refresh();
-  } catch (error) { element('login-error').textContent = (error as Error).message; }
-  finally { submit.disabled = false; }
-};
+element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; detach(); boot.requireAuthentication(); } catch (error) { status(String(error)); } };
 const tokenDialog = element<HTMLDialogElement>('token-dialog');
 element('access-token').onclick = () => tokenDialog.showModal();
 element('token-done').onclick = () => tokenDialog.close();
@@ -217,10 +193,12 @@ element('generate-token').onclick = async () => {
 async function start() {
   const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });
   const configured = config.then(value => ({ value }), () => ({ value: { passwordEnabled: false } }));
-  await boot();
+  await boot.ready;
   const { value } = await configured;
-  setLoginMode(value.passwordEnabled); element('login-mode').hidden = !value.passwordEnabled;
+  boot.configure(value.passwordEnabled);
   await refresh();
+  if (authenticated) await boot.complete();
+  else boot.requireAuthentication();
 }
 function closeRail() { app.classList.remove('hosts-open'); element('host-toggle').setAttribute('aria-expanded', 'false'); }
 element('host-toggle').onclick = () => { const open = app.classList.toggle('hosts-open'); element('host-toggle').setAttribute('aria-expanded', String(open)); };

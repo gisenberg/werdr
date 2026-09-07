@@ -39,13 +39,15 @@ The gateway creates that ignored, owner-only file on first start.
 To enable username/password login, set `WERDR_CREDENTIALS_FILE` to an owner-only JSON file outside the checkout containing `username` and `passwordHash`.
 The hash format is wmux-compatible `scrypt$<32 hex salt characters>$<64 hex hash characters>`; plaintext passwords are never stored.
 A private copy of an existing wmux `auth.json` can be used as this file.
-When configured, the login form defaults to credentials and also offers token login.
+When configured, the selected boot console prompts for a username, then a password after Enter, and also offers token login.
+Authentication stays in that machine's console through retries and access granted; password and token characters are not echoed into the console.
 After password login, **ACCESS TOKEN** lets you generate a replacement token for another browser.
 Generation atomically updates `WERDR_TOKEN_FILE`, invalidates the old token, and revokes sessions and terminal sockets authenticated with it.
 Password-authenticated sessions remain signed in, and token-authenticated sessions cannot generate tokens.
 
 Use the workspace `[+]` control to launch a shell.
 On phones, `[H] HOSTS` opens the navigation drawer.
+The C64 font is bundled; provision the other two faces privately using the [font setup](werdr/BOOT_FONTS.md) to match wmux.
 
 For an existing herdr installation, set `WERDR_HERDR_BIN` to its executable and omit the trial configuration override.
 Build the Rust binary using upstream's documented toolchain when the pinned Linux fixture is unsuitable.
@@ -56,7 +58,7 @@ Build the Rust binary using upstream's documented toolchain when the pinned Linu
 - Workspace/tab creation, pane splitting and closure, and explicit terminal takeover.
 - Live terminal input, resize, and scroll through herdr's controller stream.
 - Desktop and phone layouts with a collapsed mobile host drawer.
-- Full-screen Commodore 64, Apple IIe, and IBM PC AT startup sequences using system fonts, randomly chosen each page load without consecutive repeats when browser storage is available.
+- Full-screen Commodore 64, Apple IIe, and IBM PC AT startup sequences using wmux's original embedded fonts when provisioned, randomly chosen each page load without consecutive repeats when browser storage is available.
 - Startup has no visible settings or prompts; any key or click dismisses it, and reduced-motion preferences shorten it.
 - Authenticated REST and WebSocket access with logout revocation.
 
@@ -75,6 +77,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_HOST` | Private IP literal, default `127.0.0.1`. |
 | `WERDR_ALLOWED_HOSTS` | Comma-separated exact DNS names or IP literals accepted in addition to the bind address, without ports or wildcards. |
 | `WERDR_PORT` | Gateway port, default `3480`. |
+| `WERDR_BOOT_FONT_DIR` | Optional private directory containing `Apple_2.woff2` and `IBM_CGA.woff2`; see [font provisioning](werdr/BOOT_FONTS.md). |
 | `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |
