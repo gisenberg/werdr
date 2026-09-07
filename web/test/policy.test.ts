@@ -100,3 +100,11 @@ test('terminal companion overrides never replace runtime commands on any platfor
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 });
+
+test('scroll positions and native modifier bits survive validation', () => {
+  const base = { type: 'terminal.scroll', direction: 'up', lines: 3 };
+  assert.deepEqual(terminalInput(base), base);
+  assert.deepEqual(terminalInput({ ...base, column: 499, row: 0, modifiers: 15, ignored: true }), { ...base, column: 499, row: 0, modifiers: 15 });
+  for (const field of ['column', 'row', 'modifiers']) for (const value of [-1, 1.5, '1', null, 500]) assert.throws(() => terminalInput({ ...base, [field]: value }));
+  assert.throws(() => terminalInput({ ...base, modifiers: 16 }));
+});

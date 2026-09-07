@@ -33,6 +33,17 @@ export function dimension(value: unknown): number {
 export function terminalInput(value: any): object {
   if (value?.type === 'terminal.input' && typeof value.text === 'string' && Buffer.byteLength(value.text) <= 32768) return { type: value.type, text: value.text };
   if (value?.type === 'terminal.resize') return { type: value.type, cols: dimension(value.cols), rows: dimension(value.rows) };
-  if (value?.type === 'terminal.scroll' && ['up', 'down'].includes(value.direction) && Number.isInteger(value.lines) && value.lines >= 1 && value.lines <= 100) return { type: value.type, direction: value.direction, lines: value.lines };
+  if (value?.type === 'terminal.scroll' && ['up', 'down'].includes(value.direction) && Number.isInteger(value.lines) && value.lines >= 1 && value.lines <= 100) {
+    const point: Record<string, number> = {};
+    for (const key of ['column', 'row']) if (value[key] !== undefined) {
+      if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] >= 500) throw new Error('Invalid scroll position');
+      point[key] = value[key];
+    }
+    if (value.modifiers !== undefined) {
+      if (!Number.isInteger(value.modifiers) || value.modifiers < 0 || value.modifiers > 15) throw new Error('Invalid scroll modifiers');
+      point.modifiers = value.modifiers;
+    }
+    return { type: value.type, direction: value.direction, lines: value.lines, ...point };
+  }
   throw new Error('Invalid terminal command');
 }

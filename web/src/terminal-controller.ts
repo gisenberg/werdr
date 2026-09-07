@@ -82,7 +82,12 @@ export class TerminalController {
     const input = term.onData(text => { if (!this.copyMode.active) send({ type: 'terminal.input', text }); });
     const resize = term.onResize(({ cols, rows }) => { this.links.cancel(); this.copyMode.afterFrame(); if (!applyingFrame && this.visible) send({ type: 'terminal.resize', cols, rows }); });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
-    const wheel = (event: WheelEvent) => { if (this.copyMode.active) return; this.links.cancel(); event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * this.preferences.scrollLines)) }); };
+    // AttachScroll uses crossterm modifier bits, unlike SGR mouse reports.
+    const scrollPoint = (event: { clientX: number; clientY: number; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean }) => {
+      const point = this.mouse.point(event);
+      return point ? { column: point.column, row: point.row, modifiers: (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0) } : {};
+    };
+    const wheel = (event: WheelEvent) => { if (this.copyMode.active || !event.deltaY) return; this.links.cancel(); event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'terminal.scroll', ...scrollPoint(event), direction: event.deltaY < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.ceil(Math.abs(event.deltaY) / 90) * this.preferences.scrollLines)) }); };
     this.content.addEventListener('wheel', wheel, { passive: false, capture: true });
     let touchY: number | undefined;
     const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined; };
@@ -91,7 +96,7 @@ export class TerminalController {
       if (touchY === undefined || event.touches.length !== 1) return;
       const delta = touchY - event.touches[0].clientY; if (Math.abs(delta) < 12) return;
       this.links.cancel(); event.preventDefault(); event.stopImmediatePropagation(); touchY = event.touches[0].clientY;
-      send({ type: 'terminal.scroll', direction: delta < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.round(Math.abs(delta) / 14))) });
+      send({ type: 'terminal.scroll', ...scrollPoint(event.touches[0]), direction: delta < 0 ? 'up' : 'down', lines: Math.min(100, Math.max(1, Math.round(Math.abs(delta) / 14))) });
     };
     this.content.addEventListener('touchstart', touchStart, { passive: true, capture: true }); this.content.addEventListener('touchmove', touchMove, { passive: false, capture: true });
     const textarea = this.content.querySelector('textarea');
