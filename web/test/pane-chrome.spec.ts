@@ -43,7 +43,9 @@ test('native pane borders, shared dividers and bottom tabs preserve terminal inp
     await page.locator('#settings').click(); await page.locator('[data-setting=paneBorders]').uncheck();
     await page.getByRole('button', { name: 'SAVE SETTINGS', exact: true }).click(); await expect(page.locator('#settings-dialog')).toBeHidden();
     await expect(secondPane).toHaveCSS('border-left-width', '0px');
+    const ratio = Number(await divider.getAttribute('aria-valuenow'));
     await divider.focus(); await page.keyboard.press('ArrowLeft');
+    await expect(divider).toHaveAttribute('aria-valuenow', String(ratio - 5));
     await secondPane.locator('textarea').focus(); await page.keyboard.type("export CHROME_KEEP=alive; printf 'CHROME_%s\\n' \"$CHROME_KEEP\""); await page.keyboard.press('Enter');
     await expect.poll(() => runtime.cli('pane', 'read', second, '--source', 'recent')).toContain('CHROME_alive');
     const content = await secondPane.locator('.pane-content').boundingBox();
