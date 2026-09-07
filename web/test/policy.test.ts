@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { allowedBind, equalToken, terminalInput } from '../server/policy.ts';
+import { allowedBind, allowedHttpOrigins, requestOrigin, equalToken, terminalInput } from '../server/policy.ts';
 import { actionArgs, invocation, quotePosix } from '../server/herdr.ts';
 
 test('bind boundary admits private literals and rejects public, wildcard and DNS binds', () => {
@@ -14,6 +14,16 @@ test('token comparison and terminal commands fail closed', () => {
   assert.equal(equalToken('', 'secret'), false);
   for (const value of [{ type: 'terminal.resize', cols: 0, rows: 20 }, { type: 'terminal.resize', cols: 90, rows: 90000 }, { type: 'terminal.resize', cols: '80', rows: 20 }, { type: 'terminal.input', text: 'x'.repeat(32769) }, { type: 'server.stop' }, { type: 'terminal.scroll', direction: 'left', lines: 2 }]) assert.throws(() => terminalInput(value));
   assert.deepEqual(terminalInput({ type: 'terminal.input', text: '\u001b[A🐑', extra: true }), { type: 'terminal.input', text: '\u001b[A🐑' });
+});
+test('configured private-service DNS aliases require a matching browser origin', () => {
+  const allowed = allowedHttpOrigins('100.64.1.2', 3480, 'homelab,homelab.example.ts.net');
+  for (const authority of ['100.64.1.2:3480', 'homelab:3480', 'homelab.example.ts.net:3480']) {
+    assert.equal(requestOrigin(authority, `http://${authority}`, allowed), `http://${authority}`);
+    assert.equal(requestOrigin(authority, undefined, allowed), `http://${authority}`);
+  }
+  for (const [authority, origin] of [['evil.invalid:3480', undefined], ['homelab:3481', undefined], ['homelab:3480', 'http://evil.invalid'], ['homelab:3480', 'http://100.64.1.2:3480'], ['homelab:3480', 'null'], ['homelab:3480/ignored', undefined]]) assert.equal(requestOrigin(authority, origin, allowed), undefined);
+  for (const value of ['*', '*.ts.net', 'http://homelab', 'homelab:3480', 'foo/bar', 'foo@bar', '-bad', 'foo..bar']) assert.throws(() => allowedHttpOrigins('127.0.0.1', 3480, value));
+  assert.equal(requestOrigin('[::1]:3480', 'http://[::1]:3480', allowedHttpOrigins('::1', 3480)), 'http://[::1]:3480');
 });
 test('browser actions cannot choose executables, inject options, or stop servers', () => {
   assert.deepEqual(actionArgs({ action: 'pane.split', id: 'w1:p2', direction: 'right' }), ['pane', 'split', 'w1:p2', '--direction', 'right']);

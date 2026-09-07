@@ -6,6 +6,20 @@ let runtime: Awaited<ReturnType<typeof fixture>>;
 test.beforeAll(async () => { runtime = await fixture(); });
 test.afterAll(async () => { await runtime?.close(); });
 
+test('configured DNS alias supports login and terminal WebSockets without broadening origins', async ({ page, request }) => {
+  const alias = runtime.url.replace('127.0.0.1', 'localhost');
+  await page.goto(alias);
+  await page.locator('#token').fill(runtime.token);
+  await page.getByRole('button', { name: '[ENTER] CONNECT', exact: true }).click();
+  await expect(page.locator('#login')).not.toBeVisible();
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await expect(page.locator('#shield')).toBeHidden();
+  const snapshot = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot;
+  await runtime.cli('workspace', 'close', snapshot.workspaces[0].workspace_id);
+  expect((await request.post(`${alias}/api/login`, { headers: { Origin: runtime.url }, data: { token: runtime.token } })).status()).toBe(403);
+  expect((await request.get(runtime.url, { headers: { Host: 'untrusted.invalid:3480' } })).status()).toBe(403);
+});
+
 test('auth, native controls, terminal input, mobile layout and gateway restart preserve the shell', async ({ page, request }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   expect((await request.get(`${runtime.url}/api/machines`)).status()).toBe(401);

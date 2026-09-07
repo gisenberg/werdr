@@ -64,6 +64,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_SOCKET_PATH` | Explicit local API socket override. |
 | `WERDR_SESSION` | Local named session. |
 | `WERDR_HOST` | Private IP literal, default `127.0.0.1`. |
+| `WERDR_ALLOWED_HOSTS` | Comma-separated exact DNS names or IP literals accepted in addition to the bind address, without ports or wildcards. |
 | `WERDR_PORT` | Gateway port, default `3480`. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |
@@ -75,7 +76,9 @@ Windows must be explicitly selected by saved machine ID because herdr's catalog 
 Real remote SSH and Windows validation remain outstanding; see [Windows and terminal compatibility](werdr/WINDOWS.md).
 
 Only loopback and private-network IPs may be bound.
-The gateway requires exact Host and Origin matches and does not yet support a separate reverse-proxy or HTTPS origin.
+Set `WERDR_ALLOWED_HOSTS` to explicitly allow the service's short hostname and full Tailscale DNS name while keeping `WERDR_HOST` on its private IP.
+The browser Origin must match the requested host and port, even when both aliases are individually allowed.
+The gateway does not yet support a separate reverse-proxy or HTTPS origin.
 Access tokens never go into URLs or local storage.
 Browser sessions are held in gateway memory and expire after 12 hours.
 Restarting the gateway requires signing in again and releases terminal controllers; herdr continues owning the running shells.

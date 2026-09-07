@@ -5,7 +5,7 @@ import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { actionArgs, command, machines, publicId, resolveMachine, terminalProcess } from './herdr.ts';
-import { allowedBind, dimension, equalToken, terminalInput } from './policy.ts';
+import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, equalToken, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -13,6 +13,7 @@ const host = process.env.WERDR_HOST || '127.0.0.1';
 const port = Number(process.env.WERDR_PORT || 3480);
 if (!allowedBind(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('WERDR_HOST must be a private IP literal; WERDR_PORT must be valid');
 const origin = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
+const allowedOrigins = allowedHttpOrigins(host, port, process.env.WERDR_ALLOWED_HOSTS);
 const tokenPath = resolve(root, process.env.WERDR_TOKEN_FILE || '.auth-token');
 await mkdir(dirname(tokenPath), { recursive: true, mode: 0o700 });
 try { await writeFile(tokenPath, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); }
@@ -55,11 +56,12 @@ const server = createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-  if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) return reply(res, 403, { error: 'Origin rejected' });
+  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins);
+  if (!browserOrigin) return reply(res, 403, { error: 'Origin rejected' });
   if (++requests > 16) { requests--; return reply(res, 503, { error: 'Busy' }); }
   try {
-    const url = new URL(req.url || '/', origin);
-    if (req.method === 'POST' && req.headers.origin !== origin) return reply(res, 403, { error: 'Origin required' });
+    const url = new URL(req.url || '/', browserOrigin);
+    if (req.method === 'POST' && req.headers.origin !== browserOrigin) return reply(res, 403, { error: 'Origin required' });
     if (url.pathname === '/api/login' && req.method === 'POST') {
       const value = await body(req);
       if (typeof value.token !== 'string' || !equalToken(value.token, token)) return reply(res, 401, { error: 'Invalid access token' });
@@ -107,7 +109,8 @@ let upgrades = 0;
 server.on('upgrade', async (req, socket, head) => {
   socket.on('error', () => socket.destroy());
   const id = session(req);
-  if (!id || req.headers.host !== new URL(origin).host || req.headers.origin !== origin || sockets.size + upgrades >= 16) { socket.destroy(); return; }
+  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins);
+  if (!id || !browserOrigin || req.headers.origin !== browserOrigin || sockets.size + upgrades >= 16) { socket.destroy(); return; }
   upgrades++;
   try {
     const url = new URL(req.url || '/', origin);
