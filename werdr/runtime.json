@@ -5,5 +5,9 @@
   "linux-x64": {
     "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-linux-x86_64",
     "sha256": "a517cef9f178e7339d855a927ae9f3cc541c7b5d8e757c75b405fdc64a2f79ec"
+  },
+  "windows-x64": {
+    "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-windows-x86_64.zip",
+    "sha256": "991abaf23ef7008a6ef91e6c0dbc6caac7f8bfebe9d14e54294ccc6b5352d99e"
   }
 }

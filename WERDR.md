@@ -87,6 +87,7 @@ This is a working first version, not feature parity with wmux.
 | `WERDR_BOOT_FONT_DIR` | Optional private directory containing the 17 ZX Origins WOFF2 files; see [font provisioning](werdr/BOOT_FONTS.md). |
 | `WERDR_CREDENTIALS_FILE` | Optional owner-only credential JSON path; explicit missing or invalid files prevent startup. |
 | `WERDR_TOKEN_FILE` | Token path, default `.auth-token` under `web/`. |
+| `WERDR_WINDOWS_HERDR_BIN` | Optional Windows executable path; remote environment variables such as `%LOCALAPPDATA%` are expanded without shell evaluation. |
 | `WERDR_WINDOWS_MACHINES` | Comma-separated saved machine IDs requiring the experimental PowerShell SSH adapter. |
 
 Add and manage remote machines using `herdr machine` commands.

@@ -57,3 +57,17 @@ test('HTTPS authorities require HTTPS origins, including on WebSocket upgrades',
   assert.equal(requestOrigin('host.example.ts.net:3480', 'http://host.example.ts.net:3480', allowed, 'https'), undefined);
   assert.equal(requestOrigin('host.example.ts.net:3480', undefined, allowed), undefined);
 });
+
+test('managed Windows runtime paths expand environment variables without interpreting shell syntax', () => {
+  const machines = process.env.WERDR_WINDOWS_MACHINES, binary = process.env.WERDR_WINDOWS_HERDR_BIN;
+  try {
+    process.env.WERDR_WINDOWS_MACHINES = 'managed';
+    process.env.WERDR_WINDOWS_HERDR_BIN = "%LOCALAPPDATA%\\werdr\\user's $(literal)\\herdr.exe";
+    const [, args] = invocation({ id: 'managed', label: 'Managed', target: 'trusted-host', session: 'werdr', enabled: true }, ['api', 'snapshot']);
+    const script = Buffer.from(args.at(-1)!.split(' ').at(-1)!, 'base64').toString('utf16le');
+    assert.equal(script, "& ([Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\\werdr\\user''s $(literal)\\herdr.exe')) '--session' 'werdr' 'api' 'snapshot'; exit $LASTEXITCODE");
+  } finally {
+    if (machines === undefined) delete process.env.WERDR_WINDOWS_MACHINES; else process.env.WERDR_WINDOWS_MACHINES = machines;
+    if (binary === undefined) delete process.env.WERDR_WINDOWS_HERDR_BIN; else process.env.WERDR_WINDOWS_HERDR_BIN = binary;
+  }
+});

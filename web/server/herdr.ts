@@ -17,8 +17,12 @@ export function invocation(machine: Machine, args: string[]): [string, string[]]
   // Herdr's catalog deliberately has no OS field. An explicit deployment override
   // selects PowerShell without creating another inventory or guessing from names.
   const windows = (process.env.WERDR_WINDOWS_MACHINES || '').split(',').includes(machine.id);
+  const quotePowerShell = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+  const windowsBinary = process.env.WERDR_WINDOWS_HERDR_BIN;
+  if (windowsBinary && (windowsBinary.length > 4096 || /[\r\n\0]/.test(windowsBinary))) throw new Error('Invalid Windows Herdr executable path');
+  const executable = windowsBinary ? `([Environment]::ExpandEnvironmentVariables(${quotePowerShell(windowsBinary)}))` : quotePowerShell('herdr');
   const remoteCommand = windows
-    ? 'pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from('& ' + ['herdr', ...scoped].map(value => "'" + value.replaceAll("'", "''") + "'").join(' ') + '; exit $LASTEXITCODE', 'utf16le').toString('base64')
+    ? 'pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from('& ' + [executable, ...scoped.map(quotePowerShell)].join(' ') + '; exit $LASTEXITCODE', 'utf16le').toString('base64')
     : ['herdr', ...scoped].map(quotePosix).join(' ');
   return ['ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '--', machine.target, remoteCommand]];
 }

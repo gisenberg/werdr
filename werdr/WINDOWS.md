@@ -2,7 +2,8 @@
 
 The first browser version uses herdr's existing terminal controller on each host.
 It does not replace ConPTY or install wmux's Windows session agent.
-The PowerShell SSH adapter is implemented and its command encoding is unit-tested, but live Windows and remote SSH validation are still required.
+The PowerShell SSH adapter uses the managed Windows runtime path when `WERDR_WINDOWS_HERDR_BIN` is configured.
+A checksum-pinned standalone Windows build and supervised installation workflow are available below.
 
 ## Findings carried from wmux
 
@@ -30,3 +31,20 @@ Compare normal-screen and alternate-screen applications and confirm default colo
 
 Do not force-restart an existing Windows runtime to make a test pass.
 If a regression requires a native fix, add a focused herdr test and patch with the upstream base, rationale, and removal condition recorded.
+
+## Managed Windows server installation
+
+Stage `werdr/install-windows-server.ps1` on a Windows host and run it in a visible wmux pane with `pwsh -NoLogo -NoProfile -File <staged-script>`.
+The script installs the complete checksum-pinned Windows ZIP, including app-local ConPTY libraries, into `%LOCALAPPDATA%\werdr\herdr\<version>`.
+It preserves other herdr installations and never replaces a running managed runtime with a different version.
+The `Werdr Herdr Server` Scheduled Task owns the explicit `werdr` session independently of wmux's pane processes.
+Where permitted, an S4U task starts at system boot; unprivileged accounts fall back to a task that starts at that user's logon.
+Both modes restart failed servers and have no execution-time limit.
+The task does not expose a new network listener: the browser gateway reaches the user-owned native IPC endpoint through authenticated SSH.
+
+Set `WERDR_WINDOWS_MACHINES` to the saved herdr machine IDs and `WERDR_WINDOWS_HERDR_BIN` to `%LOCALAPPDATA%\werdr\herdr\<version>\herdr.exe` on the gateway.
+The remote adapter expands environment variables as a path without interpreting shell expressions, so hosts with different Windows usernames share one deployment setting.
+Use `werdr` as each remote catalog entry's explicit session.
+Herdr's automatic `machine add` bootstrap still emits POSIX shell commands, so Windows entries must be provisioned in its schema-versioned private `client/endpoints.json` catalog after verifying the server explicitly.
+Preserve existing catalog entries, refuse future schema versions, and use an owner-only atomic update with a backup.
+The installation script's success sentinel confirms an actual API snapshot, not only a running task.
