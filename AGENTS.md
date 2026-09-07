@@ -2,6 +2,23 @@
 
 Terminal based agent runtime for coding agents.
 
+## Werdr fork workflow
+
+This section takes precedence over the upstream workflow rules below when working in the `gisenberg/werdr` fork.
+It does not grant maintainer authority in `herdrdev/herdr` or change the rules for submitting work upstream.
+
+- Carry authorized tasks through implementation, verification, commits, pushes, and deployment without separate approval of plans or commit messages.
+- A request to fix, ship, deploy, land, integrate, or merge authorizes the normal fork pull-request and merge workflow once the work is complete and verified.
+- Keep local iteration on the current task branch unless isolation is useful or integration is requested.
+- Preserve unrelated changes and keep commits focused.
+- Review the final diff and run checks appropriate to the changed surfaces before publishing or deploying.
+- For changes confined to the web gateway, browser client, or fork documentation, use `npm --prefix web run check` and relevant browser tests; upstream `just check` is required when changing the Rust runtime or integrating runtime changes.
+- Commit and push completed work before calling a deployment durable, and verify the intended remote commit.
+- Push to both `origin` and `mirror` when both are configured, and report partial failures accurately.
+- Deploy web updates through the pinned homelab installer and preserve the separate native runtime and its live panes.
+- Ask for clarification only when missing information prevents safe progress, or when an action is destructive, irreversible, or outside the authorized scope.
+- Requests limited to review, diagnosis, or explanation do not authorize deployment or merging.
+
 ## Scope and Audience
 
 These instructions are layered.
@@ -125,7 +142,8 @@ When the current pull request head is green and both bot reviews are complete, r
 
 If the current session is already inside an isolated task worktree, keep using it. Do not create nested worktrees.
 
-Before committing, propose the commit message and get alignment.
+For the canonical upstream repository, propose the commit message and get alignment before committing.
+In the werdr fork, follow the autonomous fork workflow above.
 
 After Can confirms the change is integrated, update the shared checkout, remove the task worktree, and delete the task branch locally and remotely.
 
@@ -222,7 +240,8 @@ Put local PRDs, planning notes, and exploratory specs under `.local/prd/`; `.loc
 
 Use lowercase conventional commits, no emojis, and no AI co-author lines. Commit subjects feed preview release notes, so keep them descriptive.
 
-Before committing, propose the commit message and get alignment.
+For the canonical upstream repository, propose the commit message and get alignment before committing.
+In the werdr fork, follow the autonomous fork workflow above.
 
 When a normal feature or fix commit relates to a GitHub issue, add a commit body line `refs #<issue-number>` after the subject:
 
