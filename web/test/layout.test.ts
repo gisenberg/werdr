@@ -26,3 +26,9 @@ test('layout mutations validate native parameters without forwarding extra autho
   assert.throws(() => browserAction({ action: 'pane.swap', id: 'pane:1', direction: 'invalid' }));
   assert.throws(() => browserAction({ action: 'tab.move', id: 'tab:1', index: -1 }));
 });
+test('explicit pane swaps reject ambiguous or incomplete targets, and clearing a name requires null', () => {
+  for (const value of [{ source: 'p1' }, { target: 'p2' }, { source: 'p1', target: 'p1' }, { source: 'p1', target: 'p2', direction: 'left' }]) assert.throws(() => browserAction({ action: 'pane.swap', ...value }));
+  assert.deepEqual(browserAction({ action: 'pane.swap', source: 'p1', target: 'p2' }), { method: 'pane.swap', params: { source_pane_id: 'p1', target_pane_id: 'p2' } });
+  assert.deepEqual(browserAction({ action: 'pane.rename', id: 'p1', label: null }), { method: 'pane.rename', params: { pane_id: 'p1', label: null } });
+  for (const label of [undefined, '', false, 0]) assert.throws(() => browserAction({ action: 'pane.rename', id: 'p1', label }));
+});

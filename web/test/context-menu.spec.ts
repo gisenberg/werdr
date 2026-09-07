@@ -22,8 +22,26 @@ test('context actions retain their native target and support keyboard dismissal'
     expect(new URL(page.url()).searchParams.get('workspace')).toBe(second);
     await expect(page.locator('#shield')).toBeHidden();
     await page.locator('.pane-active .pane-title').focus(); await page.keyboard.press('Shift+F10');
+    await expect(page.getByRole('menuitem', { name: 'CLEAR PANE NAME' })).toHaveCount(0);
+    await page.getByRole('menuitem', { name: 'RENAME', exact: true }).click();
+    await page.locator('#rename-value').fill('MANUAL PANE NAME'); await page.locator('#rename-form button[type=submit]').click();
+    await expect(page.locator('.pane-active .pane-title')).toContainText('MANUAL PANE NAME');
+    await page.locator('.pane-active .pane-title').focus(); await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'CLEAR PANE NAME' }).click();
+    await expect(page.locator('.pane-active .pane-title')).not.toContainText('MANUAL PANE NAME');
+    const paneState = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.find((item: { pane_id: string }) => item.pane_id === new URL(page.url()).searchParams.get('pane'));
+    expect(paneState.label ?? null).toBe(null);
+    await page.locator('.pane-active .pane-title').focus(); await page.keyboard.press('Shift+F10');
+    await expect(page.getByRole('menuitem', { name: 'CLEAR PANE NAME' })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'SPLIT DOWN' }).click(); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
     const pane = new URL(page.url()).searchParams.get('pane')!;
+    await expect(page.locator('#shield')).toBeHidden();
+    const other = await page.locator('.terminal-pane:visible:not(.pane-active)').getAttribute('data-pane');
+    const before = await page.locator(`.terminal-pane[data-pane="${other}"]`).boundingBox();
+    await page.locator(`#panes button[data-id="${other}"]`).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'SWAP WITH FOCUSED PANE' }).click();
+    await expect.poll(async () => (await page.locator(`.terminal-pane[data-pane="${other}"]`).boundingBox())!.y).toBeGreaterThan(before!.y);
+
     await page.locator('.pane-active .pane-title').click({ button: 'right' });
     await page.screenshot({ path: 'test-results/context-menu-desktop.png' });
     await runtime.cli('pane', 'close', pane); await expect(page.getByRole('menu')).not.toBeVisible();

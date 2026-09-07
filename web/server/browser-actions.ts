@@ -31,8 +31,16 @@ export function browserAction(value: Record<string, unknown>): { method: string;
     case 'pane.zoom':
       if (!['toggle', 'on', 'off'].includes(String(value.mode))) throw new ManagementError('Invalid zoom mode.');
       return { method, params: { pane_id: id(), mode: value.mode } };
-    case 'pane.focus_direction':
     case 'pane.swap':
+      if (value.source !== undefined || value.target !== undefined) {
+        if (value.direction !== undefined) throw new ManagementError('Choose pane ids or a direction for swapping.');
+        const source = publicId(value.source), target = publicId(value.target);
+        if (source === target) throw new ManagementError('Choose two different panes.');
+        return { method, params: { source_pane_id: source, target_pane_id: target } };
+      }
+      if (!['left', 'right', 'up', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid pane direction.');
+      return { method, params: { pane_id: id(), direction: value.direction } };
+    case 'pane.focus_direction':
     case 'pane.resize':
       if (!['left', 'right', 'up', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid pane direction.');
       return { method, params: { pane_id: id(), direction: value.direction, ...(method === 'pane.resize' ? { amount: .05 } : {}) } };
@@ -51,7 +59,7 @@ export function browserAction(value: Record<string, unknown>): { method: string;
       return { method, params: { pane_id: id(), destination, focus: true } };
     }
     case 'pane.close': return { method, params: { pane_id: id() } };
-    case 'pane.rename': return { method, params: { pane_id: id(), label: text(value.label) } };
+    case 'pane.rename': return { method, params: { pane_id: id(), label: value.label === null ? null : text(value.label) } };
     case 'pane.split':
       if (!['right', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid split direction.');
       return { method, params: { target_pane_id: id(), direction: value.direction } };

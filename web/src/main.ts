@@ -262,6 +262,9 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
     const tab = item as Snapshot['tabs'][number];
     items.unshift({ label: 'NEW TAB', run: () => invoke('tab.create', tab.workspace_id) });
   }
+  const focusedPane = target.machine === machineId ? paneId : undefined;
+  if (target.kind === 'pane' && focusedPane && focusedPane !== target.id) items.push({ label: 'SWAP WITH FOCUSED PANE', run: () => invoke('pane.swap', target.id, { source: focusedPane, target: target.id }) });
+  if (target.kind === 'pane' && item.label) items.push({ label: 'CLEAR PANE NAME', run: () => invoke('pane.rename', target.id, { label: null }) });
   if (target.kind === 'pane') items.push(
     { label: 'SPLIT RIGHT', run: () => invoke('pane.split', target.id, { direction: 'right' }) },
     { label: 'SPLIT DOWN', run: () => invoke('pane.split', target.id, { direction: 'down' }) },
@@ -355,6 +358,7 @@ function refreshCommands() {
     { label: 'Rename workspace', disabled: !workspace || !online, run: () => rename('workspace.rename', workspace, snapshot.workspaces.find(item => item.workspace_id === workspace)?.label || '', machine) },
     { label: 'Rename tab', disabled: !tab || !online, run: () => rename('tab.rename', tab, snapshot.tabs.find(item => item.tab_id === tab)?.label || '', machine) },
     { label: 'Rename pane', disabled: !pane || !online, run: () => rename('pane.rename', pane, snapshot.panes.find(item => item.pane_id === pane)?.label || '', machine) },
+    { label: 'Clear pane name', disabled: !pane || !online || !snapshot.panes.find(item => item.pane_id === pane)?.label, run: () => { void action('pane.rename', pane, { label: null }, machine); } },
     { label: 'Rename agent', disabled: !pane || !online || !snapshot.agents.some(agent => agent.pane_id === pane && agent.agent), run: () => rename('agent.rename', pane, snapshot.agents.find(agent => agent.pane_id === pane)?.name || '', machine) },
     { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
     { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
