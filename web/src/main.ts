@@ -1,3 +1,4 @@
+import { navigationTargets, resolveNavigationTarget } from './navigation-targets';
 import { BootConsole } from './boot';
 import { RuntimeSettings, runtimeSettingsMarkup } from './runtime-settings';
 import { Integrations, integrationsMarkup } from './integrations';
@@ -324,6 +325,12 @@ function refreshCommands() {
     { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
     { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
     { label: 'Close workspace and end its processes', disabled: !workspace || !online, run: () => { if (!preferences.confirmClose || confirm('Close this workspace and end all its running processes?')) void action('workspace.close', workspace, {}, machine); } },
+    ...navigationTargets(fleetState).map(target => ({ label: target.label, disabled: target.disabled, run: () => {
+      const current = resolveNavigationTarget(fleetState, target);
+      if (!current) { status('[WARN] Navigation target is no longer available.'); return; }
+      selectTarget(current.machine, current.workspace, current.tab, current.pane);
+      if (paneId) surface.requestFocus(paneId);
+    } })),
     ...fleetState.hosts.map(host => ({ label: `Host: ${host.machine.label} [${host.connection}]`, disabled: !host.machine.enabled, run: () => selectHost(host.machine.id) })),
     ...fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).filter(agent => agent.agent || agent.name).map(agent => ({ label: `Agent: ${host.machine.label} / ${agent.name || agent.agent} [${agent.agent_status}]`, disabled: !host.machine.enabled, run: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) }))),
   ];
@@ -340,13 +347,30 @@ function renderCommands() {
     button.onclick = () => { element<HTMLDialogElement>('command-dialog').close(); command.run(); }; parent.append(button);
     if (focused && command.label === focused) button.focus({ preventScroll: true });
   }
+  if (!parent.childElementCount) { const empty = document.createElement('p'); empty.setAttribute('role', 'status'); empty.textContent = 'No matching actions or destinations.'; parent.append(empty); }
   if (focused && !parent.contains(document.activeElement)) element('command-search').focus({ preventScroll: true });
   parent.scrollTop = scroll;
 }
 element('commands').onclick = openCommands; element('pane-actions').onclick = openCommands;
 element('command-done').onclick = () => element<HTMLDialogElement>('command-dialog').close();
 element('command-search').oninput = renderCommands;
-element('command-search').onkeydown = event => { if (event.key === 'ArrowDown') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); } else if (event.key === 'Enter') { event.preventDefault(); element('command-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.click(); } };
+element('command-search').onkeydown = event => {
+  const buttons = [...element('command-list').querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); (event.key === 'ArrowDown' ? buttons[0] : buttons.at(-1))?.focus(); }
+  else if (event.key === 'Enter') { event.preventDefault(); buttons[0]?.click(); }
+};
+element('command-list').onkeydown = event => {
+  const buttons = [...element('command-list').querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+  const index = buttons.indexOf(document.activeElement as HTMLButtonElement); if (index < 0) return;
+  let next: number;
+  if (event.key === 'ArrowDown') next = Math.min(buttons.length - 1, index + 1);
+  else if (event.key === 'ArrowUp') next = index - 1;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = buttons.length - 1;
+  else return;
+  event.preventDefault();
+  if (next < 0) element('command-search').focus(); else buttons[next]?.focus();
+};
 document.addEventListener('keydown', event => {
   if (event.target instanceof Element && event.target.closest('.copy-layer, .copy-toolbar') && event.key.toLowerCase() !== 'k') return;
   if (!authenticated || !(event.ctrlKey || event.metaKey)) return;

@@ -238,3 +238,8 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 #runtime-settings-dialog input, #runtime-settings-dialog select { width: 100%; margin-top: 6px; background: var(--herdr-panel-bg); color: var(--herdr-text); border: 1px solid var(--herdr-surface1); }
 #runtime-settings-dialog input[type=checkbox] { display: inline-block; width: auto; margin-right: 8px; }
 #runtime-settings-error { white-space: pre-wrap; }
+#command-dialog { width: min(760px, calc(100vw - 24px)); max-height: calc(var(--viewport, 100dvh) - 24px); padding: 20px; }
+#command-dialog h1 { font-size: 18px; }
+#command-dialog label { margin: 12px 0; }
+#command-list { max-height: min(55vh, 520px); overflow: auto; }
+#command-list button { text-align: left; overflow-wrap: anywhere; flex-shrink: 0; }
