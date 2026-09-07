@@ -33,10 +33,15 @@ The gateway launches `herdr terminal session control` with a pinned machine snap
 It forwards complete NDJSON records and leaves base64 terminal bytes intact until the browser passes them to Ghostty.
 The fork's terminal client additionally forwards the existing native mouse and keyboard mode messages as optional `terminal.mouse` and `terminal.keyboard` records.
 A separately built companion can provide those records while the checksum-pinned native runtime continues owning existing panes.
+The same companion provides `config runtime read|write` for host runtime settings, using the existing companion executable overrides.
+Writes accept bounded JSON on stdin, validate the native configuration, preserve unrelated TOML, compare the source revision under an interprocess lock, and replace the file atomically.
+The response distinguishes a saved configuration from the running server's `server.reload_config` result.
+These settings are shared by sessions using that host configuration file.
 Set `WERDR_TERMINAL_CLIENT_BIN` for local controllers, `WERDR_POSIX_TERMINAL_CLIENT_BIN` for POSIX SSH controllers, or `WERDR_WINDOWS_TERMINAL_CLIENT_BIN` for Windows SSH controllers.
 These administrator-only executable overrides apply solely to terminal controller processes; API, catalog, setup, and runtime commands retain their existing pinned executable.
 Omitting an override preserves the existing controller executable and its supported records.
 After `just build`, run `WERDR_TERMINAL_CLIENT_BIN="$PWD/target/release/herdr" npm --prefix web run test:e2e -- terminal-client.spec.ts` to verify the companion against an isolated pinned runtime through the authenticated gateway.
+The `native-keyboard.spec.ts`, `native-mouse.spec.ts`, and `runtime-settings.spec.ts` browser specifications use the same companion override.
 Do not replace a live runtime binary to enable client-only capabilities.
 Browser disconnection releases the controller rather than closing the pane.
 Takeover is an explicit action and is never part of automatic reconnect.

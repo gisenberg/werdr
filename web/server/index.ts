@@ -6,7 +6,7 @@ import { sessionStore, SESSION_SECONDS } from './sessions.ts';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { command, publicId, resolveMachine, terminalProcess } from './herdr.ts';
+import { command, companionCommand, CompanionCommandError, publicId, resolveMachine, terminalProcess } from './herdr.ts';
 import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 import { authentication, LoginLimiter } from './auth.ts';
@@ -162,6 +162,15 @@ const handler: RequestListener = async (req, res) => {
         const result = await fleet.request(publicId(url.searchParams.get('machine')), 'layout.export', { tab_id: publicId(url.searchParams.get('tab')) }, false);
         return reply(res, 200, browserLayout(result));
       }
+      if (url.pathname === '/api/runtime-settings' && req.method === 'GET') {
+        const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
+        return reply(res, 200, await companionCommand(machine, ['config', 'runtime', 'read']));
+      }
+      if (url.pathname === '/api/runtime-settings' && req.method === 'POST') {
+        const value = await authorizedBody(req);
+        const machine = await resolveMachine(publicId(value.machine));
+        return reply(res, 200, await companionCommand(machine, ['config', 'runtime', 'write'], { revision: value.revision, settings: value.settings }));
+      }
       if (url.pathname === '/api/action' && req.method === 'POST') {
         const value = await authorizedBody(req);
         if (value.action === 'pane.link.activate') return reply(res, 200, await fleet.action(publicId(value.machine), request => activatePaneLink(value, request)));
@@ -201,6 +210,7 @@ const handler: RequestListener = async (req, res) => {
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : data);
   } catch (error) {
+    if (!res.headersSent && error instanceof CompanionCommandError) return reply(res, error.status, { error: error.message });
     if (!res.headersSent && (error instanceof SettingsConflict || error instanceof SettingsValidationError)) return reply(res, error instanceof SettingsConflict ? 409 : 400, { error: error.message });
     if (!res.headersSent && (error instanceof ManagementError || error instanceof NativeApiError)) return reply(res, error instanceof ManagementError ? error.status : error.code === 'offline' ? 503 : 409, { error: error.message });
     console.error(error instanceof Error ? error.message : error);

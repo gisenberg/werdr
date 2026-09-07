@@ -32,6 +32,7 @@ mod pane;
 mod plugin;
 mod protocol_guard;
 mod runtime;
+mod runtime_settings;
 mod server;
 mod server_not_running;
 mod spec;
@@ -270,6 +271,7 @@ fn run_config_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "check" => config_check(&args[1..]),
         "reset-keys" => config_reset_keys(&args[1..]),
+        "runtime" => runtime_settings::run(&args[1..]),
         "help" | "--help" | "-h" => {
             print_config_help();
             Ok(0)
@@ -1017,6 +1019,7 @@ fn print_session_error(code: &str, message: &str) {
 fn print_config_help() {
     eprintln!("herdr config commands:");
     eprintln!("  herdr config check  validate config.toml and print diagnostics");
+    eprintln!("  herdr config runtime read|write  read runtime settings or save JSON from stdin and reload");
     eprintln!("  herdr config reset-keys  back up config.toml and remove custom keybindings");
 }
 

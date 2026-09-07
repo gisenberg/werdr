@@ -40,6 +40,21 @@ export async function command(machine: Machine, args: string[]): Promise<any> {
   if (response.error) throw new Error(response.error.message || 'Herdr rejected the request');
   return response.result ?? response;
 }
+export class CompanionCommandError extends Error { constructor(message: string, readonly status = 409) { super(message); } }
+export async function companionCommand(machine: Machine, args: string[], input?: object): Promise<any> {
+  const [file, argv] = invocation(machine, args, 'terminal-client');
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, argv, { env: environment, timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      let response;
+      try { response = JSON.parse(stdout); } catch { reject(new CompanionCommandError(error ? 'Runtime settings require an available, current Herdr companion on this host.' : 'Invalid runtime settings response', 503)); return; }
+      if (response.error) reject(new CompanionCommandError(response.error.message || 'Runtime settings failed'));
+      else if (error) reject(error);
+      else resolve(response.result ?? response);
+    });
+    child.stdin?.on('error', () => {}); // The process completion owns errors, including early exit.
+    child.stdin?.end(input === undefined ? '' : JSON.stringify(input));
+  });
+}
 export async function machines(): Promise<Machine[]> {
   const local = localMachine();
   const saved = await command(local, ['machine', 'list', '--json']);

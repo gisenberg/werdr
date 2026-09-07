@@ -230,3 +230,11 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 .terminal-link-notice { position: absolute; z-index: 7; bottom: 0; left: 0; right: 0; display: flex; gap: 1ch; align-items: center; padding: .4em 1ch; background: var(--herdr-panel-bg); color: var(--herdr-text); border-top: 1px solid var(--herdr-surface1); font-family: var(--wmux-mono-font); }
 .terminal-link-notice[hidden] { display: none; }
 .terminal-link-notice a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--herdr-accent); }
+#runtime-settings-dialog { width: min(720px, calc(100vw - 24px)); max-height: calc(var(--viewport, 100dvh) - 24px); overflow: auto; padding: 20px; }
+#runtime-settings-dialog h1 { font-size: 18px; }
+#runtime-settings-dialog p { font-size: 12px; }
+#runtime-settings-fields { border: 1px solid var(--herdr-surface1); padding: 12px; margin: 16px 0; }
+#runtime-settings-dialog label { margin: 10px 0; font-size: 12px; }
+#runtime-settings-dialog input, #runtime-settings-dialog select { width: 100%; margin-top: 6px; background: var(--herdr-panel-bg); color: var(--herdr-text); border: 1px solid var(--herdr-surface1); }
+#runtime-settings-dialog input[type=checkbox] { display: inline-block; width: auto; margin-right: 8px; }
+#runtime-settings-error { white-space: pre-wrap; }
