@@ -12,7 +12,7 @@ export async function initializePlatforms(path: string) {
   storePath = path;
   const data = await readPrivateJson(path, 128 * 1024) as any;
   if (data === undefined) { records = []; return; }
-  if (data.version !== 1 || !Array.isArray(data.machines) || data.machines.length > 128 || data.machines.some((record: any) => !record || !/^[a-f0-9]{32}$/.test(record.id) || typeof record.target !== 'string' || record.target.length > 1024 || typeof record.session !== 'string' || !['windows', 'posix'].includes(record.platform))) throw new Error('Invalid machine platform store');
+  if (data.version !== 1 || !Array.isArray(data.machines) || data.machines.length > 128 || data.machines.some((record: any) => !record || typeof record.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/.test(record.id) || typeof record.target !== 'string' || record.target.length > 1024 || typeof record.session !== 'string' || !['windows', 'posix'].includes(record.platform))) throw new Error('Invalid machine platform store');
   records = data.machines;
 }
 export function withPlatform(machine: Machine): Machine {
