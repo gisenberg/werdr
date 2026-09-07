@@ -36,13 +36,18 @@ Takeover is an explicit action and is never part of automatic reconnect.
 Herdr's rendered frames are authoritative; a `full` frame is not permission to reset a live terminal or replay a raw PTY tail.
 Browser copy mode uses native content revisions, scrollback coordinates, word/paragraph motions, search, and selection reads.
 It brackets native viewport text and scroll geometry with content checks and compares that text with Ghostty's rendered graphemes before establishing selection coordinates.
-Only the active copy pane performs these checks, and queued operations are canceled when copy mode closes or the terminal disconnects.
+Only the active copy pane and explicit link clicks perform these checks, and queued operations are canceled when copy mode closes or the terminal disconnects.
 The browser owns selection highlights and restores the entry scroll offset when copy mode exits normally.
 Scrollback editing focuses the explicitly selected native pane and invokes the host-configured editor through the native API.
 The runtime owns the full-history export, private temporary file, editor process, overlay restoration and cleanup.
 The browser selects an unambiguous new editor pane and follows native focus restoration after closure until the next user interaction.
 Pending pane selection checks authoritative native existence so an editor that exits before its first snapshot cannot trap the browser behind an attachment shield.
 Graphical editors open on the host and may leave no browser terminal.
+Control/Command clicks use the same rendered/native viewport comparison before a host-scoped `pane.link.activate` request.
+The gateway focuses the explicit pane and supplies both the content revision and scroll offset so native plugin handlers receive the clicked pane context.
+Unhandled HTTP/HTTPS links open in a separate browser tab with no opener or referrer; blocked tabs leave a semantic link action.
+Unhandled non-web links and non-link clicks fall back to ordinary terminal selection without invoking Ghostty's automatic URL opener.
+Pending click gestures retain only their press, latest motion and release, and cancel on terminal changes, navigation, keyboard input, disconnection or timeout.
 
 `Fleet` owns independent metadata connections, bounded handshake concurrency, reconnect backoff, and ordered browser deltas.
 It subscribes before taking native snapshots, reconciles changes during bootstrap, subscribes to per-pane agent status, and takes a ten-second health snapshot.

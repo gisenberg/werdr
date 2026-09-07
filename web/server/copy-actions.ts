@@ -2,7 +2,7 @@ import { publicId } from './herdr.ts';
 import { ManagementError } from './machine-management.ts';
 
 const motions = new Set(['line_end', 'first_non_blank', 'next_word_start', 'previous_word_start', 'next_word_end', 'next_big_word_start', 'previous_big_word_start', 'next_big_word_end', 'previous_paragraph', 'next_paragraph']);
-function integer(value: unknown, max: number, label: string): number {
+export function integer(value: unknown, max: number, label: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > max) throw new ManagementError(`Invalid ${label}.`);
   return value;
 }
@@ -11,7 +11,7 @@ function point(value: unknown): { row: number; col: number } {
   const p = value as Record<string, unknown>;
   return { row: integer(p.row, 0xffffffff, 'terminal row'), col: integer(p.col, 0xffff, 'terminal column') };
 }
-function revision(value: unknown): number {
+export function revision(value: unknown): number {
   const result = integer(value, Number.MAX_SAFE_INTEGER, 'content revision');
   if (result % 2) throw new ManagementError('Terminal content is changing. Retry with a stable revision.');
   return result;

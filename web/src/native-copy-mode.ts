@@ -1,8 +1,9 @@
 import type { Terminal } from 'ghostty-web';
+import { matchesNativeViewport, type NativeViewport } from './terminal-viewport';
 
 type Point = { row: number; col: number };
 type Range = { start: Point; end: Point };
-type Context = { content_revision: number; viewport_text: string; scroll: { offset_from_bottom: number; max_offset_from_bottom: number; viewport_rows: number } };
+type Context = NativeViewport;
 type Direction = 'forward' | 'backward';
 type Request = (action: string, params?: object) => Promise<any>;
 const ordered = (a: Point, b: Point): Range => a.row < b.row || (a.row === b.row && a.col <= b.col) ? { start: a, end: b } : { start: b, end: a };
@@ -104,7 +105,7 @@ export class NativeCopyMode {
     this.enqueue(async () => {
       const context: Context = await this.request('pane.copy_context');
       if (generation !== this.generation) return;
-      if (!this.matchesViewport(context)) { this.waitForFrame(); return; }
+      if (!matchesNativeViewport(this.terminal(), context)) { this.waitForFrame(); return; }
       this.context = context; this.entryOffset = context.scroll.offset_from_bottom;
       const term = this.terminal()!;
       this.cursor = { row: this.top + Math.min(context.scroll.viewport_rows - 1, term.buffer.active.cursorY), col: Math.min(term.cols - 1, term.buffer.active.cursorX) };
@@ -147,7 +148,7 @@ export class NativeCopyMode {
     void this.enqueue(async () => {
       const context: Context = await this.request('pane.copy_context');
       if (generation !== this.generation) return;
-      if (!this.matchesViewport(context)) { this.waitForFrame(); return; }
+      if (!matchesNativeViewport(this.terminal(), context)) { this.waitForFrame(); return; }
       if (this.notice.textContent === 'Waiting for a matching native terminal frame.') this.message('');
       if (!this.context) {
         this.entryOffset = context.scroll.offset_from_bottom;
@@ -157,20 +158,6 @@ export class NativeCopyMode {
       this.context = context; this.clamp(); if (!this.dirty) this.draw();
       if (this.startSearch) { this.startSearch = false; this.openSearch('forward'); }
     }).catch(() => {}).finally(() => { this.checking = false; if (this.active && this.dirty && !this.awaitingFrame) this.afterFrame(); });
-  }
-  private matchesViewport(context: Context) {
-    const term = this.terminal(); if (!term || term.rows !== context.scroll.viewport_rows) return false;
-    const core = term.wasmTerm; if (!core) return false;
-    const lines: string[] = [];
-    for (let row = 0; row < term.rows; row++) {
-      const cells = core.getLine(row); let line = '';
-      for (let col = 0; col < (cells?.length || 0); col++) {
-        const cell = cells![col]; if (cell.width === 0) continue;
-        line += cell.codepoint === 0x10eeee ? ' ' : cell.grapheme_len ? core.getGraphemeString(row, col) : String.fromCodePoint(cell.codepoint || 32);
-      }
-      lines.push(line.trimEnd());
-    }
-    return lines.join('\n').trimEnd() === context.viewport_text.trimEnd();
   }
   private waitForFrame() { this.dirty = true; this.awaitingFrame = true; this.marks.replaceChildren(); this.status.textContent = 'COPY WAIT'; this.message('Waiting for a matching native terminal frame.'); }
   private clamp() {
