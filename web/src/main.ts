@@ -49,7 +49,7 @@ const fleet = new FleetClient(applyFleet, online => { if (!online && authenticat
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`));
-function selectPane(id: string) { if (paneId === id) return; paneId = id; choose(); renderFleetNavigation(); }
+function selectPane(id: string) { if (paneId === id && !pendingPane) return; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const worktrees = new Worktrees(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId, cwd: snapshot.panes.find(pane => pane.pane_id === paneId)?.cwd } : undefined; }, (machine, pane) => { if (!pane) return; selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true); }, () => { fleet.resync(); void refresh(); });
 const settings = new Settings(api, (value, nextColors) => {
@@ -69,6 +69,7 @@ function selectHost(id: string) {
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
   pendingPane = waitForSnapshot ? { machine, pane, tab } : undefined;
   if (machineId !== machine) detach();
+  if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
 }
@@ -96,7 +97,7 @@ function renderFleetNavigation() {
     .sort((a, b) => preferences.agentSort === 'native' ? 0 : rank(a.agent.agent_status) - rank(b.agent.agent_status));
   navigation('agents', agents.map(({ host, agent }) => ({ id: `${host.machine.id}/${agent.pane_id}`, label: `${host.machine.label} / ${agent.name || agent.display_agent || agent.agent || agent.pane_id}`, badge: host.connection === 'online' ? agent.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && agent.pane_id === paneId, disabled: !host.machine.enabled, title: agent.title || agent.cwd, select: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) })));
   const current = selectedHost(); const online = current?.connection === 'online';
-  element<HTMLButtonElement>('create').disabled = !online;
+  element<HTMLButtonElement>('create').disabled = !online || !!pendingPane;
   const connected = fleetState.hosts.filter(host => host.connection === 'online').length;
   status(`${online ? '[OK]' : '[' + (current?.connection || 'connecting').toUpperCase() + ']'} ${current?.machine.label || ''} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
 }
@@ -129,8 +130,8 @@ function renderNavigation() {
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   element('shield').style.top = `${element('tabs').offsetHeight + element('panes').offsetHeight}px`;
-  element<HTMLButtonElement>('new-tab').disabled = !workspaceId || selectedHost()?.connection !== 'online';
-  for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || selectedHost()?.connection !== 'online';
+  element<HTMLButtonElement>('new-tab').disabled = !workspaceId || !!pendingPane || selectedHost()?.connection !== 'online';
+  for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || !!pendingPane || selectedHost()?.connection !== 'online';
 }
 function choose() {
   // Connecting hosts have no snapshot yet. Preserve deep links and saved selection
@@ -165,7 +166,7 @@ async function action(action: string, id?: string, extra: object = {}, selected 
     if (machineId !== selected) return;
     const created = result.root_pane || result.pane;
     if (created && action !== 'pane.close') {
-      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; pendingPane = { machine: selected, pane: paneId, tab: tabId }; element('shield').textContent = 'Waiting for native workspace update...';
+      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; pendingPane = { machine: selected, pane: paneId, tab: tabId }; surface.waitForSelection(); renderNavigation(); renderFleetNavigation();
     }
     if (result.focused_pane_id) paneId = result.focused_pane_id;
     closeRail(); await refresh(); surface.refresh(); fleet.resync();
@@ -228,7 +229,7 @@ for (const [formId, actionName] of [['agent-start-form', 'agent.start'], ['agent
 }
 function openCommands() {
   const machine = machineId, workspace = workspaceId, tab = tabId, pane = paneId;
-  const online = selectedHost()?.connection === 'online';
+  const online = selectedHost()?.connection === 'online' && !pendingPane;
   commands = [
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
@@ -280,7 +281,7 @@ element('command-search').onkeydown = event => { if (event.key === 'ArrowDown') 
 document.addEventListener('keydown', event => {
   if (!authenticated || !(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() === 'k') { event.preventDefault(); if (!document.querySelector('dialog[open]')) openCommands(); }
-  else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open]') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
+  else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open]') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
 }, true);
 async function start() {
   const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });

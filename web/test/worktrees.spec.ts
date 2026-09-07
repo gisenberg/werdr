@@ -22,6 +22,9 @@ test('native worktrees create, open, reject dirty removal, and remove only their
   await expect(page.locator('.worktree-row')).toHaveCount(1); await expect(page.locator('#worktree-repository')).toContainText(repo);
   await page.locator('#worktree-branch').fill('browser-feature'); await page.locator('#worktree-path').fill(checkout); await page.locator('#worktree-label').fill('Browser worktree');
   await page.getByRole('button', { name: 'CREATE AND OPEN', exact: true }).click(); await expect(page.locator('#worktrees-dialog')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
+  const linkedPane = new URL(page.url()).searchParams.get('pane')!;
+  await page.locator('.pane-active textarea').focus(); await page.keyboard.type("printf 'WORKTREE_CWD=%s\\n' \"$PWD\""); await page.keyboard.press('Enter');
+  await expect.poll(() => runtime.cli('pane', 'read', linkedPane, '--source', 'recent')).toContain(`WORKTREE_CWD=${checkout}`);
   expect((await exec('git', ['-C', checkout, 'branch', '--show-current'])).stdout.trim()).toBe('browser-feature');
   expect((await git('branch', '--show-current')).stdout.trim()).toBe('main');
   expect(await access(join(checkout, '.hook-ran')).then(() => true, () => false)).toBe(true);
