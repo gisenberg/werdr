@@ -1,6 +1,7 @@
 import type { Terminal } from 'ghostty-web';
 import { loadGhostty } from './terminal-loader';
 import { fontFamilies, type Preferences, palette } from '../shared/settings';
+import { NativeMouse } from './native-mouse';
 import { NativeLinks } from './native-links';
 import { NativeCopyMode } from './native-copy-mode';
 type Colors = ReturnType<typeof palette>;
@@ -11,6 +12,7 @@ export class TerminalController {
   private readonly title = document.createElement('button');
   readonly copyMode: NativeCopyMode;
   private readonly links: NativeLinks;
+  private readonly mouse: NativeMouse;
   private terminal?: Terminal;
   private socket?: WebSocket;
   private cleanup?: () => void;
@@ -30,12 +32,13 @@ export class TerminalController {
     this.element.append(this.title, this.content, this.shield);
     this.copyMode = new NativeCopyMode(this.element, this.content, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report);
     this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
+    this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, text => { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: 'terminal.input', text })); });
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
-  activate(active: boolean) { if (!active) { this.copyMode.exit(true, false); this.links.cancel(); } this.element.classList.toggle('pane-active', active); }
+  activate(active: boolean) { if (!active) { this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); } this.element.classList.toggle('pane-active', active); }
   label(label: string, active: boolean) { if (this.title.textContent !== label) { this.title.textContent = label; this.title.title = label; } this.activate(active); this.element.setAttribute('aria-label', label); }
   show(visible: boolean) {
-    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) this.links.cancel();
+    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.links.cancel(); this.mouse.release(); }
     if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }
   }
   update(preferences: Preferences, colors: Colors) {
@@ -51,12 +54,12 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
-    this.copyMode.exit(true, false); this.links.cancel();
+    this.mouse.setEnabled(false); this.copyMode.exit(true, false); this.links.cancel();
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
-  dispose() { this.reset(); this.links.dispose(); this.element.remove(); }
+  dispose() { this.reset(); this.mouse.dispose(); this.links.dispose(); this.element.remove(); }
   async connect(takeover = false, retry = false) {
     this.reset(); if (!this.visible) return; if (!retry) this.attempt = 0;
     const epoch = this.epoch; if (!retry) this.failure = undefined; this.shield.textContent = this.failure || 'Attaching to Herdr...'; this.changed();
@@ -97,7 +100,8 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
-        if (frame.type === 'terminal.closed') { this.links.cancel(); this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
+        if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { this.mouse.setEnabled(frame.enabled); return; }
+        if (frame.type === 'terminal.closed') { this.mouse.setEnabled(false); this.links.cancel(); this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
         if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
         this.links.invalidate();
         const bytes = Uint8Array.from(atob(frame.bytes), c => c.charCodeAt(0));
@@ -108,7 +112,7 @@ export class TerminalController {
     };
     ws.onclose = () => {
       if (epoch !== this.epoch) return;
-      this.copyMode.exit(false, false); this.links.cancel();
+      this.mouse.setEnabled(false); this.copyMode.exit(false, false); this.links.cancel();
       this.ready = false; this.shield.hidden = false;
       if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
