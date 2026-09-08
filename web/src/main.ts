@@ -1,5 +1,6 @@
 import { MobileSwitcher } from './mobile-switcher';
 import { LastPane } from './last-pane';
+import { StatusLine } from './status-line';
 import { mobileSwitcherSections, type MobileTargetKind } from './mobile-switcher-model';
 import { NavigatePreview } from './navigate-preview';
 import { initialSelection, SelectionRestoration } from './selection-restoration';
@@ -41,7 +42,8 @@ ${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}${integr
 const contextMenu = new ContextMenu();
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const boot = new BootConsole(value => api('/api/login', value), refresh);
-const status = (text: string) => { element('status').textContent = text; };
+const statusLine = new StatusLine(text => { element('status').textContent = text; element('status').title = text; });
+const status = (text: string) => statusLine.show(text);
 let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = emptySnapshot();
 let fleetState: FleetState = { generation: '', revision: 0, hosts: [], notices: [] };
@@ -72,7 +74,7 @@ const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
   if (!online) lastPane.reset();
   if (!authenticated) return;
-  if (!online) { status('[RECONNECTING] GATEWAY'); void refresh(); }
+  if (!online) { statusLine.update('[RECONNECTING] GATEWAY'); void refresh(); }
   else if (recovered) {
     if (!pendingPane && !restoration.active) lastPane.observe(lastPaneScope(), paneId, snapshot);
     surface.recover();
@@ -118,7 +120,7 @@ function selectHost(id: string, fulfill = false) {
   if (restoring) { workspaceId = ''; tabId = ''; paneId = ''; }
   if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = { id, intent: selectionIntent }; fleet.resync(); return; }
   if (machineId === id) { if (restoring) { choose(); renderFleetNavigation(); } return; }
-  lastPane.reset();
+  lastPane.reset(); statusLine.clear();
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
@@ -126,7 +128,7 @@ function selectHost(id: string, fulfill = false) {
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
   restoration.cancel(); ++selectionIntent;
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
-  if (machineId !== machine) { lastPane.reset(); detach(); }
+  if (machineId !== machine) { lastPane.reset(); statusLine.clear(); detach(); }
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
@@ -158,7 +160,7 @@ function applyFleet(state: FleetState, added?: Notice) {
   if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
   if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
   if (!restoration.active && !selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
-    lastPane.reset(); detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
+    lastPane.reset(); statusLine.clear(); detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
   if (closingFocus?.machine === machineId && closingFocus.workspace === workspaceId && closingFocus.tab === tabId) {
@@ -196,7 +198,7 @@ function renderFleetNavigation() {
   element<HTMLButtonElement>('settings-plugins').disabled = !online;
   element<HTMLButtonElement>('create').disabled = !online || (!!pendingPane || restoration.active);
   const connected = fleetState.hosts.filter(host => host.connection === 'online').length;
-  status(`${online ? '[OK]' : '[' + (current?.connection || (fleetState.hosts.length ? 'unavailable' : 'connecting')).toUpperCase() + ']'} ${current?.machine.label || machineId} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
+  statusLine.update(`${online ? '[OK]' : '[' + (current?.connection || (fleetState.hosts.length ? 'unavailable' : 'connecting')).toUpperCase() + ']'} ${current?.machine.label || machineId} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
   if (element<HTMLDialogElement>('command-dialog').open) refreshCommands();
   renderMobileSwitcher();
 }
@@ -204,7 +206,7 @@ function renderFleetNavigation() {
 async function api(path: string, data?: object): Promise<any> {
   const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
   const value = await res.json();
-  if (res.status === 401) { authenticated = false; fleet.stop(); detach(); for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close(); element('settings').hidden = true; element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
+  if (res.status === 401) { authenticated = false; statusLine.clear(); fleet.stop(); detach(); for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close(); element('settings').hidden = true; element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -216,7 +218,7 @@ async function toggleWorkspaceGroup(key: string, collapsed: boolean) {
   try { await settings.saveWorkspaceGroup(key, collapsed); }
   catch (error) { failure = (error as Error).message; }
   finally { pendingGroups.delete(key); renderFleetNavigation(); }
-  if (failure) status(`[ERROR] ${failure}`);
+  if (failure) status(`[ERROR] Workspace group preferences: ${failure}`);
 }
 function revealWorkspaceSelection(force = false) {
   const nav = element('workspaces'), selected = nav.querySelector<HTMLButtonElement>(navigatePreview.target ? 'button[data-id].navigate-preview' : 'button[data-id].active');
@@ -323,13 +325,14 @@ async function refresh() {
     const observedVersion = fleet.version;
     const state = await api('/api/fleet');
     fleet.acceptSnapshot(state, observedVersion);
-  } catch (error) { status(`[OFFLINE] ${(error as Error).message}`); }
+  } catch (error) { statusLine.update(`[OFFLINE] ${(error as Error).message}`); }
   finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } }
 }
 function detach() { surface.clear(); }
 async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId, preserveNavigate = false) {
   const interaction = interactionRevision, selection = ++selectionIntent, endpoint = machineContext(selected), source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
+  const sourceLabel = fleetState.hosts.find(host => host.machine.id === selected)?.machine.label || selected;
   restoration.supersede();
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
@@ -350,17 +353,17 @@ async function action(action: string, id?: string, extra: object = {}, selected 
       if (preserveNavigate && shortcuts?.isNavigating) shortcuts.preserveNavigateFocus(focus); else focus();
     }
     if (applySelection) closeRail(); await refresh(); surface.refresh(); fleet.resync();
-    if (response.notice) status(`[NOTICE] ${response.notice}`);
+    if (response.notice) status(`[NOTICE] ${sourceLabel}: ${response.notice}`);
   }
-  catch (error) { status(`[ERROR] ${(error as Error).message}`); }
+  catch (error) { status(`[ERROR] ${sourceLabel}: ${(error as Error).message}`); }
 }
-element('refresh').onclick = () => { void api('/api/hosts/retry', { id: machineId }).then(refresh).catch(error => status(error.message)); fleet.resync(); if (paneId) void attach(); };
+element('refresh').onclick = () => { const label = selectedHost()?.machine.label || machineId; void api('/api/hosts/retry', { id: machineId }).then(refresh).catch(error => status(`[ERROR] ${label}: ${error.message}`)); fleet.resync(); if (paneId) void attach(); };
 element('create').onclick = () => void action('workspace.create', undefined, workspaceId ? { source: workspaceId } : {});
 element('new-tab').onclick = () => void action('tab.create', workspaceId);
 element('split').onclick = () => void action('pane.split', paneId, { direction: 'right' });
 element('takeover').onclick = () => void attach(true);
 element('close').onclick = () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
-element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; fleet.stop(); detach(); boot.requireAuthentication(); } catch (error) { status(String(error)); } };
+element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; statusLine.clear(); fleet.stop(); detach(); boot.requireAuthentication(); } catch (error) { status(String(error)); } };
 initializeAccount(api, refresh);
 element('manage-hosts').onclick = () => hostManager.open();
 element('activity').onclick = () => activity.open();

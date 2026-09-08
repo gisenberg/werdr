@@ -56,6 +56,8 @@ Dark and light pixel assertions check the painted selection background, while na
 The image-capable companion uses the existing native clipboard message and is tested against the pinned old runtime; it does not require a native runtime replacement.
 `web/test/workspace-groups.spec.ts` verifies native repository groups, active-child retention, keyboard and pointer collapse/expand, search, gateway restart, concurrent settings, scoped worktree creation/opening/deletion, dirty-checkout protection, explicit group closure, retained unrelated terminals, and desktop/phone geometry.
 Group closure preserves checkouts; deletion remains a separate native action.
+Group-save conflicts survive metadata refreshes and terminal input, while deterministic timer tests verify notice replacement, expiry, and context clearing.
+`web/test/status-line.spec.ts` verifies that a late native-action failure identifies its original host after selection changes.
 The ordinary Git workspace case verifies native discovery without attached worktree metadata, an outside-Git menu, delayed results after menu replacement and closure, stable keyboard focus and terminal identity, desktop/phone menu bounds, and checkout creation from an unfocused workspace.
 Repository discovery uses the existing host-scoped `worktree.list` API and does not require replacement of the native runtime.
 The crowded-rail test also verifies that selection and drawer opening reveal the active worktree, while metadata refreshes preserve manual scrolling and terminal identity.

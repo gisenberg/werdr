@@ -33,7 +33,9 @@ test('native worktree groups retain active children, persist collapse, search hi
     await login(page, runtime);
     const parent = (await action(page, runtime.url, { action: 'worktree.open', cwd: repo, path: repo, label: 'Repository parent' })).root_pane.workspace_id;
     await expect(row(page, parent)).toBeVisible();
-    await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
+    await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).not.toBe(parent);
+    await expect(page.locator('#shield')).toBeHidden();
     const unrelated = new URL(page.url()).searchParams.get('workspace')!;
     const children: string[] = [];
     for (const [index, path] of paths.entries()) {
@@ -97,6 +99,10 @@ test('group preference saves preserve concurrent settings and recover from confl
     const saved = await (await page.request.get(runtime.url + '/api/settings')).json(); expect(saved.preferences.theme).toBe('nord'); expect(saved.preferences.collapsedWorkspaceGroups).toHaveLength(1);
     await page.route('**/api/settings', route => route.request().method() === 'POST' ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Concurrent group preference edit' }) }) : route.continue());
     await toggle.click(); await expect(page.locator('#status')).toContainText('Concurrent group preference edit'); await expect(toggle).toBeEnabled(); await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await action(page, runtime.url, { action: 'workspace.rename', id: parent, label: 'Conflict metadata refresh' });
+    await expect(row(page, parent)).toContainText('Conflict metadata refresh');
+    await page.locator('.pane-active textarea').focus(); await page.keyboard.type('echo '); await page.keyboard.press('Control+u');
+    await expect(page.locator('#status')).toContainText('Concurrent group preference edit');
     await page.unroute('**/api/settings'); await row(page, parent).focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menuitem', { name: 'EXPAND GROUP', exact: true }).click(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(page.url()).toBe(selected); expect(await terminal!.evaluate(node => node.isConnected)).toBe(true);
     // Closing a contextual delete flow while its native read is pending must

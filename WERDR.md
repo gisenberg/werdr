@@ -96,6 +96,8 @@ Last pane toggles between your two most recent pane selections, including panes 
 It is available from the command palette and starts unbound, matching the native default; assign `last_pane` in Settings.
 History stays in this browser and clears when changing hosts or reconnecting through an uncertain endpoint.
 Closed panes and replaced terminals cannot become last-pane targets.
+Action feedback remains readable for eight seconds through background refreshes and typing, then returns to the latest fleet summary.
+Late action failures identify the host on which the request began.
 The browser binding catalog covers its supported built-in actions; native custom shell bindings and detach/reload/notification-target bindings remain outside this catalog.
 ## Current behavior
 
