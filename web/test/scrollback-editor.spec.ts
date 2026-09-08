@@ -14,7 +14,15 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await runtime?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
 async function login(page: Page) { await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden(); }
-async function create(page: Page) { const previous = new URL(page.url()).searchParams.get('pane'); await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(previous); await expect(page.locator('#shield')).toBeHidden(); return Object.fromEntries(new URL(page.url()).searchParams); }
+async function create(page: Page) {
+  const created = page.waitForResponse(response => response.url().endsWith('/api/action') && response.request().postDataJSON()?.action === 'workspace.create');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  const response = await created; expect(response.ok()).toBe(true);
+  const pane = (await response.json()).root_pane.pane_id as string;
+  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe(pane);
+  await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', pane); await expect(page.locator('#shield')).toBeHidden();
+  return Object.fromEntries(new URL(page.url()).searchParams);
+}
 async function open(page: Page) { await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: 'Terminal: open scrollback in host editor', exact: true }).click(); }
 async function metadata() { return JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8')) as { path: string }; }
 async function exists(path: string) { return stat(path).then(() => true, () => false); }
@@ -57,6 +65,7 @@ test('native editor receives the selected full history, preserves the original s
 });
 
 test('an editor closed before its first snapshot releases pending selection instead of trapping the browser', async ({ page }) => {
+  await rm(join(directory, 'metadata.json'), { force: true });
   let hold = false; const messages: (() => void)[] = [];
   await page.routeWebSocket('**/ws/fleet', socket => { const server = socket.connectToServer(); server.onMessage(message => { if (hold) messages.push(() => socket.send(message)); else socket.send(message); }); });
   let baseline: unknown;
@@ -66,6 +75,11 @@ test('an editor closed before its first snapshot releases pending selection inst
   await page.route('**/api/action', async route => {
     if (route.request().postDataJSON()?.action !== 'pane.edit_scrollback') return route.continue();
     const response = await route.fetch(); const result = await response.json(); expect(result.pane?.pane_id).toBeTruthy(); closedEditor = result.pane.pane_id;
+    // The browser's first editor snapshot is still held, but the fixture editor
+    // must have recorded its own exported file before we test that file's cleanup.
+    await expect.poll(async () => {
+      try { return (await metadata()).path; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error; }
+    }).not.toBe('');
     await runtime.cli('pane', 'close', closedEditor); await route.fulfill({ response });
   });
   await open(page); await expect(page.locator('#status')).toContainText('editor terminal closed before it could attach'); await expect(page.locator('#shield')).toBeHidden();

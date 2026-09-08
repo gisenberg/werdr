@@ -15,6 +15,10 @@ export async function fixture(passwordLogin = false, secure = false, isolatedCla
   const credentialsPath = resolve(directory, 'credentials.json');
   if (passwordLogin) await writeFile(credentialsPath, JSON.stringify({ username, passwordHash: `scrypt$${salt.toString('hex')}$${scryptSync(password, salt, 32).toString('hex')}` }), { mode: 0o600 });
   if (isolatedClaude) await mkdir(resolve(directory, 'claude-config'));
+  // External release and manifest updates must not race fixture-owned events or
+  // change detection definitions while an isolated browser test is running.
+  await mkdir(resolve(directory, 'herdr'), { recursive: true });
+  await writeFile(resolve(directory, 'herdr/config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n', { mode: 0o600 });
   const binary = resolve(nativeRuntime || process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
   const env = { ...process.env, XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary, ...(isolatedClaude ? { CLAUDE_CONFIG_DIR: resolve(directory, 'claude-config') } : {}), ...(editor === undefined ? {} : { EDITOR: editor, VISUAL: editor }) };
   for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSION', 'WERDR_SOCKET_PATH', 'WERDR_SESSION']) delete (env as Record<string, string | undefined>)[key];
