@@ -1,3 +1,4 @@
+import { agentEntries } from './agent-entries';
 import { SidebarSplit } from './sidebar-split';
 import { workspaceEntries, workspaceGroup, workspaceGroupKey } from './workspace-groups';
 import { ContextMenu, type ContextAction } from './context-menu';
@@ -146,11 +147,8 @@ function renderFleetNavigation() {
   })));
   revealWorkspaceSelection();
   const filter = element<HTMLSelectElement>('agent-filter').value;
-  const rank = (status: string) => status === 'blocked' ? 0 : status === 'working' ? 1 : 2;
-  const agents = fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).map(agent => ({ host, agent })))
-    .filter(({ host, agent }) => (agent.agent || agent.name || agent.agent_status !== 'unknown') && match(`${host.machine.label} ${agent.name || ''} ${agent.agent || ''} ${agent.title || ''}`) && (filter === 'all' || filter === agent.agent_status || filter === 'done' && agent.agent_status === 'idle'))
-    .sort((a, b) => preferences.agentSort === 'native' ? 0 : rank(a.agent.agent_status) - rank(b.agent.agent_status));
-  navigation('agents', agents.map(({ host, agent }) => ({ id: `${host.machine.id}/${agent.pane_id}`, label: `${host.machine.label} / ${agent.name || agent.display_agent || agent.agent || agent.pane_id}`, badge: host.connection === 'online' ? agent.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && agent.pane_id === paneId, disabled: !host.machine.enabled, title: agent.title || agent.cwd, select: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) })));
+  const agents = agentEntries(fleetState.hosts, preferences.agentSort, filter, query);
+  navigation('agents', agents.map(({ host, agent, title }) => ({ id: `${host.machine.id}/${agent.pane_id}`, label: `${host.machine.label} / ${agent.name || agent.display_agent || agent.agent || agent.pane_id}`, badge: host.connection === 'online' ? agent.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && agent.pane_id === paneId, disabled: !host.machine.enabled, title, select: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) })));
   const current = selectedHost(); const online = current?.connection === 'online';
   element<HTMLButtonElement>('settings-integrations').disabled = !online;
   element<HTMLButtonElement>('settings-plugins').disabled = !online;

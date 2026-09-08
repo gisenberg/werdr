@@ -5,7 +5,7 @@ export interface WorkspaceWorktree { repo_key: string; repo_name: string; repo_r
 export interface Workspace { active_tab_id?: string; workspace_id: string; label: string; agent_status: AgentStatus; tokens?: Record<string, string>; worktree?: WorkspaceWorktree }
 export interface Tab { tab_id: string; workspace_id: string; label: string }
 export interface Pane { pane_id: string; terminal_id: string; workspace_id: string; tab_id: string; label?: string; title?: string; agent?: string; display_agent?: string; agent_status: AgentStatus; cwd?: string; revision?: number }
-export interface Agent extends Pane { name?: string; state_change_seq: number; interactive_ready?: boolean; launch_pending?: boolean; state_labels?: Record<string, string> }
+export interface Agent extends Pane { name?: string; state_change_seq: number; interactive_ready?: boolean; launch_pending?: boolean; state_labels?: Record<string, string>; terminal_title?: string; terminal_title_stripped?: string; foreground_cwd?: string }
 export interface Snapshot { focused_workspace_id?: string; version: string; protocol: number; workspaces: Workspace[]; tabs: Tab[]; panes: Pane[]; agents: Agent[]; layouts: { tab_id: string; focused_pane_id: string }[] }
 export type ConnectionState = 'connecting' | 'online' | 'offline' | 'disabled' | 'incompatible';
 export interface HostView { machine: Machine; connection: ConnectionState; detail?: string; version?: string; lastSeen?: number; retryAt?: number; snapshot?: Snapshot }
