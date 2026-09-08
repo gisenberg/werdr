@@ -39,7 +39,7 @@ The sidebar split follows the native 50% default and 10%-90% bounds, with minimu
 Copy-mode tests also verify that searches submitted during initial frame recovery resume correctly and that Escape cancels pending searches.
 `web/test/mouse-selection.spec.ts` verifies native inclusive ranges, wide and combining glyphs, URL/path double-clicks, copy-on-select persistence, clipboard shortcuts and denial, delayed-read cancellation, and selection across native scrollback.
 Dark and light pixel assertions check the painted selection background, while native-reference unit cases verify the contrasting foreground.
-`web/test/image-paste.spec.ts` verifies maximum-size image bytes, native owner-only staging and cleanup, real clipboard paste, file drops, unchanged text paste, unsupported clients, rejected files, and delayed-read cancellation.
+`web/test/image-paste.spec.ts` verifies maximum-size image bytes, native owner-only staging and cleanup, real clipboard paste without extra terminal keystrokes, file drops, unchanged text paste, unsupported clients, rejected files, and delayed-read cancellation.
 The image-capable companion uses the existing native clipboard message and is tested against the pinned old runtime; it does not require a native runtime replacement.
 Plugin selection context is read from the same revision-checked native range before actions become available.
 `web/test/scrollbar.spec.ts` verifies native history offsets, thumb dragging, rapid keyboard input, screen transitions, initial geometry, settings migration and preview, gateway restart, phone layout, and optional-capability fallback.

@@ -56,6 +56,8 @@ test('large clipboard images preserve bytes, queue input in order, and clean hos
 
 test('image drops and an actual browser clipboard gesture reach native staging while text paste stays ordinary input', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const inputs: string[] = [];
+  await page.routeWebSocket('**/ws/terminal?*', socket => { const server = socket.connectToServer(); socket.onMessage(message => { if (typeof message === 'string') { const value = JSON.parse(message); if (value.type === 'terminal.input') inputs.push(value.text); } server.send(message); }); });
   const pane = await create(page); await waitingReader(page, pane);
   await transfer(page, png, true); await page.keyboard.press('Enter');
   expect(await readFile(await pastedPath(pane))).toEqual(png);
@@ -68,14 +70,19 @@ test('image drops and an actual browser clipboard gesture reach native staging w
     const actual = await (await navigator.clipboard.read())[0].getType('image/png');
     return Array.from(new Uint8Array(await actual.arrayBuffer()));
   });
-  await page.keyboard.press('Control+v'); await expect(page.locator('#status')).toContainText('Image sent to terminal'); await page.keyboard.press('Enter');
+  const beforePaste = inputs.length;
+  await page.keyboard.press('Control+v'); await expect(page.locator('#status')).toContainText('Image sent to terminal');
+  expect(inputs.slice(beforePaste)).toEqual([]);
+  await page.keyboard.press('Enter');
   // The second path is the newest native paste, independent of the prior drop.
   let last = '';
   await expect.poll(async () => { const text = await runtime.cli('pane', 'read', pane, '--source', 'recent'); const paths = [...text.matchAll(/IMAGE_PATH=(\/[^\r\n]+\.png)/g)]; last = paths.at(-1)?.[1] || ''; return paths.length; }).toBe(2);
   expect(await readFile(last)).toEqual(Buffer.from(clipboard));
+  const beforeText = inputs.length;
   await page.evaluate(() => navigator.clipboard.writeText("printf 'ORDINARY_%s\\n' TEXT\n"));
   await page.keyboard.press('Control+v'); await page.keyboard.press('Enter');
   await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('ORDINARY_TEXT');
+  expect(inputs.slice(beforeText).join('')).not.toContain('\x16');
 });
 
 test('missing capabilities, invalid files and oversized clipboard data never become terminal text or close the attachment', async ({ page }) => {

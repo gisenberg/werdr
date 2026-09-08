@@ -10,6 +10,7 @@ export class TerminalImagePaste {
   private queuedBytes = 0;
   constructor(private content: HTMLElement, private textarea: HTMLTextAreaElement, private available: () => boolean, private wire: (data: string | ArrayBuffer) => void, private report: (message: string, failed?: boolean) => void) {
     content.addEventListener('paste', this.paste, true);
+    content.addEventListener('keydown', this.pasteKey, true);
     content.addEventListener('dragover', this.dragover); content.addEventListener('drop', this.drop);
   }
   capabilities(limit: unknown) { this.limit = Number.isInteger(limit) && Number(limit) > 0 ? Math.min(Number(limit), MAX_CLIPBOARD_IMAGE_BYTES) : 0; }
@@ -31,9 +32,15 @@ export class TerminalImagePaste {
   cancel() { ++this.generation; this.reading = false; this.flush(); }
   dispose() {
     ++this.generation; this.reading = false; this.awaiting = false; this.queued = []; this.queuedBytes = 0;
+    this.content.removeEventListener('keydown', this.pasteKey, true);
     this.content.removeEventListener('paste', this.paste, true); this.content.removeEventListener('dragover', this.dragover); this.content.removeEventListener('drop', this.drop);
   }
   private flush() { const queued = this.queued; this.queued = []; this.queuedBytes = 0; for (const line of queued) this.wire(line); }
+  private pasteKey = (event: KeyboardEvent) => {
+    // Browser clipboard data is authoritative. Ghostty's host-clipboard signal
+    // would otherwise insert a literal Ctrl+V before the native image path.
+    if (event.target === this.textarea && !event.altKey && (event.ctrlKey || event.metaKey) && event.code === 'KeyV') event.stopImmediatePropagation();
+  };
   private paste = (event: ClipboardEvent) => {
     if (event.target !== this.textarea) return;
     const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => !!file);

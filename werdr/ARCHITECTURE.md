@@ -101,6 +101,7 @@ Their revisions and patch sets are independent.
 Preserve herdr's native patch ledger and the browser package's provenance separately.
 
 Browser image paste and file drops use bounded binary messages on the authenticated terminal socket.
+Clipboard shortcuts retain the browser paste default but suppress Ghostty's host-clipboard key signal, which would otherwise prefix image paths and text with a stray Ctrl+V byte.
 The terminal companion advertises its image size limit before the browser enables transfer, and older companions retain ordinary input with explicit unsupported-image feedback.
 The gateway identifies PNG/JPEG/GIF/WebP/BMP signatures, limits each image to the native 16 MiB bound, and permits at most two pending image pipe writes.
 Keystrokes remain ordered behind the image with a separate 64 KiB queue.
