@@ -174,6 +174,15 @@ It fails on Windows before the fix and passes afterward; Linux also passes, and 
 An isolated real PowerShell comparison reproduces the loss in the official runtime and verifies retention without duplicate history in the fixed build.
 This fix requires adoption by the owning native runtime; the deployed Windows runtimes remain unchanged while their live sessions require preservation.
 
+## Workspace row metadata
+
+The candidate workspace API exposes optional `custom_label`, `branch`, and `git_ahead_behind` fields from the same cached workspace state used by the native sidebar.
+Unknown Git metadata stays absent, while known zero ahead/behind counts remain distinct from absence.
+Schema compatibility tests cover older endpoints without these fields, and native projection tests preserve manual labels while exposing branch and count changes.
+Shared browser validation now supports native workspace tokens, `$custom` metadata, row gaps, styles, and first-match rules without changing existing agent rows.
+The workspace row renderer and settings editor remain outstanding.
+Browser Git-refresh interest must be independent of the native sidebar layout before the row feature is complete; the current native refresh demand still follows its configured sidebar tokens.
+
 ## Native runtime rollout gate
 
 Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.
