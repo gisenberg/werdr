@@ -75,6 +75,14 @@ Notifications cover observed transitions while the gateway is running, rather th
 The browser applies ordered fleet revisions and resynchronizes after gaps or reconnects.
 Host identity is pinned across in-flight operations, and disabling/removing a host retires metadata and terminal clients without terminating native sessions.
 
+Workspace grouping consumes native `WorkspaceInfo.worktree` repository membership, without inferring groups from display labels or checkout paths.
+Groups keep the native parent-first ordering, retain the selected child when collapsed, and aggregate collapsed status using native attention priority.
+Search can reveal matching hidden children without changing the saved collapse preference.
+Collapse state is browser chrome stored in version-six preferences, keyed by machine ID, SSH target, named session, and repository key.
+Navigation saves preserve other preferences through revision checks and recover the authoritative state after a conflict.
+Contextual worktree actions retain the clicked workspace and host even when another pane is active.
+Group closure passes the native explicit `close_group` flag after the configured confirmation and retains the Git checkouts; deleting a linked checkout uses the separate native worktree-removal flow.
+
 `MachineManagement` serializes browser catalog edits and setup jobs while retaining the last valid catalog during temporary failures.
 POSIX onboarding delegates compatibility and installation decisions to the upstream interactive CLI.
 Windows onboarding stages the fork's checksum-pinned installer only after explicit consent and never forcibly replaces a running runtime.

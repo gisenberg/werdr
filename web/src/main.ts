@@ -1,4 +1,5 @@
 import { SidebarSplit } from './sidebar-split';
+import { workspaceEntries, workspaceGroup, workspaceGroupKey } from './workspace-groups';
 import { ContextMenu, type ContextAction } from './context-menu';
 import { attentionTarget, navigationTargets, resolveNavigationTarget } from './navigation-targets';
 import { BootConsole } from './boot';
@@ -9,7 +10,7 @@ import { Worktrees, worktreesMarkup } from './worktrees';
 import { DesktopSurface } from './desktop-surface';
 import './style.css';
 
-import type { Agent, FleetState, HostView, Notice, Snapshot } from '../shared/fleet';
+import type { Agent, FleetState, HostView, Notice, Snapshot, Workspace } from '../shared/fleet';
 import { emptySnapshot } from '../shared/fleet';
 import { FleetClient } from './fleet-client';
 import { HostManager, hostManagerMarkup } from './host-manager';
@@ -53,6 +54,7 @@ function rememberSelection() {
 }
 let authenticated = false, refreshing = false, refreshAgain = false;
 let interactionRevision = 0;
+const pendingGroups = new Set<string>();
 let closingFocus: { machine: string; workspace: string; tab: string } | undefined;
 for (const type of ['pointerdown', 'keydown', 'paste', 'focusin']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
 let gatewayOnline = false;
@@ -136,7 +138,11 @@ function renderFleetNavigation() {
   const query = element<HTMLInputElement>('fleet-search').value.trim().toLowerCase();
   const match = (text: string) => text.toLowerCase().includes(query);
   navigation('hosts', fleetState.hosts.filter(host => match(host.machine.label + ' ' + (host.machine.target || ''))).map(host => ({ id: host.machine.id, label: host.machine.label, badge: host.connection.toUpperCase(), active: host.machine.id === machineId, disabled: !host.machine.enabled, title: `${host.machine.target || host.machine.label} / ${host.connection}${host.version ? ' / ' + host.version : ''}${host.detail ? ' / ' + host.detail : ''}`, select: () => selectHost(host.machine.id) })));
-  navigation('workspaces', fleetState.hosts.flatMap(host => (host.snapshot?.workspaces || []).filter(workspace => match(`${host.machine.label} ${workspace.label} ${workspace.workspace_id}`)).map(workspace => ({ id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace', machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, badge: host.connection === 'online' ? workspace.agent_status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') }))));
+  const collapsed = new Set(preferences.collapsedWorkspaceGroups);
+  navigation('workspaces', fleetState.hosts.flatMap(host => workspaceEntries(host.machine, host.snapshot?.workspaces || [], collapsed, host.machine.id === machineId ? workspaceId : '', query).map(entry => {
+    const workspace = entry.workspace;
+    return { id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace' as const, machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, prefix: entry.indented ? entry.lastChild ? '└─ ' : '├─ ' : '', group: entry.group, badge: host.connection === 'online' ? entry.status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, title: `${host.machine.label} / ${workspace.label || workspace.workspace_id}${workspace.worktree ? '\n' + workspace.worktree.checkout_path : ''}${entry.group ? '\n' + entry.group.members.length + ' workspaces in group' : ''}`, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') };
+  })));
   const filter = element<HTMLSelectElement>('agent-filter').value;
   const rank = (status: string) => status === 'blocked' ? 0 : status === 'working' ? 1 : 2;
   const agents = fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).map(agent => ({ host, agent })))
@@ -159,24 +165,51 @@ async function api(path: string, data?: object): Promise<any> {
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
-interface NavigationItem { id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
+interface NavigationItem { id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; prefix?: string; group?: { key: string; collapsed: boolean }; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
+async function toggleWorkspaceGroup(key: string, collapsed: boolean) {
+  if (pendingGroups.has(key)) return;
+  pendingGroups.add(key); renderFleetNavigation();
+  let failure: string | undefined;
+  try { await settings.saveWorkspaceGroup(key, collapsed); }
+  catch (error) { failure = (error as Error).message; }
+  finally { pendingGroups.delete(key); renderFleetNavigation(); }
+  if (failure) status(`[ERROR] ${failure}`);
+}
 function navigation(id: string, items: NavigationItem[]) {
   const parent = element(id);
-  const existing = new Map([...parent.querySelectorAll<HTMLButtonElement>(':scope > button')].map(node => [node.dataset.id, node]));
+  const existing = new Map([...parent.querySelectorAll<HTMLButtonElement>('button[data-id]')].map(node => [node.dataset.id, node]));
   items.forEach((item, index) => {
     const node = existing.get(item.id) || document.createElement('button');
     existing.delete(item.id);
     node.dataset.id = item.id;
-    if (node.textContent !== item.label) node.textContent = item.label;
+    const text = (item.prefix || '') + item.label;
+    if (node.textContent !== text) node.textContent = text;
     node.dataset.badge = item.badge || ''; node.setAttribute('aria-label', item.label);
     node.classList.toggle('active', item.active); node.disabled = !!item.disabled;
     node.title = item.title || item.label; node.onclick = item.select;
     node.oncontextmenu = item.context ? event => { event.preventDefault(); openNavigationMenu(node, item.context!, { x: event.clientX, y: event.clientY }); } : null;
-    node.onkeydown = item.context ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openNavigationMenu(node, item.context!); } } : null;
+    node.onkeydown = item.context ? event => {
+      if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openNavigationMenu(node, item.context!); }
+      else if (item.group && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); void toggleWorkspaceGroup(item.group.key, event.key === 'ArrowLeft'); }
+    } : null;
     if (item.context) node.setAttribute('aria-haspopup', 'menu'); else node.removeAttribute('aria-haspopup');
-    if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] || null);
+    let row: HTMLElement = node;
+    if (id === 'workspaces') {
+      row = node.parentElement?.classList.contains('workspace-row') ? node.parentElement : document.createElement('div');
+      row.className = 'workspace-row'; if (node.parentElement !== row) row.append(node);
+      let toggle = row.querySelector<HTMLButtonElement>('.workspace-group-toggle');
+      if (item.group) {
+        if (!toggle) { toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'workspace-group-toggle'; row.append(toggle); }
+        toggle.textContent = item.group.collapsed ? '▸' : '▾'; toggle.setAttribute('aria-expanded', String(!item.group.collapsed));
+        toggle.setAttribute('aria-label', `${item.group.collapsed ? 'Expand' : 'Collapse'} worktree group ${item.label}`);
+        toggle.title = `${item.group.collapsed ? 'Expand' : 'Collapse'} worktree group`; toggle.disabled = !!item.disabled;
+        toggle.setAttribute('aria-disabled', String(pendingGroups.has(item.group.key) || !!item.disabled));
+        toggle.onclick = () => { void toggleWorkspaceGroup(item.group!.key, !item.group!.collapsed); };
+      } else toggle?.remove();
+    }
+    if (parent.children[index] !== row) parent.insertBefore(row, parent.children[index] || null);
   });
-  for (const node of existing.values()) node.remove();
+  for (const node of existing.values()) { if (node.parentElement?.classList.contains('workspace-row')) node.parentElement.remove(); else node.remove(); }
 }
 function renderNavigation() {
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
@@ -256,6 +289,14 @@ element('activity').onclick = () => activity.open();
 element('fleet-search').oninput = () => renderFleetNavigation();
 element('agent-filter').onchange = () => renderFleetNavigation();
 type MenuTarget = NonNullable<NavigationItem['context']>;
+function closeWorkspace(machine: string, id: string) {
+  const host = fleetState.hosts.find(host => host.machine.id === machine && host.machine.enabled && host.connection === 'online');
+  const workspace = host?.snapshot?.workspaces.find(workspace => workspace.workspace_id === id);
+  if (!host?.snapshot || !workspace) return;
+  const group = workspaceGroup(host.snapshot.workspaces, workspace);
+  const message = group ? `Close this worktree group and end the running processes in all ${group.length} workspaces?\n${group.map(item => item.label || item.workspace_id).join('\n')}\nThe Git checkouts will remain on the host.` : 'Close this workspace and end all its running processes?';
+  if (!preferences.confirmClose || confirm(message)) void action('workspace.close', id, group ? { close_group: true } : {}, machine);
+}
 function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: { x: number; y: number }) {
   const current = () => {
     const host = fleetState.hosts.find(host => host.machine.id === target.machine && host.machine.enabled && host.connection === 'online');
@@ -266,6 +307,21 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
   const items: ContextAction[] = [
     { label: 'RENAME', run: () => rename(target.kind + '.rename', target.id, current()?.label || '', target.machine) },
   ];
+  if (target.kind === 'workspace') {
+    const workspace = item as Workspace, host = fleetState.hosts.find(host => host.machine.id === target.machine)!;
+    const group = workspaceGroup(host.snapshot!.workspaces, workspace);
+    const openWorktrees = (intent: 'create' | 'open' | 'remove') => {
+      const workspace = current() as Workspace | undefined;
+      if (workspace) void worktrees.open({ machine: target.machine, label: host.machine.label, workspace: target.id, cwd: workspace.worktree?.checkout_path }, intent);
+    };
+    if (workspace.worktree?.is_linked_worktree) items.push({ label: 'DELETE WORKTREE CHECKOUT...', run: () => openWorktrees('remove') });
+    else if (workspace.worktree) items.push({ label: 'NEW WORKTREE', run: () => openWorktrees('create') }, { label: 'OPEN WORKTREE...', run: () => openWorktrees('open') });
+    if (group) {
+      const key = workspaceGroupKey(host.machine, workspace.worktree!.repo_key), collapsed = preferences.collapsedWorkspaceGroups.includes(key);
+      items.push({ label: collapsed ? 'EXPAND GROUP' : 'COLLAPSE GROUP', run: () => { void toggleWorkspaceGroup(key, !collapsed); } });
+    }
+    items.push({ label: group ? 'CLOSE GROUP' : 'CLOSE WORKSPACE', run: () => closeWorkspace(target.machine, target.id) });
+  }
   if (target.kind === 'tab') {
     const tab = item as Snapshot['tabs'][number];
     items.unshift({ label: 'NEW TAB', run: () => invoke('tab.create', tab.workspace_id) });
@@ -278,7 +334,7 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
     { label: 'SPLIT DOWN', run: () => invoke('pane.split', target.id, { direction: 'down' }) },
     { label: 'ZOOM / RESTORE', run: () => invoke('pane.zoom', target.id, { mode: 'toggle' }) },
   );
-  items.push({ label: 'CLOSE ' + target.kind.toUpperCase(), run: () => { if (!preferences.confirmClose || confirm(`Close this ${target.kind} and end its running processes?`)) invoke(target.kind + '.close'); } });
+  if (target.kind !== 'workspace') items.push({ label: 'CLOSE ' + target.kind.toUpperCase(), run: () => { if (!preferences.confirmClose || confirm(`Close this ${target.kind} and end its running processes?`)) invoke(target.kind + '.close'); } });
   contextMenu.open(origin, `${target.kind.toUpperCase()} ${item.label || target.id}`, items, () => authenticated && !!current(), position);
 }
 for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addEventListener(type, event => {
@@ -374,7 +430,7 @@ function refreshCommands() {
     { label: 'Rename agent', disabled: !pane || !online || !snapshot.agents.some(agent => agent.pane_id === pane && agent.agent), run: () => rename('agent.rename', pane, snapshot.agents.find(agent => agent.pane_id === pane)?.name || '', machine) },
     { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
     { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
-    { label: 'Close workspace and end its processes', disabled: !workspace || !online, run: () => { if (!preferences.confirmClose || confirm('Close this workspace and end all its running processes?')) void action('workspace.close', workspace, {}, machine); } },
+    { label: workspaceGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspace)) ? 'Close worktree group and end its processes' : 'Close workspace and end its processes', disabled: !workspace || !online, run: () => closeWorkspace(machine, workspace) },
     ...navigationTargets(fleetState).map(target => ({ label: target.label, disabled: target.disabled, run: () => {
       const current = resolveNavigationTarget(fleetState, target);
       if (!current) { status('[WARN] Navigation target is no longer available.'); return; }

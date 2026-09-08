@@ -1,16 +1,17 @@
 import type { Api } from './host-manager';
 interface Worktree { path: string; branch?: string; is_bare: boolean; is_detached: boolean; is_prunable: boolean; is_linked_worktree: boolean; open_workspace_id?: string; label: string }
-interface Target { machine: string; label: string; workspace: string; cwd?: string }
+export interface WorktreeTarget { machine: string; label: string; workspace: string; cwd?: string }
 export const worktreesMarkup = `<dialog id="worktrees-dialog"><h1>WORKTREES</h1><p id="worktree-host"></p><form id="worktree-source"><label>REPOSITORY PATH ON THIS HOST<input id="worktree-cwd" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="Use selected workspace"></label><label class="check-label"><input id="worktree-trust" type="checkbox">Trust repository ownership for this operation (Git safe.directory)</label><button type="submit">LIST WORKTREES</button></form><p id="worktree-repository"></p><div id="worktree-list"></div><form id="worktree-create"><h2>CREATE WORKTREE</h2><label>BRANCH<input id="worktree-branch" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Native generated name when empty"></label><label>BASE REF<input id="worktree-base" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Native default"></label><label>WORKTREE PATH<input id="worktree-path" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="Native configured worktree directory"></label><label>WORKSPACE LABEL<input id="worktree-label" maxlength="256" autocomplete="off"></label><p>Git may run the repository's checkout hooks when creating a worktree.</p><button type="submit">CREATE AND OPEN</button></form><p id="worktree-status" role="status"></p><p id="worktree-error" role="alert"></p><button id="worktree-done">DONE</button></dialog>
 <dialog id="worktree-remove-dialog"><h1>REMOVE WORKTREE</h1><p id="worktree-remove-description"></p><p>This closes the worktree's workspace and removes its checkout through herdr.</p><label class="check-label"><input id="worktree-force" type="checkbox">Force removal, including uncommitted changes</label><p id="worktree-remove-error" role="alert"></p><button id="worktree-remove-confirm">REMOVE WORKTREE</button><button id="worktree-remove-cancel">CANCEL</button></dialog>`;
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export class Worktrees {
-  private target?: Target;
+  private target?: WorktreeTarget;
   private epoch = 0;
   private busy = false;
   private removing?: Worktree;
   private repository = '';
-  constructor(private api: Api, private selected: () => Target | undefined, private openPane: (machine: string, pane: any) => void, private changed: () => void) {
+  private entries: Worktree[] = [];
+  constructor(private api: Api, private selected: () => WorktreeTarget | undefined, private openPane: (machine: string, pane: any) => void, private changed: () => void) {
     el('worktree-done').onclick = () => el<HTMLDialogElement>('worktrees-dialog').close();
     el('worktrees-dialog').addEventListener('close', () => { ++this.epoch; });
     el('worktree-cwd').oninput = () => { el<HTMLInputElement>('worktree-trust').checked = false; el('worktree-list').replaceChildren(); el('worktree-repository').textContent = ''; };
@@ -31,17 +32,25 @@ export class Worktrees {
     }, 'worktree-remove-error');
   }
   private value(name: string) { return el<HTMLInputElement>('worktree-' + name).value.trim(); }
-  private source(target: Target) { return { machine: target.machine, id: target.workspace || undefined, cwd: this.value('cwd'), trust: el<HTMLInputElement>('worktree-trust').checked }; }
-  open() {
+  private source(target: WorktreeTarget) { return { machine: target.machine, id: target.workspace || undefined, cwd: this.value('cwd'), trust: el<HTMLInputElement>('worktree-trust').checked }; }
+  async open(target = this.selected(), intent: 'manage' | 'create' | 'open' | 'remove' = 'manage') {
     if (this.busy) return;
-    const target = this.selected(); if (!target) return;
-    ++this.epoch; this.repository = ''; this.target = { ...target }; el('worktree-host').textContent = `${target.label} / ${target.workspace || 'EXPLICIT REPOSITORY'}`;
+    if (!target) return;
+    const epoch = ++this.epoch; this.repository = ''; this.entries = []; this.removing = undefined; this.target = { ...target }; el('worktree-host').textContent = `${target.label} / ${target.workspace || 'EXPLICIT REPOSITORY'}`;
     el<HTMLInputElement>('worktree-cwd').value = target.cwd || ''; el<HTMLInputElement>('worktree-trust').checked = false;
     for (const name of ['branch', 'base', 'path', 'label']) el<HTMLInputElement>('worktree-' + name).value = '';
     el('worktree-list').replaceChildren(); el('worktree-repository').textContent = ''; el('worktree-error').textContent = '';
-    el<HTMLDialogElement>('worktrees-dialog').showModal(); if (target.workspace || target.cwd) void this.list();
+    el<HTMLDialogElement>('worktrees-dialog').showModal(); if (target.workspace || target.cwd) await this.list();
+    if (epoch !== this.epoch || !el<HTMLDialogElement>('worktrees-dialog').open || el('worktree-error').textContent) return;
+    if (intent === 'create') el('worktree-branch').focus();
+    if (intent === 'open') el('worktree-list').querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    if (intent === 'remove') {
+      const item = this.entries.find(item => item.is_linked_worktree && item.open_workspace_id === target.workspace);
+      if (item) this.confirmRemoval(target, item);
+      else el('worktree-error').textContent = 'This workspace is no longer an open linked worktree. Refresh its native state before deleting a checkout.';
+    }
   }
-  private async run(task: (target: Target) => Promise<void>, errorId = 'worktree-error') {
+  private async run(task: (target: WorktreeTarget) => Promise<void>, errorId = 'worktree-error') {
     if (this.busy || !this.target) return;
     this.busy = true; const epoch = this.epoch; el(errorId).textContent = ''; el('worktree-status').textContent = 'Waiting for herdr on ' + this.target.label + '...';
     const controls = [...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>('#worktrees-dialog button, #worktrees-dialog input, #worktree-remove-dialog button, #worktree-remove-dialog input')];
@@ -50,10 +59,14 @@ export class Worktrees {
     finally { this.busy = false; el('worktree-status').textContent = ''; controls.forEach((node, index) => { node.disabled = states[index]; }); }
   }
   private list() { return this.run(target => this.load(target)); }
-  private async load(target: Target) {
+  private confirmRemoval(target: WorktreeTarget, item: Worktree) {
+    this.removing = item; el('worktree-remove-description').textContent = `${target.label} / ${item.path}`; el<HTMLInputElement>('worktree-force').checked = false; el('worktree-remove-error').textContent = ''; el<HTMLDialogElement>('worktree-remove-dialog').showModal();
+  }
+  private async load(target: WorktreeTarget) {
     const epoch = this.epoch;
     const result = await this.api('/api/action', { ...this.source(target), action: 'worktree.list' });
     if (epoch !== this.epoch) return;
+    this.entries = result.worktrees;
     this.repository = result.source.repo_root; el('worktree-host').textContent = `${target.label} / ${result.source.repo_name}`;
     el('worktree-repository').textContent = `${result.source.repo_name} / ${result.source.repo_root}`;
     const parent = el('worktree-list'); parent.replaceChildren();
@@ -64,7 +77,7 @@ export class Worktrees {
       const open = document.createElement('button'); open.textContent = 'OPEN WORKTREE'; open.disabled = item.is_bare || item.is_prunable;
       open.onclick = () => void this.run(async target => { const result = await this.api('/api/action', { ...this.source(target), action: 'worktree.open', path: item.path }); this.changed(); if (el<HTMLDialogElement>('worktrees-dialog').open) { this.openPane(target.machine, result.root_pane); el<HTMLDialogElement>('worktrees-dialog').close(); } }); row.append(open);
       if (item.is_linked_worktree && item.open_workspace_id) {
-        const remove = document.createElement('button'); remove.textContent = 'REMOVE'; remove.onclick = () => { this.removing = item; el('worktree-remove-description').textContent = `${target.label} / ${item.path}`; el<HTMLInputElement>('worktree-force').checked = false; el('worktree-remove-error').textContent = ''; el<HTMLDialogElement>('worktree-remove-dialog').showModal(); }; row.append(remove);
+        const remove = document.createElement('button'); remove.textContent = 'REMOVE'; remove.onclick = () => this.confirmRemoval(target, item); row.append(remove);
       }
       if (item.is_linked_worktree && !item.open_workspace_id) { const detail = document.createElement('p'); detail.textContent = 'Open this worktree before removing it through herdr.'; row.append(detail); }
       parent.append(row);

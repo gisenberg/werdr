@@ -53,7 +53,8 @@ export async function fixture(passwordLogin = false, secure = false, isolatedCla
   const close = async () => {
     try {
       const { result } = JSON.parse(await cli('api', 'snapshot'));
-      for (const workspace of result.snapshot.workspaces) await cli('workspace', 'close', workspace.workspace_id);
+      // Closing a repository parent also closes its linked worktree workspaces.
+      for (const workspace of result.snapshot.workspaces) await cli('workspace', 'close', workspace.workspace_id, '--group').catch(() => {});
     } catch {}
     for (const child of [...children].reverse()) await stop(child);
     await rm(directory, { recursive: true, force: true });

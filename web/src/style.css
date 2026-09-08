@@ -17,6 +17,9 @@ aside { width: var(--sidebar-width, 248px); flex-shrink: 0; border-right: 1px so
 .section button { padding: 3px 7px; }
 aside nav { display: flex; flex-direction: column; }
 aside nav button { border: 0; border-bottom: 1px solid var(--herdr-surface-dim, #25302c); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-row { display: flex; flex: none; min-width: 0; }
+.workspace-row > button[data-id] { flex: 1; min-width: 0; }
+aside nav .workspace-group-toggle { flex: none; width: 30px; padding: 0; color: var(--herdr-accent); }
 #surface { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
 #tabs, #panes { display: flex; overflow-x: auto; flex-shrink: 0; min-height: 34px; border-bottom: 1px solid var(--herdr-surface1, #35413d); }
 #tabs button, #panes button { border: 0; border-right: 1px solid var(--herdr-surface1, #35413d); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }

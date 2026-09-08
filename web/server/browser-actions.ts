@@ -20,7 +20,9 @@ export function browserAction(value: Record<string, unknown>): { method: string;
       return { method, params: { target: value.target } };
 
     case 'workspace.create': return { method, params: { ...(value.label ? { label: text(value.label) } : {}), ...(value.source ? { source_workspace_id: publicId(value.source) } : {}) } };
-    case 'workspace.close': return { method, params: { workspace_id: id() } };
+    case 'workspace.close':
+      if (value.close_group !== undefined && typeof value.close_group !== 'boolean') throw new ManagementError('Invalid workspace group closure.');
+      return { method, params: { workspace_id: id(), ...(value.close_group === true ? { close_group: true } : {}) } };
     case 'workspace.rename': return { method, params: { workspace_id: id(), label: text(value.label) } };
     case 'tab.create': return { method, params: { workspace_id: id(), ...(value.label ? { label: text(value.label) } : {}) } };
     case 'tab.close': return { method, params: { tab_id: id() } };

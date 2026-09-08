@@ -27,7 +27,7 @@ export class Settings {
   preferences: Preferences = structuredClone(defaults);
   private readonly media = matchMedia('(prefers-color-scheme: light)');
   private deviceSize?: number;
-  private sidebarSave?: Promise<void>;
+  private navigationSave?: Promise<void>;
   constructor(private readonly api: Api, private readonly changed: (preferences: Preferences, colors: Record<string, string>) => void) {
     try { const size = Number(localStorage.getItem('werdr-device-font-size')); if (Number.isInteger(size) && size >= 10 && size <= 32) this.deviceSize = size; } catch {}
     this.media.addEventListener('change', () => this.apply(this.preferences));
@@ -52,16 +52,26 @@ export class Settings {
     this.apply(this.preferences);
   }
   saveSidebarSplit(sidebarSectionPercent: number) {
-    const task = this.persistSidebarSplit(sidebarSectionPercent);
-    this.sidebarSave = task;
-    return task.finally(() => { if (this.sidebarSave === task) this.sidebarSave = undefined; });
+    return this.saveNavigation(preferences => ({ ...preferences, sidebarSectionPercent }));
   }
-  private async persistSidebarSplit(sidebarSectionPercent: number) {
-    // Read the latest revision so a drag changes only this preference.
+  saveWorkspaceGroup(key: string, collapsed: boolean) {
+    return this.saveNavigation(preferences => {
+      const groups = new Set(preferences.collapsedWorkspaceGroups);
+      if (collapsed) groups.add(key); else groups.delete(key);
+      return { ...preferences, collapsedWorkspaceGroups: [...groups] };
+    });
+  }
+  private saveNavigation(update: (preferences: Preferences) => Preferences) {
+    const task = (this.navigationSave || Promise.resolve()).catch(() => {}).then(() => this.persistNavigation(update));
+    this.navigationSave = task;
+    return task.finally(() => { if (this.navigationSave === task) this.navigationSave = undefined; });
+  }
+  private async persistNavigation(update: (preferences: Preferences) => Preferences) {
+    // Read the latest revision so a navigation change preserves other preferences.
     // A racing save still conflicts at the server instead of overwriting it.
     try {
       const latest: SettingsState = await this.api('/api/settings');
-      this.state = await this.api('/api/settings', { revision: latest.revision, preferences: { ...latest.preferences, sidebarSectionPercent } });
+      this.state = await this.api('/api/settings', { revision: latest.revision, preferences: validatePreferences(update(latest.preferences)) });
       this.apply(this.state.preferences);
     } catch (error) {
       try { this.state = await this.api('/api/settings'); } catch {}
@@ -70,7 +80,7 @@ export class Settings {
     }
   }
   async refresh() {
-    try { await this.sidebarSave; } catch {}
+    try { await this.navigationSave; } catch {}
     if (element<HTMLDialogElement>('settings-dialog').open) return;
     const latest: SettingsState = await this.api('/api/settings');
     if (latest.revision >= this.state.revision) { this.state = latest; this.apply(this.state.preferences); }
