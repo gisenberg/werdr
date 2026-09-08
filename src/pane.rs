@@ -1540,22 +1540,6 @@ fn shutdown_pane_processes(
     );
 }
 
-#[cfg(unix)]
-fn truncate_handoff_history(history: String, max_bytes: usize) -> String {
-    if history.len() <= max_bytes {
-        return history;
-    }
-    let mut start = history.len().saturating_sub(max_bytes);
-    while !history.is_char_boundary(start) {
-        start += 1;
-    }
-    let Some(newline_offset) = history[start..].find('\n') else {
-        return String::new();
-    };
-    start += newline_offset + 1;
-    history[start..].to_owned()
-}
-
 fn pane_shell(configured_shell: &str) -> String {
     pane_shell_from(configured_shell, std::env::var("SHELL").ok())
 }
@@ -1889,9 +1873,7 @@ impl PaneRuntime {
         if self.terminal.alternate_screen_active() {
             return None;
         }
-        self.snapshot_history().map(|history| {
-            truncate_handoff_history(history, crate::server::handoff::MAX_REPLAY_BYTES_PER_PANE)
-        })
+        self.snapshot_history()
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
@@ -3898,27 +3880,6 @@ mod tests {
                 color_scheme_reporting: true,
             })
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn truncate_handoff_history_keeps_recent_utf8_boundary() {
-        let history = format!("old\n{}\nrecent\n", "é".repeat(8));
-
-        let truncated = truncate_handoff_history(history, 20);
-
-        assert_eq!(truncated, "recent\n");
-        assert!(truncated.is_char_boundary(0));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn truncate_handoff_history_drops_partial_long_line() {
-        let history = format!("old\n{}", "x".repeat(64));
-
-        let truncated = truncate_handoff_history(history, 12);
-
-        assert!(truncated.is_empty());
     }
 
     #[tokio::test]

@@ -775,6 +775,96 @@ fn live_handoff_preserves_installed_plugins() {
 }
 
 #[test]
+fn live_handoff_preserves_retained_primary_history_beyond_eight_kib() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let script = base.join("history.sh");
+    fs::write(&script, "printf '\\033[2J\\033[H'\ni=0\nwhile [ $i -lt 400 ]; do printf '\\033[31mHISTORY_%04d: retained Unicode é 東京 and terminal color\\033[0m\\n' $i; i=$((i+1)); done\nprintf 'HISTORY_READY\\n'\nwhile read line; do printf 'HISTORY_ECHO:%s\\n' \"$line\"; done\n").unwrap();
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id":"create", "method":"workspace.create", "params":{"cwd":"/tmp","focus":true}
+        }),
+    );
+    let pane = created["result"]["root_pane"].clone();
+    let pane_id = pane["pane_id"].as_str().unwrap();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id":"start", "method":"pane.send_input", "params":{"pane_id":pane_id,"text":format!("exec sh {}",script.display()),"keys":["Enter"]}
+        }),
+    ));
+    wait_for_output(&api_socket, pane_id, "HISTORY_READY");
+    let history = |format| {
+        let response = request(
+            &api_socket,
+            serde_json::json!({
+                "id":"read", "method":"pane.read", "params":{"pane_id":pane_id,"source":"recent","lines":2000,"format":format}
+            }),
+        );
+        response["result"]["read"]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let before = history("text");
+    let before_ansi = history("ansi");
+    assert!(before.len() > 8 * 1024);
+    assert!(before.contains("HISTORY_0000:"));
+    assert!(before.contains("HISTORY_0399:"));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id":"handoff", "method":"server.live_handoff", "params":{}
+        }),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let after = history("text");
+    let after_ansi = history("ansi");
+    let lines = |text: &str| {
+        text.lines()
+            .filter(|line| line.starts_with("HISTORY_"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        lines(&after),
+        lines(&before),
+        "handoff discarded retained terminal history"
+    );
+    let colored_lines = |text: &str| {
+        text.lines()
+            .filter(|line| line.contains("HISTORY_"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(
+        before_ansi, before,
+        "fixture must contain semantic terminal colors"
+    );
+    assert_eq!(colored_lines(&after_ansi), colored_lines(&before_ansi));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id":"input", "method":"pane.send_input", "params":{"pane_id":pane_id,"text":"after-handoff","keys":["Enter"]}
+        }),
+    ));
+    wait_for_output(&api_socket, pane_id, "HISTORY_ECHO:after-handoff");
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"stop","method":"server.stop","params":{}}),
+    ));
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn live_handoff_preserves_pane_process_io() {
     let _lock = test_lock();
     let base = unique_test_dir();
@@ -1269,7 +1359,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\ni=0\nwhile [ $i -lt 400 ]; do printf 'AGENT_HISTORY_%04d retained output from a resumable agent\\n' $i; i=$((i+1)); done\nprintf 'AGENT_HISTORY_READY\\n'\nexec /bin/sleep 30\n",
             started_marker.display()
         ),
     )
@@ -1358,12 +1448,35 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
         }),
     ));
 
+    wait_for_output(&api_socket, &pane_id, "AGENT_HISTORY_READY");
+    let history = || {
+        let response = request(
+            &api_socket,
+            serde_json::json!({
+                "id":"agent-history", "method":"pane.read", "params":{"pane_id":pane_id,"source":"recent","lines":2000,"format":"text"}
+            }),
+        );
+        response["result"]["read"]["text"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("AGENT_HISTORY_"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let before = history();
+    assert_eq!(before.len(), 401);
     assert_ok(request(
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
+    assert_eq!(
+        history(),
+        before,
+        "resumable agent history was omitted from handoff"
+    );
 
     assert_ok(request(
         &api_socket,

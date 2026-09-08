@@ -25,7 +25,7 @@ const OWNED_ACK_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(unix)]
 pub(crate) const MAX_FDS_PER_HANDOFF: usize = 64;
 #[cfg(unix)]
-pub(crate) const MAX_REPLAY_BYTES_PER_PANE: usize = 8 * 1024;
+const MAX_HANDOFF_LINE_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(unix)]
 pub(crate) const COMMIT_TIMEOUT: Duration = READY_TIMEOUT;
 
@@ -44,6 +44,30 @@ pub(crate) struct HandoffManifest {
     /// Absent from manifests written before this field existed.
     #[serde(default)]
     pub api_window_title: Option<String>,
+}
+
+/// Refuse oversized transfers before spawning the importer or releasing ownership.
+/// The importer has always bounded its manifest line; retention must never be
+/// reduced merely to fit that transport budget.
+#[cfg(unix)]
+pub(crate) fn validate_manifest_size(manifest: &HandoffManifest) -> io::Result<()> {
+    struct SizeLimit(usize);
+    impl Write for SizeLimit {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            if self.0 > MAX_HANDOFF_LINE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "handoff manifest exceeds the transport limit; original runtime retained",
+                ));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(SizeLimit(0), manifest).map_err(io::Error::other)
 }
 
 #[cfg(unix)]
@@ -371,7 +395,7 @@ fn read_line_unbuffered(stream: &mut UnixStream) -> io::Result<String> {
             return String::from_utf8(bytes)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err));
         }
-        if bytes.len() > 16 * 1024 * 1024 {
+        if bytes.len() > MAX_HANDOFF_LINE_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "handoff line exceeded maximum size",
@@ -486,6 +510,29 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         }
+    }
+
+    #[test]
+    fn manifest_budget_counts_encoded_bytes_and_rejects_without_truncation() {
+        let mut manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            Some(String::new()),
+        );
+        let overhead = serde_json::to_vec(&manifest).unwrap().len();
+        manifest.api_window_title = Some("x".repeat(MAX_HANDOFF_LINE_BYTES - overhead));
+        assert!(validate_manifest_size(&manifest).is_ok());
+        manifest.api_window_title.as_mut().unwrap().push('x');
+        assert!(validate_manifest_size(&manifest).is_err());
+        // JSON escapes consume budget too, even when the source string fits.
+        manifest.api_window_title = Some("\n".repeat(MAX_HANDOFF_LINE_BYTES / 2));
+        assert!(validate_manifest_size(&manifest).is_err());
+        assert_eq!(
+            manifest.api_window_title.as_ref().unwrap().len(),
+            MAX_HANDOFF_LINE_BYTES / 2
+        );
     }
 
     #[test]
