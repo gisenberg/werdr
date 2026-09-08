@@ -1,3 +1,4 @@
+import { allowsAgentSound } from '../shared/agent-sounds';
 import { noticeEndpointKey, type FleetState, type HostView, type Notice, type Pane } from '../shared/fleet';
 import type { Preferences } from '../shared/settings';
 
@@ -70,7 +71,7 @@ export class NotificationPolicy {
       }
       const active = context.machine === notice.machineId && (!!notice.tabId ? context.tab === notice.tabId : !!notice.workspaceId && context.workspace === notice.workspaceId);
       const suppressExternal = active && context.focused;
-      if (preferences.notificationSound && notice.sound && !(notice.kind === 'finished' && suppressExternal)) effects.push({ kind: 'sound', notice });
+      if (allowsAgentSound(preferences.notificationSound, preferences.agentSounds, notice.agent) && notice.sound && !(notice.kind === 'finished' && suppressExternal)) effects.push({ kind: 'sound', notice });
       if ((preferences.toastDelivery === 'browser' || preferences.toastDelivery === 'both') && !active && this.duration(notice, preferences) > 0) {
         if (this.visible) {
           if (this.queued.length === 8) this.queued.shift();

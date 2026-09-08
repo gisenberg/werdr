@@ -1,3 +1,4 @@
+import { defaultAgentSounds, validateAgentSounds, type AgentSounds } from './agent-sounds';
 import { defaultShortcuts, validateShortcuts, type Shortcuts } from './shortcuts';
 import nativeThemes from './native-themes.json';
 import { defaultAgentRows, validateAgentRows, type AgentRows } from './agent-rows';
@@ -15,6 +16,7 @@ export interface Preferences {
   shortcuts: Shortcuts;
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
   paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
+  agentSounds: AgentSounds;
   clipboardToast: boolean; clipboardToastPosition: 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
   notificationAttention: boolean; notificationFinished: boolean; notificationSound: boolean;
   toastSeconds: number; toastPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'; scrollLines: number;
@@ -29,6 +31,7 @@ export const defaults: Preferences = {
   workspaceRows: defaultWorkspaceRows,
   shortcuts: defaultShortcuts,
   paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
+  agentSounds: defaultAgentSounds,
   clipboardToast: true, clipboardToastPosition: 'bottom-center',
   notificationAttention: true, notificationFinished: true, notificationSound: false,
   toastSeconds: 5, toastPosition: 'bottom-right', toastDelivery: 'off', toastDelaySeconds: 1, toastNativeDuration: true, scrollLines: 3,
@@ -41,6 +44,8 @@ export function validatePreferences(value: unknown): Preferences {
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.hasOwn(defaults, key))) fail('unknown field');
   const out = { ...defaults, ...input };
+  try { out.agentSounds = validateAgentSounds(out.agentSounds); }
+  catch (error) { throw new SettingsValidationError(`Agent sounds: ${(error as Error).message}`); }
   try { out.shortcuts = validateShortcuts(out.shortcuts); }
   catch (error) { throw new SettingsValidationError(`Keybindings: ${(error as Error).message}`); }
   try { out.agentRows = validateAgentRows(out.agentRows); }

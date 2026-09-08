@@ -1,9 +1,10 @@
+import { canonicalAgents } from './agents';
 import { fail, record, validateSidebarRows, type SidebarRowToken } from './sidebar-tokens';
 export { tokenStyle, type TokenStyle, type TokenRule } from './sidebar-tokens';
 export type AgentRowToken = SidebarRowToken;
 // Mirrors the native sidebar.agents format in src/config/sidebar.rs and rules.rs.
 export const agentRowTokens = ['state_icon', 'state_text', 'machine', 'workspace', 'tab', 'pane', 'agent', 'terminal_title', 'terminal_title_stripped'] as const;
-export const canonicalAgents = ['pi', 'claude', 'codex', 'gemini', 'cursor', 'devin', 'agy', 'cline', 'omp', 'mastracode', 'opencode', 'copilot', 'kimi', 'kiro', 'droid', 'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'maki', 'muse'] as const;
+export { canonicalAgents } from './agents';
 export interface AgentRows { rows: AgentRowToken[][]; rows_by_agent: Record<string, AgentRowToken[][]>; row_gap: number }
 export const defaultAgentRows: AgentRows = { rows: [['state_icon', 'machine', 'workspace', 'tab'], ['agent']], rows_by_agent: {}, row_gap: 0 };
 export const detailedAgentRows: AgentRows = { rows: [['state_icon', 'machine', 'workspace'], ['agent', 'state_text'], ['pane', 'terminal_title_stripped']], rows_by_agent: {}, row_gap: 1 };

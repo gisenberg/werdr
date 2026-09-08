@@ -108,6 +108,11 @@ Under **TERMINAL SELECTION**, clipboard success feedback can be enabled independ
 The native-style message lasts two seconds, moves aside for an overlapping notification, and leaves terminal focus unchanged.
 Disabling success feedback does not hide clipboard errors.
 These preferences support preview/cancel and persist across gateway restarts.
+
+Expand **PER-AGENT SOUND** in Settings to choose DEFAULT, ON, or OFF for each supported agent.
+DEFAULT and ON follow the **ALERT SOUND** switch; OFF mutes only that agent without hiding its visual notifications.
+Droid starts OFF, matching native herdr configuration.
+Agent sound settings support preview/cancel and persist across gateway restarts.
 Preferences are stored at the gateway with revision checks to prevent one browser overwriting another browser's edits.
 An optional device font-size override stays in that browser.
 Theme and font changes update the mounted terminal without releasing its controller.

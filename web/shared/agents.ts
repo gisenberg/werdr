@@ -1,0 +1,6 @@
+export const canonicalAgents = ['pi', 'claude', 'codex', 'gemini', 'cursor', 'devin', 'agy', 'cline', 'omp', 'mastracode', 'opencode', 'copilot', 'kimi', 'kiro', 'droid', 'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'maki', 'muse'] as const;
+const aliases: Record<string, string> = { 'claude-code': 'claude', 'cursor-agent': 'cursor', 'devin-cli': 'devin', 'devin cli': 'devin', antigravity: 'agy', 'antigravity-cli': 'agy', 'mastra-code': 'mastracode', 'mastra code': 'mastracode', opencode2: 'opencode', 'open-code': 'opencode', 'github-copilot': 'copilot', ghcs: 'copilot', 'kimi-code': 'kimi', 'kimi code': 'kimi', 'kiro-cli': 'kiro', 'amp-local': 'amp', 'grok-build': 'grok', 'hermes-agent': 'hermes', 'kilo-code': 'kilo', 'kilo code': 'kilo', qoderclicn: 'qodercli', qoder: 'qodercli', qodercn: 'qodercli', 'qwen-code': 'qwen', 'qwen code': 'qwen', 'muse-code': 'muse', 'muse-cli': 'muse' };
+export function canonicalAgent(label = '') {
+  const name = label.trim().toLowerCase().split(/[\\/]/).pop()!.replace(/\.(?:exe|cmd|bat)$/i, '');
+  return (canonicalAgents as readonly string[]).includes(name) ? name : /^muse-bin-\d/.test(name) ? 'muse' : Object.hasOwn(aliases, name) ? aliases[name] : undefined;
+}

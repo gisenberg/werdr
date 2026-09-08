@@ -162,7 +162,11 @@ Copy-mode and mouse-selection success use an explicit callback instead of a stat
 The feedback uses the native green border, panel/text palette, and compact monospaced layout, moves aside for an intersecting notification, and clears when its surface is retired or the browser detaches.
 The version-fifteen settings migration retains earlier settings and adds independent clipboard preferences; preview cancellation and gateway restart preserve their saved values.
 `web/test/clipboard-feedback.spec.ts` verifies actual clipboard contents, all six desktop positions, phone bounds, stable terminal canvas identity and focus, expiry, preference cancellation/restart, visible clipboard rejection, native-notification overlap, and detach cleanup.
-Custom sound paths and per-agent sound configuration still need browser equivalents.
+Per-agent sound preferences now follow native `SoundConfig::allows` and its 21 configurable agents, including Droid's default OFF and the global sound switch taking precedence over agent ON.
+The sidebar and notification policy share canonical agent-name resolution, while visual notification delivery remains independent of sound overrides.
+Version-sixteen settings migration preserves existing preferences and adds the native agent defaults; the settings editor supports preview/cancel and desktop/phone layouts.
+Native-source contract tests compare the supported keys and defaults directly with Rust configuration, and native-backed browser tests cover mute/enable, visual delivery, cancellation, global mute, and restart persistence.
+Custom sound paths still need a browser equivalent.
 
 `web/test/notification-policy.test.ts` verifies queue order and overflow, supersession, delayed validation, focus suppression, offline retention, pane moves, replaced terminal and endpoint rejection, delivery modes and legacy history.
 `web/test/notifications.spec.ts` verifies real native custom delivery without a terminal client, literal text, native audio bytes, desktop/phone positions, visible-target shortcuts, offline retention, unchanged terminal identity and pending input, resumed-work cancellation, detach/resume, and durable history without re-alerting.

@@ -8,6 +8,23 @@ import { tmpdir } from 'node:os';
 import { settingsStore } from '../server/settings.ts';
 import { defaults, palette, themeNames, validatePreferences } from '../shared/settings.ts';
 
+test('version-fifteen settings gain native per-agent sound defaults and retain saved overrides privately', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'werdr-agent-sounds-')), path = join(dir, 'settings.json');
+  try {
+    const { agentSounds: _sounds, ...previous } = defaults;
+    await writeFile(path, JSON.stringify({ version: 15, revision: 103, preferences: { ...previous, notificationSound: true, clipboardToast: false } }), { mode: 0o600 });
+    const store = await settingsStore(path), current = store.read();
+    assert.equal(current.revision, 103); assert.equal(current.preferences.notificationSound, true);
+    assert.equal(current.preferences.clipboardToast, false); assert.equal(current.preferences.agentSounds.droid, 'off');
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
+    await store.update(103, { ...current.preferences, agentSounds: { ...current.preferences.agentSounds, droid: 'on', claude: 'off' } });
+    const restored = (await settingsStore(path)).read();
+    assert.equal(restored.preferences.agentSounds.droid, 'on'); assert.equal(restored.preferences.agentSounds.claude, 'off');
+    restored.preferences.agentSounds.claude = 'on'; assert.equal(store.read().preferences.agentSounds.claude, 'off');
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('version-fourteen settings acquire independent native clipboard feedback preferences', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'werdr-clipboard-settings-')), path = join(dir, 'settings.json');
   try {
@@ -19,7 +36,7 @@ test('version-fourteen settings acquire independent native clipboard feedback pr
     assert.equal(migrated.preferences.clipboardToastPosition, 'bottom-center');
     assert.equal(migrated.preferences.toastDelivery, 'off');
     assert.equal(migrated.preferences.fontSize, 18);
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     await store.update(101, { ...migrated.preferences, clipboardToast: false, clipboardToastPosition: 'top-center' });
     assert.equal((await settingsStore(path)).read().preferences.clipboardToast, false);
     assert.equal((await settingsStore(path)).read().preferences.clipboardToastPosition, 'top-center');
@@ -50,7 +67,7 @@ test('version-thirteen settings gain independent workspace rows without changing
     const store = await settingsStore(path), migrated = store.read();
     assert.equal(migrated.revision, 41);
     assert.deepEqual(migrated.preferences, { ...previous, workspaceRows });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     assert.deepEqual((await settingsStore(path)).read(), migrated);
     migrated.preferences.workspaceRows.rows[0].length = 0;
     assert.deepEqual(store.read().preferences.workspaceRows, workspaceRows);
@@ -72,7 +89,7 @@ test('notification migration preserves old delivery and colliding shortcuts with
       assert.deepEqual(migrated.preferences.shortcuts.bindings.open_notification_target, []);
       assert.deepEqual(migrated.preferences.shortcuts.bindings.help, ['prefix+o']);
       assert.deepEqual((await settingsStore(path)).read(), migrated);
-      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     } finally { await rm(directory, { recursive: true, force: true }); }
   }
   for (const value of [{ toastDelivery: 'terminal' }, { toastDelaySeconds: -1 }, { toastDelaySeconds: 61 }, { toastNativeDuration: 'yes' }, { toastPosition: 'top-center' }]) assert.throws(() => validatePreferences(value));
@@ -87,7 +104,7 @@ test('settings serialize concurrent edits, persist privately, and reject future/
     state.preferences.customColors.accent = '#ffffff'; assert.equal(store.read().preferences.customColors.accent, undefined);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     const valid = await readFile(path, 'utf8');
-    await writeFile(path, JSON.stringify({ version: 16, revision: 1, preferences: defaults })); await assert.rejects(settingsStore(path), /unsupported/);
+    await writeFile(path, JSON.stringify({ version: 17, revision: 1, preferences: defaults })); await assert.rejects(settingsStore(path), /unsupported/);
     await writeFile(path, 'null'); await assert.rejects(settingsStore(path), /unsupported/);
     await writeFile(path, valid); await assert.rejects(store.update(0, defaults), /another browser/);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -101,7 +118,7 @@ test('version-one settings migrate once without losing revision or preferences',
     const store = await settingsStore(path);
     assert.equal(store.read().revision, 7);
     assert.deepEqual(store.read().preferences, { ...previous, sidebarSectionPercent: 50 });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     await store.update(7, { ...store.read().preferences, sidebarSectionPercent: 65 });
     assert.equal((await settingsStore(path)).read().preferences.sidebarSectionPercent, 65);
     await writeFile(path, JSON.stringify({ version: 1, revision: 7, preferences: null }));
@@ -116,7 +133,7 @@ test('version-two sidebar settings acquire native pane chrome defaults', async (
     await writeFile(path, JSON.stringify({ version: 2, revision: 11, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 11, preferences: { ...previous, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false, tabBarPosition: 'top' } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     await store.update(11, { ...store.read().preferences, paneOuterBorders: false, tabBarPosition: 'bottom' });
     assert.deepEqual((await settingsStore(path)).read(), store.read());
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -129,7 +146,7 @@ test('version-three chrome settings migrate scrollbar defaults and preserve save
     await writeFile(path, JSON.stringify({ version: 3, revision: 12, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 12, preferences: { ...previous, paneScrollbars: true } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     await store.update(12, { ...store.read().preferences, paneScrollbars: false });
     assert.equal((await settingsStore(path)).read().preferences.paneScrollbars, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -143,7 +160,7 @@ test('version-four settings acquire native copy policy and preserve explicit ret
     await writeFile(path, JSON.stringify({ version: 4, revision: 19, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 19, preferences: { ...previous, copyOnSelect: true } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     await store.update(19, { ...store.read().preferences, copyOnSelect: false });
     assert.equal((await settingsStore(path)).read().preferences.copyOnSelect, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -161,8 +178,8 @@ test('version-five settings migrate bounded independent group state without rese
     assert.deepEqual((await settingsStore(path)).read().preferences.collapsedWorkspaceGroups, [key]);
     const snapshot = store.read(); snapshot.preferences.collapsedWorkspaceGroups.length = 0;
     assert.deepEqual(store.read().preferences.collapsedWorkspaceGroups, [key]);
-    const migrated = JSON.parse(await readFile(path, 'utf8')); assert.equal(migrated.version, 15);
-    const future = JSON.stringify({ ...migrated, version: 16 }); await writeFile(path, future);
+    const migrated = JSON.parse(await readFile(path, 'utf8')); assert.equal(migrated.version, 16);
+    const future = JSON.stringify({ ...migrated, version: 17 }); await writeFile(path, future);
     await assert.rejects(settingsStore(path)); assert.equal(await readFile(path, 'utf8'), future);
   } finally { await rm(directory, { recursive: true, force: true }); }
   for (const collapsedWorkspaceGroups of [null, {}, [''], [42], ['same', 'same'], ['a\n'], ['x'.repeat(8193)], Array.from({ length: 257 }, (_, index) => String(index)), Array.from({ length: 5 }, (_, index) => String(index) + '界'.repeat(3000))]) assert.throws(() => validatePreferences({ collapsedWorkspaceGroups }));
@@ -175,14 +192,14 @@ test('version-six settings add native agent row defaults and retain nested rules
     await writeFile(path, JSON.stringify({ version: 6, revision: 23, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 23, preferences: { ...previous, agentRows } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     const layout = { rows: [['state_icon', '$load']], rows_by_agent: { claude: [[{ token: '$load', rules: [{ gt: 80, fg: '#f44', bold: false }] }]] }, row_gap: 2 };
     await store.update(23, { ...store.read().preferences, agentRows: layout });
     layout.rows_by_agent.claude[0][0].rules[0].fg = '#000';
     const expected = store.read(); assert.equal((expected.preferences.agentRows.rows_by_agent.claude[0][0] as any).rules[0].fg, '#f44');
     expected.preferences.agentRows.rows.length = 0;
     assert.deepEqual((await settingsStore(path)).read(), store.read());
-    const future = JSON.stringify({ version: 16, ...store.read() }); await writeFile(path, future);
+    const future = JSON.stringify({ version: 17, ...store.read() }); await writeFile(path, future);
     await assert.rejects(settingsStore(path)); assert.equal(await readFile(path, 'utf8'), future);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -197,7 +214,7 @@ test('version-nine bindings gain an unbound last-pane action without resetting c
     assert.equal(state.revision, 29); assert.equal(state.preferences.shortcuts.prefix, 'ctrl+a');
     assert.deepEqual(state.preferences.shortcuts.bindings.help, ['prefix+f1']);
     assert.deepEqual(state.preferences.shortcuts.bindings.last_pane, []);
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
     assert.deepEqual((await settingsStore(path)).read(), state);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -212,7 +229,7 @@ test('version-ten detach migration preserves custom prefix bindings and unrelate
       await writeFile(path, JSON.stringify({ version: 10, revision: 71, preferences }), { mode: 0o600 });
       const store = await settingsStore(path);
       assert.deepEqual(store.read(), { revision: 71, preferences: { ...preferences, shortcuts: { ...preferences.shortcuts, bindings: { ...bindings, detach: conflict ? [] : ['prefix+q'] } } } });
-      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
       assert.deepEqual((await settingsStore(path)).read(), store.read());
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -229,7 +246,7 @@ test('reload migration preserves custom keys and handles multiple new defaults i
       const store = await settingsStore(path);
       const expected = { ...preferences, shortcuts: { ...preferences.shortcuts, bindings: { ...bindings, detach: version === 11 ? ['prefix+f3'] : detachConflict ? [] : detach, reload_config: reloadConflict ? [] : reload_config } } };
       assert.deepEqual(store.read(), { revision: 87, preferences: expected });
-      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 15);
+      assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 16);
       assert.deepEqual((await settingsStore(path)).read(), store.read());
     }
   } finally { await rm(directory, { recursive: true, force: true }); }

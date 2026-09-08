@@ -1,3 +1,4 @@
+import { soundAgents } from '../shared/agent-sounds';
 import { shortcutActions } from '../shared/shortcuts';
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
@@ -111,6 +112,17 @@ export class Settings {
       }
       parent.append(group);
     }
+    const sounds = document.createElement('details'); sounds.id = 'settings-agent-sounds';
+    const soundSummary = document.createElement('summary'); soundSummary.textContent = 'PER-AGENT SOUND'; sounds.append(soundSummary);
+    const soundHint = document.createElement('p'); soundHint.textContent = 'DEFAULT and ON follow the Alert sound switch. OFF mutes only this agent. Droid starts OFF, matching native defaults.'; sounds.append(soundHint);
+    const soundControls = document.createElement('div'); soundControls.className = 'agent-sound-controls';
+    for (const agent of soundAgents) {
+      const label = document.createElement('label'); label.textContent = agent.toUpperCase();
+      const input = document.createElement('select'); input.dataset.agentSound = agent;
+      for (const setting of ['default', 'on', 'off']) { const option = document.createElement('option'); option.value = setting; option.textContent = setting.toUpperCase(); input.append(option); }
+      input.value = preferences.agentSounds[agent]; label.append(input); soundControls.append(label);
+    }
+    sounds.append(soundControls); parent.append(sounds);
     const colors = element('settings-colors'); colors.replaceChildren();
     for (const kind of ['agent', 'workspace'] as const) {
       const isAgent = kind === 'agent', name = isAgent ? 'AGENT' : 'WORKSPACE';
@@ -149,6 +161,7 @@ export class Settings {
   }
   private read() {
     const value: Record<string, unknown> = { ...this.state.preferences, customColors: {} };
+    value.agentSounds = Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLSelectElement>('[data-agent-sound]')].map(input => [input.dataset.agentSound, input.value]));
     value.shortcuts = { prefix: element<HTMLInputElement>('settings-prefix').value, bindings: Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLInputElement>('[data-shortcut]')].map(input => [input.dataset.shortcut, input.value.trim() ? input.value.split(',').map(value => value.trim()) : []])) };
     try { value.agentRows = JSON.parse(element<HTMLTextAreaElement>('settings-agent-row-config').value); }
     catch { throw new Error('Agent rows: enter valid JSON.'); }

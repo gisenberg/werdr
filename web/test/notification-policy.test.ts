@@ -15,6 +15,19 @@ function fixture() {
   return { state, notice, preferences, context, policy: new NotificationPolicy() };
 }
 
+test('per-agent sound preferences do not suppress in-app or desktop delivery', () => {
+  for (const enabled of [true, false]) for (const setting of ['default', 'on', 'off'] as const) {
+    const { policy, notice, state, context, preferences } = fixture();
+    preferences.notificationSound = enabled; preferences.agentSounds.claude = setting;
+    notice.agent = 'Claude';
+    policy.receive(notice, 0, preferences);
+    const effects = policy.tick(0, state, context, preferences);
+    assert.equal(effects.some(effect => effect.kind === 'sound'), enabled && setting !== 'off');
+    assert.equal(effects.some(effect => effect.kind === 'desktop'), true);
+    assert.equal(policy.visible?.notice.id, notice.id);
+  }
+});
+
 test('native queue is FIFO with eight waiting slots and fresh promoted lifetimes', () => {
   const { policy, notice, state, context, preferences } = fixture();
   const custom = (id: string) => ({ ...notice, id, paneId: '', terminalId: undefined, workspaceId: '', tabId: '', kind: 'custom' as const });
