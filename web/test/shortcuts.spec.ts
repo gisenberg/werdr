@@ -373,7 +373,9 @@ test('last-pane binding toggles scoped selections and clears uncertain reconnect
     await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
     const beforeReconnect = selected(); await last(); await expect.poll(selected).toBe(third);
     const previousGeneration = observedGeneration; await runtime.restartGateway();
-    await expect.poll(() => observedGeneration).not.toBe(previousGeneration);
+    // Reconnection can already be at its 15-second backoff ceiling. Allow the
+    // next attempt and snapshot to arrive before checking the cleared history.
+    await expect.poll(() => observedGeneration, { timeout: 30_000 }).not.toBe(previousGeneration);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(page.locator('#hosts button').first()).toHaveAttribute('data-badge', 'ONLINE');
     await expect(page.locator('#shield')).toBeHidden();

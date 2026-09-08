@@ -41,7 +41,12 @@ test('a fresh pane link waits for fleet metadata without attaching an unrelated 
     await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', target.pane_id);
     await expect(page.locator('#shield')).toBeHidden();
     expect(attachments).toEqual([target.pane_id]);
-  } finally { await runtime.close(); }
+  } finally {
+    // Finish routed reads while the fixture still serves them, then stop the
+    // browser's reconnect work before shutting down its gateway.
+    try { await page.unrouteAll({ behavior: 'wait' }); await page.close(); }
+    finally { await runtime.close(); }
+  }
 });
 
 test('missing, contradictory, and unknown-host links stay unattached until explicit navigation', async ({ page }) => {
