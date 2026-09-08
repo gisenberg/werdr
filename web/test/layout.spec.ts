@@ -4,6 +4,7 @@ import { consoleInput } from './console-helpers';
 let runtime: Awaited<ReturnType<typeof fixture>>;
 test.beforeAll(async () => { runtime = await fixture(); });
 test.afterAll(async () => { await runtime?.close(); });
+test.afterEach(async ({}, info) => { if (info.status !== info.expectedStatus && runtime) await info.attach('native-fixture.log', { body: runtime.diagnostics(), contentType: 'text/plain' }); });
 test('native desktop splits preserve terminal identity, input, ratios, zoom and phone focus', async ({ page }) => {
   test.setTimeout(90000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

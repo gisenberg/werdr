@@ -33,7 +33,9 @@ test('context actions retain their native target and support keyboard dismissal'
     expect(paneState.label ?? null).toBe(null);
     await page.locator('#panes > button.active').focus(); await page.keyboard.press('Shift+F10');
     await expect(page.getByRole('menuitem', { name: 'CLEAR PANE NAME' })).toHaveCount(0);
+    const previousPane = new URL(page.url()).searchParams.get('pane');
     await page.getByRole('menuitem', { name: 'SPLIT DOWN' }).click(); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(previousPane);
     const pane = new URL(page.url()).searchParams.get('pane')!;
     await expect(page.locator('#shield')).toBeHidden();
     const other = await page.locator('.terminal-pane:visible:not(.pane-active)').getAttribute('data-pane');
@@ -42,6 +44,7 @@ test('context actions retain their native target and support keyboard dismissal'
     await page.getByRole('menuitem', { name: 'SWAP WITH FOCUSED PANE' }).click();
     await expect.poll(async () => (await page.locator(`.terminal-pane[data-pane="${other}"]`).boundingBox())!.y).toBeGreaterThan(before!.y);
 
+    await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', pane);
     await page.locator('.pane-active .pane-title').click({ button: 'right' });
     await page.screenshot({ path: 'test-results/context-menu-desktop.png' });
     await runtime.cli('pane', 'close', pane); await expect(page.getByRole('menu')).not.toBeVisible();

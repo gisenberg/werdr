@@ -270,3 +270,10 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 @media (min-width: 701px) {
   :root[data-tab-bar-position=bottom] #tabs { order: 3; border-bottom: 0; border-top: 1px solid var(--herdr-surface1); }
 }
+
+.pane-scrollbar { position: absolute; right: 0; overflow: hidden; cursor: default; touch-action: none; user-select: none; color: var(--herdr-surface-dim); outline-offset: -1px; }
+.pane-scrollbar[hidden] { display: none; }
+.pane-scrollbar-track, .pane-scrollbar-thumb { position: absolute; inset: 0; white-space: pre; pointer-events: none; }
+.pane-scrollbar-thumb { color: var(--herdr-overlay0); }
+.pane-active .pane-scrollbar-track { color: var(--herdr-overlay0); }
+.pane-active .pane-scrollbar-thumb { color: var(--herdr-overlay1); }

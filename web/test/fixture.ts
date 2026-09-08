@@ -62,7 +62,7 @@ export async function fixture(passwordLogin = false, secure = false, isolatedCla
     start(binary, ['server']);
     await wait(async () => !!(await cli('api', 'snapshot')));
     await startGateway();
-    return { url, cli, directory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close,
+    return { url, cli, directory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close, diagnostics: () => diagnostics,
       stopGateway: () => stop(gateway), startGateway,
       restartGateway: async () => { await stop(gateway); await startGateway(); } };
   } catch (error) { await close(); throw error; }

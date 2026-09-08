@@ -142,3 +142,38 @@ test('per-host action backlog is bounded and drains after the active operation f
     resume(); await Promise.all(tasks); await fleet.action('one', request => request('session.snapshot'));
   } finally { resume(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('terminal scroll subscriptions stay pane-local and cannot follow a reassigned machine target', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-scroll-'));
+  const original: Machine = { id: 'one', label: 'One', enabled: true, target: 'original' };
+  let machine = original;
+  const endpoints: Endpoint[] = [];
+  class ScrollEndpoint extends Endpoint {
+    snapshots = 0;
+    override async request(method: string) {
+      if (method === 'pane.get') return { pane: { scroll: { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 20, alternate_screen_active: false } } } as any;
+      this.snapshots++; return super.request(method);
+    }
+  }
+  const fleet = new Fleet(async () => [machine], join(directory, 'notices.json'), async () => { const endpoint = new ScrollEndpoint(); endpoints.push(endpoint); return endpoint; });
+  const values: any[] = []; let stop = () => {};
+  try {
+    await fleet.start(); await until(() => fleet.state().hosts[0].connection === 'online');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const first = endpoints[0] as ScrollEndpoint;
+    stop = fleet.watchPaneScroll(original, 'p:1', state => values.push(state));
+    await until(() => values.at(-1)?.max_offset_from_bottom === 100);
+    const reads = first.snapshots;
+    const watcher = first.listeners.find(listener => listener.subscriptions.some(value => value.type === 'pane.scroll_changed'))!;
+    for (let offset = 1; offset <= 20; offset++) watcher.receive({ event: 'pane.scroll_changed', data: { pane_id: 'p:1', scroll: { ...values.at(-1), offset_from_bottom: offset } } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(values.at(-1).offset_from_bottom, 20);
+    assert.equal(first.snapshots, reads, 'scroll events must not invalidate the fleet snapshot');
+    machine = { ...original, target: 'replacement' }; await fleet.reloadCatalog();
+    await until(() => endpoints.length === 2 && fleet.state().hosts[0].connection === 'online');
+    assert.equal(values.at(-1), undefined);
+    assert.ok(endpoints[1].listeners.every(listener => !listener.subscriptions.some(value => value.type === 'pane.scroll_changed')));
+    const count = values.length; watcher.receive({ event: 'pane.scroll_changed', data: { pane_id: 'p:1', scroll: { offset_from_bottom: 30, max_offset_from_bottom: 100, viewport_rows: 20 } } });
+    assert.equal(values.length, count);
+  } finally { stop(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});

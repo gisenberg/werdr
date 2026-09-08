@@ -5,6 +5,7 @@ import { fontFamilies, type Preferences, palette } from '../shared/settings';
 import { NativeKeyboard } from './native-keyboard';
 import { NativeMouse } from './native-mouse';
 import { NativeLinks } from './native-links';
+import { NativeScrollbar } from './native-scrollbar';
 import { NativeCopyMode } from './native-copy-mode';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
@@ -16,6 +17,7 @@ export class TerminalController {
   readonly copyMode: NativeCopyMode;
   private readonly links: NativeLinks;
   private readonly mouse: NativeMouse;
+  private readonly scrollbar: NativeScrollbar;
   private terminal?: Terminal;
   private socket?: WebSocket;
   private cleanup?: () => void;
@@ -39,9 +41,11 @@ export class TerminalController {
     this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report);
     this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, text => { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: 'terminal.input', text })); });
+    this.scrollbar = new NativeScrollbar(this.element, this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, () => { select(); this.links.cancel(); this.mouse.release(); }, offset_from_bottom => api('/api/action', { machine, id: pane, action: 'pane.scroll', offset_from_bottom }), report);
+    this.scrollbar.preference(preferences.paneScrollbars);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
-  activate(active: boolean) { if (!active) { this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); } this.element.classList.toggle('pane-active', active); }
+  activate(active: boolean) { if (!active) { this.scrollbar.suspend(); this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); } if (this.element.classList.contains('pane-active') !== active) { this.element.classList.toggle('pane-active', active); this.scrollbar.sync(); } }
   chrome(chrome: PaneChrome, label: string, description: string, active: boolean) {
     const mask = Number(chrome.top) | Number(chrome.right) << 1 | Number(chrome.bottom) << 2 | Number(chrome.left) << 3;
     if (mask !== this.chromeMask) {
@@ -57,11 +61,11 @@ export class TerminalController {
     this.activate(active);
   }
   show(visible: boolean) {
-    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.links.cancel(); this.mouse.release(); }
+    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.scrollbar.suspend(); this.links.cancel(); this.mouse.release(); }
     if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }
   }
   update(preferences: Preferences, colors: Colors) {
-    this.preferences = preferences; this.colors = colors;
+    this.preferences = preferences; this.colors = colors; this.scrollbar.preference(preferences.paneScrollbars);
     if (this.terminal) { Object.assign(this.terminal.options, this.options()); if (this.visible) this.fit?.(); }
   }
   private options() { return { focusOnOpen: false, fontFamily: fontFamilies[this.preferences.font], fontSize: this.preferences.fontSize, cursorBlink: this.preferences.cursorBlink, theme: { background: this.colors.panel_bg, foreground: this.colors.text, cursor: this.colors.accent, selectionBackground: this.colors.selection_bg } }; }
@@ -73,12 +77,12 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
-    this.mouse.setEnabled(false); this.copyMode.exit(true, false); this.links.cancel();
+    this.scrollbar.reset(); this.mouse.setEnabled(false); this.copyMode.exit(true, false); this.links.cancel();
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
-  dispose() { this.reset(); this.mouse.dispose(); this.links.dispose(); this.element.remove(); }
+  dispose() { this.reset(); this.scrollbar.dispose(); this.mouse.dispose(); this.links.dispose(); this.element.remove(); }
   async connect(takeover = false, retry = false) {
     this.reset(); if (!this.visible) return; if (!retry) this.attempt = 0;
     const epoch = this.epoch; if (!retry) this.failure = undefined; this.shield.textContent = this.failure || 'Attaching to Herdr...'; this.changed();
@@ -89,18 +93,35 @@ export class TerminalController {
     if (epoch !== this.epoch) return;
     const term = new library.Terminal(this.options()); this.terminal = term;
     const fit = new library.FitAddon(); term.loadAddon(fit); term.open(this.content);
-    const fitVisible = () => { if (this.visible && this.content.clientWidth > 0 && this.content.clientHeight > 0) fit.fit(); };
+    let desired = { cols: term.cols, rows: term.rows };
+    const fitVisible = () => { if (this.visible && this.content.clientWidth > 0 && this.content.clientHeight > 0) { fit.fit(); desired = { cols: term.cols, rows: term.rows }; this.scrollbar.sync(); } };
     this.fit = fitVisible; fitVisible();
     const params = new URLSearchParams({ machine: this.machine, pane: this.pane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0' });
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); this.socket = ws;
     const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
+    let forwarded = { ...desired };
+    const sendSize = () => {
+      if (ws.readyState !== WebSocket.OPEN || desired.cols === forwarded.cols && desired.rows === forwarded.rows) return;
+      send({ type: 'terminal.resize', ...desired }); forwarded = { ...desired };
+    };
+    // ResizeObserver can run while the handshake is pending. Preserve its most
+    // recent dimensions rather than losing the resize before the socket opens.
+    ws.onopen = sendSize;
     const keyboard = new NativeKeyboard(this.content, term, term.createInputEncoder(), library, () => this.ready && this.visible && !this.copyMode.active, text => send({ type: 'terminal.input', text }));
-    let applyingFrame = false;
+    let applyingFrame = false, scrollReady = false, settled = false;
+    let paintedSize: { width: number; height: number } | undefined;
     const boot = document.querySelector<HTMLDialogElement>('#boot')!;
-    const reveal = () => { if (epoch === this.epoch && this.ready && !boot.open) { this.shield.hidden = true; this.changed(); } };
+    const reveal = () => {
+      if (!settled && scrollReady && paintedSize?.width === desired.cols && paintedSize.height === desired.rows) settled = true;
+      if (epoch !== this.epoch || !settled) return;
+      if (!this.ready) { this.ready = true; this.scrollbar.sync(); }
+      if (!boot.open) { this.shield.hidden = true; this.changed(); }
+    };
+    // Optional metadata must not indefinitely block a compatible terminal.
+    const scrollTimeout = setTimeout(() => { scrollReady = true; reveal(); }, 2000);
     boot.addEventListener('close', reveal);
     const input = term.onData(text => { if (!this.copyMode.active) send({ type: 'terminal.input', text }); });
-    const resize = term.onResize(({ cols, rows }) => { this.links.cancel(); this.copyMode.afterFrame(); if (!applyingFrame && this.visible) send({ type: 'terminal.resize', cols, rows }); });
+    const resize = term.onResize(({ cols, rows }) => { this.scrollbar.sync(); this.links.cancel(); this.copyMode.afterFrame(); if (!applyingFrame && this.visible) { desired = { cols, rows }; sendSize(); } });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
     // AttachScroll uses crossterm modifier bits, unlike SGR mouse reports.
     const scrollPoint = (event: { clientX: number; clientY: number; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean }) => {
@@ -125,25 +146,27 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
+        if (frame.type === 'terminal.scroll-state') { this.scrollbar.update(frame.scroll); scrollReady = frame.ready !== false; if (scrollReady) { clearTimeout(scrollTimeout); fitVisible(); reveal(); } return; }
         if (frame.type === 'terminal.keyboard') { keyboard.update(frame.flags, frame.modify_other_keys_level); return; }
         if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { this.mouse.setEnabled(frame.enabled); return; }
-        if (frame.type === 'terminal.closed') { this.mouse.setEnabled(false); this.links.cancel(); this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
+        if (frame.type === 'terminal.closed') { this.scrollbar.reset(); this.mouse.setEnabled(false); this.links.cancel(); this.copyMode.exit(false, false); this.ready = false; this.shield.hidden = false; this.failure = typeof frame.reason === 'string' ? frame.reason : 'Terminal detached'; this.shield.textContent = this.failure || 'Terminal detached'; this.changed(); return; }
         if (frame.type !== 'terminal.frame' || frame.encoding !== 'ansi') return;
         this.links.invalidate();
+        const size = { width: frame.width, height: frame.height };
         const bytes = Uint8Array.from(atob(frame.bytes), c => c.charCodeAt(0));
         applyingFrame = true;
         try { if (term.cols !== frame.width || term.rows !== frame.height) term.resize(frame.width, frame.height); } finally { applyingFrame = false; }
-        term.write(bytes, () => { if (epoch === this.epoch) { this.ready = true; this.failure = undefined; this.attempt = 0; this.copyMode.afterFrame(); reveal(); } });
+        term.write(bytes, () => { if (epoch === this.epoch) { paintedSize = size; this.failure = undefined; this.attempt = 0; this.copyMode.afterFrame(); reveal(); } });
       } catch { ws.close(1002, 'Invalid frame'); }
     };
     ws.onclose = () => {
       if (epoch !== this.epoch) return;
-      this.mouse.setEnabled(false); this.copyMode.exit(false, false); this.links.cancel();
+      this.scrollbar.reset(); this.mouse.setEnabled(false); this.copyMode.exit(false, false); this.links.cancel();
       this.ready = false; this.shield.hidden = false;
       if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
       this.timer = setTimeout(() => { this.timer = undefined; if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
     };
-    this.cleanup = () => { keyboard.dispose(); boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
+    this.cleanup = () => { clearTimeout(scrollTimeout); keyboard.dispose(); boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
   }
 }

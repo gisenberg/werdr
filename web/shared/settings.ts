@@ -7,7 +7,7 @@ export interface Preferences {
   font: typeof fonts[number]; fontSize: number; cursorBlink: boolean;
   sidebarWidth: number; sidebarSectionPercent: number; compact: boolean; indicators: 'text' | 'dots' | 'symbols';
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
-  paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
+  paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
   notificationAttention: boolean; notificationFinished: boolean; notificationSound: boolean;
   toastSeconds: number; toastPosition: 'top-right' | 'bottom-right'; scrollLines: number;
 }
@@ -15,7 +15,7 @@ export const defaults: Preferences = {
   theme: 'catppuccin', appearance: 'theme', darkTheme: 'catppuccin', lightTheme: 'catppuccin-latte', customColors: {},
   font: 'monospace', fontSize: 14, cursorBlink: false, sidebarWidth: 248, sidebarSectionPercent: 50, compact: true,
   indicators: 'text', agentSort: 'priority', confirmClose: true, hideSingleTab: false, tabBarPosition: 'top',
-  paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
+  paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
   notificationAttention: true, notificationFinished: true, notificationSound: false,
   toastSeconds: 5, toastPosition: 'top-right', scrollLines: 3,
 };
@@ -29,7 +29,7 @@ export function validatePreferences(value: unknown): Preferences {
   const out = { ...defaults, ...input };
   for (const key of ['theme', 'darkTheme', 'lightTheme'] as const) if (typeof out[key] !== 'string' || !themeNames.includes(out[key])) fail(key);
   for (const [key, values] of Object.entries({ appearance: ['theme', 'dark', 'light', 'system'], font: fonts, indicators: ['text', 'dots', 'symbols'], agentSort: ['priority', 'native'], tabBarPosition: ['top', 'bottom'], toastPosition: ['top-right', 'bottom-right'] })) if (!values.includes(out[key as keyof Preferences] as never)) fail(key);
-  for (const key of ['cursorBlink', 'compact', 'confirmClose', 'hideSingleTab', 'paneBorders', 'paneOuterBorders', 'paneGaps', 'showAgentLabelsOnPaneBorders', 'notificationAttention', 'notificationFinished', 'notificationSound'] as const) if (typeof out[key] !== 'boolean') fail(key);
+  for (const key of ['cursorBlink', 'compact', 'confirmClose', 'hideSingleTab', 'paneScrollbars', 'paneBorders', 'paneOuterBorders', 'paneGaps', 'showAgentLabelsOnPaneBorders', 'notificationAttention', 'notificationFinished', 'notificationSound'] as const) if (typeof out[key] !== 'boolean') fail(key);
   for (const [key, min, max] of [['fontSize', 10, 32], ['sidebarWidth', 160, 640], ['sidebarSectionPercent', 10, 90], ['toastSeconds', 0, 60], ['scrollLines', 1, 20]] as const) if (!Number.isInteger(out[key]) || out[key] < min || out[key] > max) fail(key);
   if (!out.customColors || typeof out.customColors !== 'object' || Array.isArray(out.customColors)) fail('customColors');
   const allowedColors = Object.keys(nativeThemes.catppuccin);

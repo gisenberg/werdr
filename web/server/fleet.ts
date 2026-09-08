@@ -1,3 +1,5 @@
+import { PaneScrollWatch } from './pane-scroll-watch.ts';
+import type { ScrollState } from '../shared/scrollbar.ts';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import type { Agent, AgentStatus, FleetEvent, FleetState, HostView, Machine, Notice, Snapshot } from '../shared/fleet.ts';
@@ -15,6 +17,7 @@ interface Host {
 type NativeRequest = (method: string, params?: object, invalidate?: boolean) => Promise<any>;
 export class Fleet extends EventEmitter {
   private hosts = new Map<string, Host>();
+  private scrollWatches = new Set<() => void>();
   private actionQueues = new WeakMap<Host, { tail: Promise<unknown>; pending: number }>();
   private order: string[] = [];
   private revision = 0;
@@ -35,7 +38,7 @@ export class Fleet extends EventEmitter {
     this.catalogTimer = setInterval(() => { void this.reloadCatalog().catch(error => this.emit('diagnostic', error)); }, 2000); this.catalogTimer.unref();
   }
   state(): FleetState { return { revision: this.revision, hosts: this.order.map(id => this.hosts.get(id)!.view), notices: this.notices }; }
-  private publish(event: Omit<Extract<FleetEvent, { revision: number }>, 'revision'> | any) { if (!this.stopped) this.emit('event', { ...event, revision: ++this.revision } as FleetEvent); }
+  private publish(event: Omit<Extract<FleetEvent, { revision: number }>, 'revision'> | any) { if (!this.stopped) { for (const reconcile of this.scrollWatches) reconcile(); this.emit('event', { ...event, revision: ++this.revision } as FleetEvent); } }
   private publishHost(host: Host) { this.publish({ type: 'fleet.host', host: host.view }); }
   async reloadCatalog() {
     if (this.refreshingCatalog || this.stopped) return;
@@ -194,6 +197,15 @@ export class Fleet extends EventEmitter {
     this.noticeQueue = task.catch(() => {}); return task;
   }
   markNoticesRead(id?: string) { return this.updateNotices(notices => { for (const notice of notices) if (!id || notice.id === id) notice.read = true; }); }
+  watchPaneScroll(machine: Machine, pane: string, receive: (state: ScrollState | undefined, ready: boolean) => void) {
+    const expected = identity(machine), watch = new PaneScrollWatch(pane, receive);
+    const reconcile = () => {
+      const host = this.hosts.get(machine.id);
+      watch.reconcile(host?.view.connection === 'online' && identity(host.view.machine) === expected ? host.api : undefined);
+    };
+    this.scrollWatches.add(reconcile); reconcile();
+    return () => { this.scrollWatches.delete(reconcile); watch.dispose(); };
+  }
   async request(machineId: string, method: string, params: object = {}, invalidate = true) {
     return this.requestScope(machineId)(method, params, invalidate);
   }
@@ -227,5 +239,5 @@ export class Fleet extends EventEmitter {
     if (host.api && host.view.connection === 'online') this.invalidate(host, 0);
     else { this.retire(host); host.attempts = 0; this.schedule(host, 0); }
   }
-  stop() { this.stopped = true; clearInterval(this.catalogTimer); for (const host of this.hosts.values()) this.retire(host); }
+  stop() { this.stopped = true; clearInterval(this.catalogTimer); for (const host of this.hosts.values()) this.retire(host); for (const reconcile of this.scrollWatches) reconcile(); this.scrollWatches.clear(); }
 }

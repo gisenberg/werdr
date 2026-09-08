@@ -14,6 +14,7 @@ const groups: [string, Control[]][] = [
     { key: 'compact', label: 'COMPACT CHROME' }, { key: 'indicators', label: 'STATUS INDICATORS', choices: ['text', 'dots', 'symbols'] },
     { key: 'hideSingleTab', label: 'HIDE TAB BAR FOR ONE TAB' },
     { key: 'tabBarPosition', label: 'DESKTOP TAB BAR POSITION', choices: ['top', 'bottom'] },
+    { key: 'paneScrollbars', label: 'TERMINAL SCROLLBARS' },
     { key: 'paneBorders', label: 'SPLIT PANE BORDERS' }, { key: 'paneOuterBorders', label: 'OUTER PANE BORDERS' },
     { key: 'paneGaps', label: 'GAPS BETWEEN PANES' }, { key: 'showAgentLabelsOnPaneBorders', label: 'AGENT LABELS ON PANE BORDERS' },
   ]],

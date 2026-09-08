@@ -188,7 +188,7 @@ const handler: RequestListener = async (req, res) => {
         const { method, params } = browserAction(value);
         const machine = publicId(value.machine);
         const read = copyReadActions.has(method) || ['worktree.list', 'integration.list'].includes(method);
-        return reply(res, 200, read ? await fleet.request(machine, method, params, false) : await fleet.action(machine, request => request(method, params)));
+        return reply(res, 200, read ? await fleet.request(machine, method, params, false) : await fleet.action(machine, request => request(method, params, method !== 'pane.scroll')));
       }
       return reply(res, 404, { error: 'Unknown route' });
     }
@@ -290,6 +290,7 @@ server.on('upgrade', async (req, socket, head) => {
         if (ws.bufferedAmount > 4 * 1024 * 1024) { closeSocket(ws, 1013, 'Viewer too slow'); return; }
         ws.send(JSON.stringify(value));
       };
+      const stopScroll = fleet.watchPaneScroll(machine, pane, (scroll, ready) => send({ type: 'terminal.scroll-state', scroll: scroll ?? null, ready }));
       child.stdout.on('data', (chunk: Buffer) => {
         if (released || ended) return;
         try {
@@ -314,6 +315,7 @@ server.on('upgrade', async (req, socket, head) => {
       });
       ws.on('error', () => ws.terminate());
       ws.on('close', () => {
+        stopScroll();
         sockets.delete(ws); terminalMachines.delete(ws);
         if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id);
         controllers.get(ws)?.(); controllers.delete(ws);
