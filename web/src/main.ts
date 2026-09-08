@@ -40,7 +40,7 @@ const status = (text: string) => { element('status').textContent = text; };
 let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = emptySnapshot();
 let fleetState: FleetState = { revision: 0, hosts: [], notices: [] };
-let pendingHost: string | undefined;
+let pendingHost: { id: string; intent: number } | undefined;
 let pendingPane: { machine: string; pane: string; tab: string } | undefined;
 const selections = new Map<string, { workspace: string; tab: string; pane: string }>();
 try {
@@ -48,10 +48,10 @@ try {
   const query = new URLSearchParams(location.search);
   machineId = query.get('machine') || saved.machine || 'local'; workspaceId = query.get('workspace') || saved.workspace || ''; tabId = query.get('tab') || saved.tab || ''; paneId = query.get('pane') || saved.pane || '';
 } catch {}
-let remembered = '', selectionRevision = 0;
+let remembered = '', selectionIntent = 0;
 function rememberSelection() {
   const value = { machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId }; const encoded = JSON.stringify(value);
-  if (remembered === encoded) return; ++selectionRevision; remembered = encoded; selections.set(machineId, value);
+  if (remembered === encoded) return; remembered = encoded; selections.set(machineId, value);
   try { localStorage.setItem('werdr-selection', encoded); } catch {}
   const url = new URL(location.href); for (const [key, item] of Object.entries(value)) { if (item) url.searchParams.set(key, item); else url.searchParams.delete(key); }
   history.replaceState(null, '', url);
@@ -72,7 +72,7 @@ const fleet = new FleetClient(applyFleet, online => {
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
-function selectPane(id: string) { if (paneId === id && !pendingPane) return; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
+function selectPane(id: string) { if (paneId === id && !pendingPane) return; ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
@@ -90,14 +90,20 @@ element('settings-integrations').onclick = () => integrations.open();
 element('settings-plugins').onclick = () => plugins.open();
 element('settings').onclick = () => void settings.open();
 function selectedHost() { return fleetState.hosts.find(host => host.machine.id === machineId); }
-function selectHost(id: string) {
-  if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = id; fleet.resync(); return; }
+function machineContext(id: string) {
+  const machine = fleetState.hosts.find(host => host.machine.id === id)?.machine;
+  return machine ? JSON.stringify([machine.id, machine.target || '', machine.session || '']) : undefined;
+}
+function selectHost(id: string, fulfill = false) {
+  if (!fulfill) { ++selectionIntent; pendingHost = undefined; }
+  if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = { id, intent: selectionIntent }; fleet.resync(); return; }
   if (machineId === id) return;
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
+  ++selectionIntent;
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
   if (machineId !== machine) detach();
   if (waitForSnapshot) surface.waitForSelection();
@@ -127,7 +133,8 @@ function waitForPane(machine: string, pane: string, tab: string, closedNotice = 
 }
 function applyFleet(state: FleetState, added?: Notice) {
   const previous = selectedHost()?.connection; fleetState = state;
-  if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost)) { const id = pendingHost; pendingHost = undefined; selectHost(id); }
+  if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
+  if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
   if (!selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
     detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
@@ -243,7 +250,7 @@ function navigation(id: string, items: NavigationItem[]) {
 function renderNavigation() {
   shortcuts?.sync();
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
-  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
+  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   updateShieldBounds();
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || !!pendingPane || selectedHost()?.connection !== 'online';
@@ -290,12 +297,14 @@ async function refresh() {
 function detach() { surface.clear(); }
 async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId) {
-  const interaction = interactionRevision, selection = selectionRevision, source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
+  const interaction = interactionRevision, selection = ++selectionIntent, endpoint = machineContext(selected), source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
     const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
     if (machineId !== selected) { fleet.resync(); return; }
-    const applySelection = selectionRevision === selection && workspaceId === source.workspace && tabId === source.tab && paneId === source.pane;
+    // Native events may remove the source before this reply arrives. Only a
+    // newer explicit navigation/command or endpoint replacement cancels intent.
+    const applySelection = selectionIntent === selection && endpoint !== undefined && machineContext(selected) === endpoint;
     if (applySelection && action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
     if (applySelection && created && action !== 'pane.close' && (created.pane_id !== paneId || created.tab_id !== tabId || created.workspace_id !== workspaceId || !snapshot.panes.some(pane => pane.pane_id === created.pane_id))) {

@@ -79,7 +79,8 @@ Browser and OS shortcuts may not reach the page; configure a prefix alternative 
 
 Help shows the saved bindings and whether each action is available in the selected context.
 Editable controls, dialogs, IME composition, clipboard access, and held command keys retain their own input scope.
-Changing pane, attachment, or host cancels an armed command; a delayed layout response cannot move selection back to its old target.
+Changing pane, attachment, or host cancels an armed command.
+Native fallback after a move still follows the moved pane, while a newer navigation or command prevents an older response from changing selection.
 The browser binding catalog covers its supported built-in actions; native custom shell bindings, navigation-mode controls, detach/reload/notification-target bindings, and last-pane tracking remain outside this catalog.
 ## Current behavior
 

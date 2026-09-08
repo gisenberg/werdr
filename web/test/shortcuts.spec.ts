@@ -107,3 +107,48 @@ test('late layout replies preserve selection and held commands cannot type into 
     await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(page.locator('#shortcut-help')).toContainText('Resize mode [UNAVAILABLE]');
   } finally { release(); await runtime.close(); }
 });
+
+test('moving a pane follows its destination after automatic native fallback but respects newer navigation and commands', async ({ page }) => {
+  test.setTimeout(120_000); const runtime = await fixture(); let release = () => {};
+  const run = async (label: string) => { await page.locator('#commands').click(); await page.locator('#command-list').getByRole('button', { name: label, exact: true }).click(); };
+  try {
+    await login(page, runtime); const first = new URL(page.url()).searchParams.get('pane')!;
+    await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('#shield')).toBeHidden();
+    const originalWorkspace = new URL(page.url()).searchParams.get('workspace')!; let source = '';
+    let started = () => {}; let waiting = new Promise<void>(resolve => { started = resolve; }); let gate = new Promise<void>(resolve => { release = resolve; });
+    let delayedAction = 'pane.move';
+    await page.route('**/api/action', async route => {
+      if (route.request().postDataJSON().action !== delayedAction) { await route.continue(); return; }
+      const response = await route.fetch();
+      if (delayedAction === 'pane.move') source = (await response.json()).move_result.pane.pane_id;
+      started(); await gate; await route.fulfill({ response });
+    });
+    await run('Move pane to new workspace'); await waiting;
+    await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', first);
+    expect(new URL(page.url()).searchParams.get('workspace')).toBe(originalWorkspace);
+    release(); await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', source);
+    await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).not.toBe(originalWorkspace);
+    await expect(page.locator('#shield')).toBeHidden(); await run('Move workspace earlier');
+    await expect(page.locator('#workspaces button').first()).toHaveAttribute('data-id', 'local/' + new URL(page.url()).searchParams.get('workspace'));
+
+    // An explicit round trip is newer intent even when the selected pane is the
+    // same again by the time an older request returns.
+    await focus(page); await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('#shield')).toBeHidden();
+    const latest = new URL(page.url()).searchParams.get('pane')!;
+    waiting = new Promise<void>(resolve => { started = resolve; }); gate = new Promise<void>(resolve => { release = resolve; }); delayedAction = 'pane.focus_direction';
+    await focus(page); await prefix(page, 'h'); await waiting;
+    await page.locator(`#panes > button[data-id="${source}"]`).click(); await page.locator(`#panes > button[data-id="${latest}"]`).click();
+    let refreshed = page.waitForResponse(response => response.url().endsWith('/api/fleet') && response.request().method() === 'GET'); release(); await (await refreshed).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(new URL(page.url()).searchParams.get('pane')).toBe(latest);
+
+    // A newer command also supersedes a delayed focus response without requiring
+    // an intermediate local selection change.
+    waiting = new Promise<void>(resolve => { started = resolve; }); gate = new Promise<void>(resolve => { release = resolve; });
+    await focus(page); await prefix(page, 'h'); await waiting;
+    await run('Zoom / restore pane'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(1);
+    refreshed = page.waitForResponse(response => response.url().endsWith('/api/fleet') && response.request().method() === 'GET'); release(); await (await refreshed).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(new URL(page.url()).searchParams.get('pane')).toBe(latest);
+  } finally { release(); await runtime.close(); }
+});
