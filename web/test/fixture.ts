@@ -20,7 +20,7 @@ export async function fixture(passwordLogin = false, secure = false, isolatedCla
   await mkdir(resolve(directory, 'herdr'), { recursive: true });
   await writeFile(resolve(directory, 'herdr/config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n', { mode: 0o600 });
   const binary = resolve(nativeRuntime || process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
-  const env = { ...process.env, XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary, ...(isolatedClaude ? { CLAUDE_CONFIG_DIR: resolve(directory, 'claude-config') } : {}), ...(editor === undefined ? {} : { EDITOR: editor, VISUAL: editor }) };
+  const env = { ...process.env, HERDR_CONFIG_PATH: resolve(directory, 'herdr/config.toml'), XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary, ...(isolatedClaude ? { CLAUDE_CONFIG_DIR: resolve(directory, 'claude-config') } : {}), ...(editor === undefined ? {} : { EDITOR: editor, VISUAL: editor }) };
   for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSION', 'WERDR_SOCKET_PATH', 'WERDR_SESSION']) delete (env as Record<string, string | undefined>)[key];
   const listener = createServer(); await new Promise<void>(r => listener.listen(0, '127.0.0.1', r));
   const port = (listener.address() as { port: number }).port;

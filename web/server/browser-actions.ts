@@ -2,6 +2,7 @@ import { worktreeAction } from './worktree-actions.ts';
 import { copyAction, copyReadActions } from './copy-actions.ts';
 import { publicId } from './herdr.ts';
 import { ManagementError } from './machine-management.ts';
+import { commandTarget } from '../shared/commands.ts';
 
 const text = (value: unknown, max = 256): string => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > max || /\0/.test(value)) throw new ManagementError('Invalid action text.');
@@ -13,6 +14,20 @@ export function browserAction(value: Record<string, unknown>): { method: string;
   if (method.startsWith('worktree.')) return worktreeAction(value);
   const id = () => publicId(value.id);
   switch (method) {
+    case 'command.execute': {
+      if (typeof value.command_id !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(value.command_id)) throw new ManagementError('Invalid native command ID.');
+      let target;
+      try { target = value.target === null ? null : commandTarget(value.target); } catch { throw new ManagementError('Choose an explicit native command target.'); }
+      let selection;
+      if (value.selection !== undefined) {
+        if (!target || !value.selection || typeof value.selection !== 'object' || Array.isArray(value.selection)) throw new ManagementError('Invalid command selection.');
+        const selected = value.selection as Record<string, unknown>;
+        if (selected.pane_id !== target.pane_id) throw new ManagementError('Command selection belongs to another pane.');
+        selection = copyAction({ ...selected, action: 'pane.selection.read', id: target.pane_id }).params;
+      }
+      return { method, params: { command_id: value.command_id, target, ...(selection ? { selection } : {}) } };
+    }
+    case 'popup.close_exact': return { method, params: { terminal_id: publicId(value.terminal_id), owner_tab_id: publicId(value.owner_tab_id) } };
     case 'server.reload_config': return { method, params: {} };
     case 'integration.list': return { method, params: {} };
     case 'integration.install':

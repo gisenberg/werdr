@@ -20,7 +20,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 | Agents | Start/prompt/rename, native ordering/views, detail/status metadata and attention navigation | Partial: basic actions and fleet list, native status priority with newest transitions first within each host, workspace/tab/title/cwd search and tooltips, and next/previous blocked-agent navigation in native snapshot order; native agent row tokens, per-agent layouts, metadata labels and first-match conditional styles are implemented; native custom views and custom-tab-label metadata are implemented in the candidate runtime; live runtime adoption remains |
 | Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Native semantic subscriptions, bounded client queue, delayed state validation, active-tab suppression, visible-target navigation, native durations, four positions and built-in sounds are implemented; older runtimes use a conservative status-transition fallback; semantic runtime adoption, custom sound configuration and clipboard-toast preferences remain |
 | Integrations | Native readiness list and explicit installation/uninstallation with results | Implemented all native targets, individual and recommended installs, uninstall confirmation and native results; isolated agent-config browser tests verify install/reinstall/uninstall, preservation of unrelated settings and native failures |
-| Plugins | Native management, actions, logs and plugin pane lifecycle | Partial: native linking/unlinking, enable/disable, manifest inspection, selected-context actions, logs, and overlay/split/tab/zoomed panes; isolated native tests verify command outcomes, input, closure, focus restoration and gateway restart; GitHub installation now preserves the native manifest preview, explicit confirmation, ref/provenance, build results and failed-replacement rollback, with managed uninstall and bounded owner-scoped job history; popup surfaces remain |
+| Plugins | Native management, actions, logs and plugin pane lifecycle | Partial: native linking/unlinking, enable/disable, manifest inspection, selected-context actions, logs, and overlay/split/tab/zoomed panes; isolated native tests verify command outcomes, input, closure, focus restoration and gateway restart; GitHub installation now preserves the native manifest preview, explicit confirmation, ref/provenance, build results and failed-replacement rollback, with managed uninstall and bounded owner-scoped job history; popup surfaces are implemented against the candidate runtime and await owning-runtime rollout |
 | Host onboarding | Shared native catalog, explicit compatibility/install prompts and repair, no forced runtime replacement | Existing management tests; extend compatibility coverage |
 | Runtime configuration | Explicit host-scoped shell/cwd/scrollback/worktree/resume settings and validated reload | Browser controls use the companion to preserve unrelated TOML, reject stale revisions, save atomically, and report native reload results; isolated POSIX tests verify new-pane cwd, invalid input, foreign-origin rejection, concurrent edits and save/reload partial outcomes; live Windows validation remains |
 | Desktop ergonomics | Keyboard help, focus restoration, accessible forms, context menus, responsive fallback, no terminal remount during chrome changes | Partial: responsive console dialogs, native fallback focus after closure, command-palette readiness updates preserve search and keyboard focus, and a delayed split-response test verifies that later input in navigation keeps focus; contextual shortcut help and held-key protection are implemented and tested; remaining ergonomics still need verification |
@@ -39,7 +39,8 @@ A forced move-response race verifies destination selection after automatic nativ
 The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.
 Existing Kitty, copy-mode, layout, context-menu, and reconnect tests remain characterization coverage for this browser-owned input layer.
 Help keeps its heading and close control visible on desktop and phone layouts.
-Native custom shell commands and complete keyboard-layout/protocol coverage remain outstanding.
+Configured native commands are implemented and verified against the candidate runtime as described below.
+Complete keyboard-layout/protocol coverage remains outstanding.
 Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.
 Its request epoch cancels delayed reads and actions, fences stale authentication failures, and keeps online/visibility wakeups idle.
 Resume validates the preserved endpoint and terminal identity through a fresh snapshot, including after an expired login; missing or replaced targets require explicit selection.
@@ -213,14 +214,32 @@ It retains Copy and Navigate scope, composition bypass, held-key suppression, an
 Native tests verify secret-free ordered metadata, unchanged focus, empty-fleet reload invalidation, unknown future actions, and existing stale-ID rejection.
 Gateway tests cover concurrent reload, endpoint replacement, unsupported servers, failed subscriptions and reads, retry recovery, late responses, disposal, and host isolation.
 The foundation passed full native checks with 3,285 tests and two platform skips, Windows cross-target lint and test compilation, and 167 browser package tests with typechecking and build.
-This work is not deployed, and browser command dispatch is still incomplete.
+This work is not deployed.
+Browser dispatch now consumes the candidate command catalog through the command palette and configured bindings.
 The candidate adds capability-gated `command.execute`, validating the complete workspace/tab/pane/terminal target and selection revision before changing focus.
 Its producer returns the created pane or popup identity, shell-start acknowledgement, or plugin invocation ID without exposing executable text or plugin output.
 The original `command.invoke` reply remains unchanged.
 Popup ownership is assigned by the producer before publication and survives tab and workspace reordering; removing the owning tab closes its popup.
-Browser dispatch must consume these exact results because a later global-focus read can observe another client's action.
+Browser dispatch consumes these exact results because a later global-focus read can observe another client's action.
 Popup commands additionally require their singleton terminal's metadata, rendering, input, ownership, and close path; plugin actions may open these popups too.
-Complete browser dispatch must preserve scoped workspace/tab/pane identities and selected-text coordinates with their authoritative content revision, report stale IDs without automatic retry or label-based remapping, and verify native command outcomes on desktop and phone.
+Browser dispatch preserves scoped workspace/tab/pane identities and selected-text coordinates with their authoritative content revision, reports stale IDs without automatic retry or label-based remapping, and has verified native command outcomes on desktop and phone.
+
+
+The candidate exposes `popup.get`, `popup.close_exact`, and `plugin.popup.open` under the optional `popup_sessions` capability, with `popup.changed` invalidation events.
+The browser subscribes before reading popup metadata and attaches to the exact terminal and owning tab through the existing native terminal transport.
+Popup input remains application input, including Escape and prefix keys; exact closure cannot close a replacement popup.
+The native plugin popup operation validates its full source identity and prepares its context without changing focus, then focuses only after successful process creation.
+Regression tests verify unchanged layout and previous focus after invalid environment data or a missing executable.
+Isolated desktop and phone popup tests verify native cell geometry, minimum dimensions, resize, input, process exit, stale closure, and preservation of the underlying terminal.
+The configured-command browser test verifies empty-workspace shell execution, scoped shell/pane/popup/plugin outcomes despite foreign native focus, and stale-ID rejection after configuration reload.
+The release-candidate browser test also verifies mouse-selected text through the command palette and configured popup invocation at phone dimensions.
+All four configuration-reload cases pass against that release candidate, as do the native Kitty keyboard and mouse protocol tests with the candidate terminal companion.
+Copy-mode selections pass through configured bindings and the command palette.
+A delayed-request test changes native output before command execution and verifies stale-revision rejection without invoking the plugin.
+Navigate-mode execution follows the focused terminal while another workspace is only previewed, matching the desktop client command target.
+Popup launch holds browser input behind a modal pending state until the popup arrives or the request fails; a delayed-request test verifies that typed characters cannot reach the underlying pane.
+The pending state expires one second after a successful reply if popup discovery has not arrived, matching the desktop timeout.
+This candidate passes all 175 browser package tests and the native suite of 3,296 tests with two platform skips, plus targeted release-candidate command, popup, plugin, configuration, copy, selection, shortcut, and native-input browser checks.
 
 ## Native runtime rollout gate
 

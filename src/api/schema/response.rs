@@ -51,6 +51,12 @@ pub enum ResponseResult {
     CommandExecuted {
         effect: super::commands::CommandEffect,
     },
+    PopupSession {
+        popup: Option<super::commands::CommandPopup>,
+    },
+    PopupOpened {
+        popup: super::commands::CommandPopup,
+    },
     CommandList {
         commands: Vec<super::commands::CommandInfo>,
     },

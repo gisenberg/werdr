@@ -413,6 +413,39 @@ impl App {
         id: String,
         params: PluginPaneOpenParams,
     ) -> String {
+        self.handle_plugin_pane_open_scoped(id, params, None)
+    }
+
+    pub(super) fn handle_plugin_popup_open(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PluginPopupOpenParams,
+    ) -> String {
+        self.handle_plugin_pane_open_scoped(
+            id,
+            PluginPaneOpenParams {
+                plugin_id: params.plugin_id,
+                entrypoint: params.entrypoint,
+                placement: Some(PluginPanePlacement::Popup),
+                width: params.width,
+                height: params.height,
+                cwd: params.cwd,
+                env: params.env,
+                workspace_id: None,
+                target_pane_id: None,
+                direction: None,
+                focus: true,
+            },
+            Some(params.target),
+        )
+    }
+
+    fn handle_plugin_pane_open_scoped(
+        &mut self,
+        id: String,
+        params: PluginPaneOpenParams,
+        target: Option<crate::api::schema::CommandTarget>,
+    ) -> String {
         if let Err(err) = self.refresh_installed_plugins() {
             return encode_error(id, "plugin_registry_load_failed", err.to_string());
         }
@@ -509,11 +542,29 @@ impl App {
             }
         }
 
+        let return_popup = target.is_some();
+        let source = if let Some(expected) = target {
+            let Some((workspace, pane_id)) = self.parse_pane_id(&expected.pane_id) else {
+                return encode_error(
+                    id,
+                    "popup_target_mismatch",
+                    "popup source pane is no longer available",
+                );
+            };
+            if self.command_pane_target(workspace, pane_id).as_ref() != Some(&expected) {
+                return encode_error(id, "popup_target_mismatch", "popup source identity changed");
+            }
+            Some((workspace, pane_id))
+        } else {
+            None
+        };
         match placement {
             PluginPanePlacement::Overlay => {
                 self.open_plugin_overlay_pane(id, params, &plugin, pane)
             }
-            PluginPanePlacement::Popup => self.open_plugin_popup_pane(id, params, &plugin, pane),
+            PluginPanePlacement::Popup => {
+                self.open_plugin_popup_pane(id, params, &plugin, pane, source, return_popup)
+            }
             PluginPanePlacement::Split | PluginPanePlacement::Zoomed => {
                 self.open_plugin_split_pane(id, params, &plugin, pane, placement)
             }
@@ -2107,6 +2158,100 @@ command = ["sh", "-c", "sleep 1"]
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn plugin_popup_open_validates_exact_source_before_focus_and_returns_producer_identity() {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            crate::workspace::Workspace::test_new("source"),
+            crate::workspace::Workspace::test_new("other"),
+        ];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(1);
+        let target = app
+            .command_pane_target(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        let root = unique_temp_path("plugin-scoped-popup");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.scoped-popup"
+name = "Scoped popup"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+[[panes]]
+id = "popup"
+title = "Popup"
+placement = "popup"
+command = ["sh", "-c", "sleep 1"]
+[[panes]]
+id = "missing-executable"
+title = "Missing executable"
+placement = "popup"
+command = ["/nonexistent-herdr-test-popup-executable"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+        let request = |target| Request {
+            id: "popup".into(),
+            method: Method::PluginPopupOpen(crate::api::schema::PluginPopupOpenParams {
+                plugin_id: "example.scoped-popup".into(),
+                entrypoint: "popup".into(),
+                target,
+                width: None,
+                height: None,
+                cwd: None,
+                env: Default::default(),
+            }),
+        };
+        for field in ["workspace", "tab", "pane", "terminal"] {
+            let mut stale = target.clone();
+            match field {
+                "workspace" => stale.workspace_id = app.public_workspace_id(1),
+                "tab" => stale.tab_id = app.public_tab_id(1, 0).unwrap(),
+                "pane" => stale.pane_id = "missing".into(),
+                _ => stale.terminal_id = "replaced".into(),
+            }
+            let before = app.session_snapshot();
+            let result: crate::api::schema::ErrorResponse =
+                serde_json::from_str(&app.handle_api_request(request(stale))).unwrap();
+            assert_eq!(result.error.code, "popup_target_mismatch");
+            assert_eq!(app.session_snapshot(), before);
+            assert!(app.state.popup_pane.is_none());
+        }
+        for invalid_env in [true, false] {
+            let mut failed_request = request(target.clone());
+            let Method::PluginPopupOpen(ref mut params) = failed_request.method else {
+                unreachable!();
+            };
+            if invalid_env {
+                params.env.insert("INVALID=KEY".into(), "value".into());
+            } else {
+                params.entrypoint = "missing-executable".into();
+            }
+            let before = app.session_snapshot();
+            let previous_focus = app.state.previous_pane_focus.clone();
+            let result: crate::api::schema::ErrorResponse =
+                serde_json::from_str(&app.handle_api_request(failed_request)).unwrap();
+            assert!(!result.error.code.is_empty());
+            assert_eq!(app.session_snapshot(), before);
+            assert_eq!(app.state.previous_pane_focus, previous_focus);
+            assert!(app.state.popup_pane.is_none());
+        }
+        let response = app.handle_api_request(request(target.clone()));
+        let ResponseResult::PopupOpened { popup } = response_result(&response) else {
+            panic!("expected popup identity: {response}");
+        };
+        app.state.active = Some(1);
+        assert_eq!(popup.owner_tab_id, target.tab_id);
+        assert_eq!(popup.owner_workspace_id, target.workspace_id);
+        assert_ne!(popup.terminal_id, target.terminal_id);
+        assert_eq!(app.popup_session_info(), Some(popup));
+        assert!(!response.contains("sleep"));
+        app.close_popup_pane();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn plugin_pane_open_popup_is_layout_neutral() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2205,13 +2350,22 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
             app.current_plugin_context("popup-open").focused_pane_id,
             Some(root_public)
         );
-        assert!(event_hub.events_after(0).is_empty());
+        let popup_events = event_hub.events_after(0);
+        assert_eq!(popup_events.len(), 1);
+        assert_eq!(
+            popup_events[0].1.event,
+            crate::api::schema::EventKind::PopupChanged
+        );
 
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: opened_pane_id,
         });
         assert!(app.state.popup_pane.is_none());
-        assert!(event_hub.events_after(0).is_empty());
+        let popup_events = event_hub.events_after(0);
+        assert_eq!(popup_events.len(), 2);
+        assert!(popup_events
+            .iter()
+            .all(|(_, event)| event.event == crate::api::schema::EventKind::PopupChanged));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

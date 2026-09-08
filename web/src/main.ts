@@ -1,3 +1,5 @@
+import { commandEffect, type CommandSelection, type NativeCommand } from '../shared/commands';
+import { PopupSurface } from './popup-surface';
 import { ClientLifecycle, ClientCancelled } from './client-lifecycle';
 import { ConfigurationReload } from './configuration-reload';
 import { DetachedScreen } from './detached-screen';
@@ -84,12 +86,13 @@ const fleet = new FleetClient(applyFleet, online => {
   if (!online) { statusLine.update('[RECONNECTING] GATEWAY'); void refresh(); }
   else if (recovered) {
     if (!pendingPane && !restoration.active) lastPane.observe(lastPaneScope(), paneId, snapshot);
-    surface.recover();
+    surface.recover(); popupSurface.recover();
   }
 });
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
+const popupSurface = new PopupSurface(element('terminal'), preferences, colors, api, () => surface.active?.focus());
 const readSelection = async (machine: string) => (await api('/api/snapshot?' + new URLSearchParams({ machine }))).snapshot;
 const selectionRestored = () => { if (authenticated && lifecycle.active) { choose(); renderFleetNavigation(); } };
 let restoration = new SelectionRestoration(initial.restore ? initial.selection : undefined, readSelection, selectionRestored);
@@ -97,18 +100,18 @@ function selectPane(id: string) { if (!lifecycle.active) return; if (paneId === 
 const activity = new Activity(api, (machine, workspace, tab, pane) => { selectTarget(machine, workspace, tab, pane); surface.requestFocus(pane); }, () => ({ machine: machineId, workspace: workspaceId, tab: tabId }), () => preferences, status, () => { if (paneId) surface.requestFocus(paneId); });
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
-const plugins = new Plugins(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId || undefined, pane: paneId || undefined, selectedText: surface.active?.readSelection() } : undefined; }, (machine, pane) => selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true), () => { fleet.resync(); void refresh(); });
+const plugins = new Plugins(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId || undefined, pane: paneId || undefined, selectedText: surface.active?.readSelection(), commandTarget: nativeCommandTarget() || undefined, popups: !!host.popup } : undefined; }, (machine, pane) => selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true), () => { fleet.resync(); void refresh(); });
 const worktrees = new Worktrees(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId, cwd: snapshot.panes.find(pane => pane.pane_id === paneId)?.cwd } : undefined; }, (machine, pane) => { if (!pane) return; selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true); }, () => { fleet.resync(); void refresh(); });
 const sidebarSplit = new SidebarSplit(element('rail-sections'), element('rail-divider'), value => settings.saveSidebarSplit(value));
 const navigatePreview = new NavigatePreview();
 let shortcuts: DesktopShortcuts | undefined;
 let returnToEmptySwitcher = false;
-const mobileSwitcher = new MobileSwitcher(app, () => { surface.active?.copyMode.exit(true, false); shortcuts?.reset(); if (paneId) surface.requestFocus(paneId); }, () => surface.active?.focus());
+const mobileSwitcher = new MobileSwitcher(app, () => { surface.active?.copyMode?.exit(true, false); shortcuts?.reset(); if (paneId) surface.requestFocus(paneId); }, () => surface.active?.focus());
 const configurationReload = new ConfigurationReload(api, current => settings.refresh(current), lifecycle, status, () => refreshCommands());
 const settings = new Settings(api, (value, nextColors) => {
   shortcuts?.update(value.shortcuts);
   preferences = value; colors = nextColors; sidebarSplit.update(value.sidebarSectionPercent);
-  surface.updatePreferences(value, nextColors);
+  surface.updatePreferences(value, nextColors); popupSurface.update(value, nextColors);
   activity.refreshPreferences();
   renderNavigation(); renderFleetNavigation();
 });
@@ -186,7 +189,7 @@ function applyFleet(state: FleetState, added?: Notice) {
   if (pendingPane?.machine === machineId) { const target = snapshot.panes.find(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab); if (target) { workspaceId = target.workspace_id; tabId = target.tab_id; paneId = target.pane_id; } }
   if (!pendingPane || pendingPane.machine !== machineId || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) { pendingPane = undefined; choose(); }
   renderFleetNavigation(); contextMenu.refresh(); hostManager.update(state.hosts); activity.update(state, added);
-  if (previous !== 'online' && selectedHost()?.connection === 'online') surface.recover();
+  if (previous !== 'online' && selectedHost()?.connection === 'online') { surface.recover(); popupSurface.recover(); }
 }
 function renderFleetNavigation() {
   if (!lifecycle.active) return;
@@ -298,6 +301,8 @@ function navigation(id: string, items: NavigationItem[]) {
 function renderNavigation() {
   if (!lifecycle.active) return;
   shortcuts?.sync();
+  popupSurface.reconcile(selectedHost(), tabId);
+  shortcuts?.updateCommands(availableNativeCommands());
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
@@ -358,7 +363,7 @@ async function refresh() {
   } catch (error) { if (lifecycle.current(epoch)) statusLine.update(`[OFFLINE] ${(error as Error).message}`); }
   finally { if (lifecycle.current(epoch)) { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } } }
 }
-function clearSurface() { surface.clear(); }
+function clearSurface() { popupSurface.clear(); surface.clear(); }
 const detachedScreen = new DetachedScreen(() => { void resumeClient(); }, () => element('logout').click());
 function detachClient() {
   if (!lifecycle.active) return;
@@ -391,7 +396,7 @@ async function resumeClient() {
   detachedScreen.close(); choose(); surface.requestFocus(paneId);
 }
 async function attach(takeover = false) { if (lifecycle.active && selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
-async function action(action: string, id?: string, extra: object = {}, selected = machineId, preserveNavigate = false) {
+async function action(action: string, id?: string, extra: object = {}, selected = machineId, preserveNavigate = false, popupPending?: (opened: boolean) => void) {
   if (!lifecycle.active) return;
   const epoch = lifecycle.generation;
   const interaction = interactionRevision, selection = ++selectionIntent, endpoint = machineContext(selected), source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
@@ -399,8 +404,10 @@ async function action(action: string, id?: string, extra: object = {}, selected 
   restoration.supersede();
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
-    if (!lifecycle.current(epoch)) return;
-    const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
+    if (!lifecycle.current(epoch)) { popupPending?.(false); return; }
+    const effect = action === 'command.execute' ? commandEffect(response.effect) : undefined;
+    popupPending?.(effect?.type === 'popup_opened');
+    const result = effect ? (effect.type === 'pane_created' ? { pane: effect.pane } : {}) : response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
     if (machineId !== selected) { fleet.resync(); return; }
     // Native events may remove the source before this reply arrives. Only a
     // newer explicit navigation/command or endpoint replacement cancels intent.
@@ -418,9 +425,12 @@ async function action(action: string, id?: string, extra: object = {}, selected 
       if (preserveNavigate && shortcuts?.isNavigating) shortcuts.preserveNavigateFocus(focus); else focus();
     }
     if (applySelection) closeRail(); await refresh(); if (!lifecycle.current(epoch)) return; surface.refresh(); fleet.resync();
+    if (effect?.type === 'shell_started') status(`[OK] ${sourceLabel}: host command started`);
+    if (effect?.type === 'plugin_started') status(`[OK] ${sourceLabel}: ${effect.plugin_id} started (${effect.log_id})`);
+    if (effect?.type === 'unknown') status(`[NOTICE] ${sourceLabel}: command returned an unsupported outcome. Check the host before running it again.`);
     if (response.notice) status(`[NOTICE] ${sourceLabel}: ${response.notice}`);
   }
-  catch (error) { if (lifecycle.current(epoch) && !(error instanceof ClientCancelled)) status(`[ERROR] ${sourceLabel}: ${(error as Error).message}`); }
+  catch (error) { popupPending?.(false); if (lifecycle.current(epoch) && !(error instanceof ClientCancelled)) status(`[ERROR] ${sourceLabel}: ${(error as Error).message}`); }
 }
 element('refresh').onclick = () => { const label = selectedHost()?.machine.label || machineId; void api('/api/hosts/retry', { id: machineId }).then(refresh).catch(error => status(`[ERROR] ${label}: ${error.message}`)); fleet.resync(); if (paneId) void attach(); };
 element('create').onclick = () => void action('workspace.create', undefined, workspaceId ? { source: workspaceId } : {});
@@ -508,6 +518,36 @@ for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addE
 });
 type Command = ShortcutCommand;
 let commands: Command[] = [];
+let paletteCommandSelection: { identity: string; selection?: CommandSelection; error?: string } | undefined;
+function nativeCommandTarget() {
+  const pane = snapshot.panes.find(pane => pane.pane_id === paneId && pane.workspace_id === workspaceId && pane.tab_id === tabId);
+  return pane ? { workspace_id: pane.workspace_id, tab_id: pane.tab_id, pane_id: pane.pane_id, terminal_id: pane.terminal_id } : null;
+}
+function commandSelectionIdentity() { return JSON.stringify([machineContext(machineId), nativeCommandTarget()]); }
+function availableNativeCommands(): NativeCommand[] {
+  const host = selectedHost();
+  if (host?.connection !== 'online' || !host.commandExecution || host.commands?.status !== 'ready' || pendingPane || restoration.active) return [];
+  const target = nativeCommandTarget();
+  if (!target && snapshot.workspaces.length) return [];
+  return host.commands.commands.filter(command => (command.action !== 'popup' && command.action !== 'plugin_action' || !!host.popup) && (target || command.action === 'shell' || command.action === 'plugin_action'));
+}
+function invokeNativeCommand(command: NativeCommand, fromPalette = false) {
+  if (!availableNativeCommands().some(current => current.command_id === command.command_id)) { status('[ERROR] This host command is no longer available. Reopen the command list.'); return; }
+  try {
+    const target = nativeCommandTarget();
+    let selection: CommandSelection | undefined;
+    if (command.action === 'plugin_action') {
+      if (fromPalette) {
+        if (paletteCommandSelection?.identity !== commandSelectionIdentity()) throw new Error('Command context changed. Reopen the command palette.');
+        if (paletteCommandSelection.error) throw new Error(paletteCommandSelection.error);
+        selection = paletteCommandSelection.selection;
+      } else selection = surface.active?.commandSelection();
+    }
+    const completePopup = command.action === 'popup' ? popupSurface.beginPending() : undefined;
+    void action('command.execute', undefined, { command_id: command.command_id, target, ...(selection && target ? { selection: { ...selection, pane_id: target.pane_id } } : {}) }, machineId, false, completePopup);
+  } catch (error) { status(`[ERROR] ${(error as Error).message}`); }
+}
+
 let renameTarget: { machine: string; action: string; id: string } | undefined;
 function rename(action: string, id: string, label: string, machine = machineId) {
   renameTarget = { machine, action, id }; element('rename-title').textContent = action.replace('.', ' ').toUpperCase();
@@ -554,6 +594,7 @@ function refreshCommands() {
   const worktreeTarget = { machine, label: selectedHost()?.machine.label || machine, workspace: workspaceAction };
   const online = selectedHost()?.connection === 'online' && !pendingPane && !restoration.active;
   commands = [
+    ...availableNativeCommands().map(command => ({ label: `Host command: ${command.description || command.action} [${command.binding_labels.join(' / ')}]`, run: () => invokeNativeCommand(command, true) })),
     { id: 'detach', label: 'Detach this browser', run: detachClient },
     { id: 'reload_config', label: 'Reload host configuration and browser preferences', disabled: !selectedHost() || configurationReload.busy, run: () => { const host = selectedHost(); if (host) void configurationReload.run(host.machine.id, host.machine.label); } },
     { id: 'help', label: 'Keyboard shortcuts and prefix help', run: () => shortcuts?.openHelp() },
@@ -586,8 +627,8 @@ function refreshCommands() {
     { label: 'Host: runtime settings', disabled: !online, run: () => runtimeSettings.open() },
     { label: 'Integrations: agent hooks and readiness', disabled: !online, run: () => integrations.open() },
     { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },
-    { id: 'copy_mode', label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(); } },
-    { label: 'Terminal: search native scrollback', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(true); } },
+    { id: 'copy_mode', label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode?.start(); } },
+    { label: 'Terminal: search native scrollback', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode?.start(true); } },
     { id: 'edit_scrollback', label: 'Terminal: open scrollback in host editor', disabled: !online || !pane, run: () => { void action('pane.edit_scrollback', pane, {}, machine); } },
     { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
     { id: 'new_workspace', label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspaceAction ? { source: workspaceAction } : {}, machine); } },
@@ -634,6 +675,9 @@ function refreshCommands() {
 }
 let destinationsOnly = false;
 function openCommands(query = '', destinations = false) {
+  const identity = commandSelectionIdentity();
+  try { paletteCommandSelection = { identity, selection: surface.active?.commandSelection() }; }
+  catch (error) { paletteCommandSelection = { identity, error: (error as Error).message }; }
   destinationsOnly = destinations; element<HTMLInputElement>('command-search').value = query; refreshCommands(); renderCommands(); element<HTMLDialogElement>('command-dialog').showModal(); element('command-search').focus();
 }
 function renderCommands() {
@@ -680,12 +724,12 @@ function selectKeyboardTarget(target: { workspace: string; tab: string; pane: st
 shortcuts = new DesktopShortcuts(preferences.shortcuts,
   () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${(!!pendingPane || restoration.active)}`, attachment: surface.active, available: authenticated && lifecycle.active, ready: !!surface.active?.ready, navigateIdentity: JSON.stringify([machineContext(machineId), workspaceId, tabId, paneId, selectedHost()?.connection, !!pendingPane || restoration.active]) }),
   () => { refreshCommands(); return commands; },
-  (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) { if (shortcuts?.isNavigating && action === 'switch_workspace') surface.active?.copyMode.exit(true, false); shortcuts?.reset(); selectKeyboardTarget(target); } },
+  (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) { if (shortcuts?.isNavigating && action === 'switch_workspace') surface.active?.copyMode?.exit(true, false); shortcuts?.reset(); selectKeyboardTarget(target); } },
   () => { if (paneId) surface.requestFocus(paneId); }, event => surface.active?.sendKey(event), {
     enter: () => { navigatePreview.enter(machineId, workspaceId); renderFleetNavigation(); },
     exit: () => { navigatePreview.clear(); renderFleetNavigation(); },
-    confirm: () => { const target = navigatePreview.confirm(snapshot.workspaces.map(item => item.workspace_id)); surface.active?.copyMode.exit(true, false); shortcuts?.reset(); if (target) selectTarget(target.machine, target.workspace, '', ''); },
-  });
+    confirm: () => { const target = navigatePreview.confirm(snapshot.workspaces.map(item => item.workspace_id)); surface.active?.copyMode?.exit(true, false); shortcuts?.reset(); if (target) selectTarget(target.machine, target.workspace, '', ''); },
+  }, command => invokeNativeCommand(command));
 async function start() {
   const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });
   const configured = config.then(value => ({ value }), () => ({ value: { passwordEnabled: false } }));
@@ -721,7 +765,7 @@ function switchMobileTarget(kind: MobileTargetKind, machine: string, id: string)
   const tab = kind === 'tab' ? host.snapshot?.tabs.find(item => item.tab_id === id) : undefined;
   const pane = kind === 'pane' ? host.snapshot?.panes.find(item => item.pane_id === id) : undefined;
   if (kind !== 'host' && !workspace && !tab && !pane) { mobileSwitcher.report('[NOTICE] This target is no longer available.'); return; }
-  surface.active?.copyMode.exit(true, false); shortcuts?.reset();
+  surface.active?.copyMode?.exit(true, false); shortcuts?.reset();
   if (kind === 'host') selectHost(machine);
   else selectTarget(machine, workspace?.workspace_id || tab?.workspace_id || pane!.workspace_id, tab?.tab_id || pane?.tab_id || '', pane?.pane_id || '');
   if (paneId) surface.requestFocus(paneId);

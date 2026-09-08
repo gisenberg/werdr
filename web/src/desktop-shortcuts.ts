@@ -1,5 +1,6 @@
 import { shortcutActions, type ShortcutAction, type Shortcuts } from '../shared/shortcuts';
 import { ShortcutMode } from './shortcut-mode';
+import type { NativeCommand } from '../shared/commands';
 export interface ShortcutCommand { id?: ShortcutAction; label: string; disabled?: boolean; palette?: boolean; run(): void }
 interface Context { identity: string; attachment: unknown; available: boolean; navigateIdentity: string; ready: boolean }
 interface NavigateHandlers { enter(): void; exit(): void; confirm(): void }
@@ -13,7 +14,9 @@ export class DesktopShortcuts {
   private navigating = false;
   private preservingFocus = false;
   private pendingFocus?: string;
-  constructor(value: Shortcuts, private current: () => Context, private commands: () => ShortcutCommand[], private indexed: (action: ShortcutAction, index: number) => void, private focus: () => void, private forward: (event: KeyboardEvent) => void, private navigate: NavigateHandlers) {
+  private nativeCommands: readonly NativeCommand[] = [];
+  private nativeEncoded = '';
+  constructor(value: Shortcuts, private current: () => Context, private commands: () => ShortcutCommand[], private indexed: (action: ShortcutAction, index: number) => void, private focus: () => void, private forward: (event: KeyboardEvent) => void, private navigate: NavigateHandlers, private invokeNative: (command: NativeCommand) => void = () => {}) {
     this.value = value; this.encoded = JSON.stringify(value); this.mode = new ShortcutMode(value);
     this.indicator.id = 'shortcut-status'; this.indicator.setAttribute('role', 'status'); this.indicator.hidden = true;
     this.help.id = 'shortcut-help'; this.help.setAttribute('aria-label', 'Keyboard shortcuts');
@@ -29,6 +32,7 @@ export class DesktopShortcuts {
     for (const menu of document.querySelectorAll('.context-menu')) observer.observe(menu, { attributes: true, attributeFilter: ['hidden'] });
   }
   update(value: Shortcuts) { const encoded = JSON.stringify(value); if (encoded === this.encoded) return; this.value = value; this.encoded = encoded; this.mode.update(value); this.paint(); }
+  updateCommands(commands: readonly NativeCommand[]) { const encoded = JSON.stringify(commands); if (encoded === this.nativeEncoded) return; this.nativeEncoded = encoded; this.nativeCommands = commands; this.mode.updateCommands(commands); this.paint(); }
   reset() { this.pendingFocus = undefined; this.mode.reset(); this.paint(); }
   sync() {
     const next = this.current();
@@ -56,6 +60,10 @@ export class DesktopShortcuts {
       const term = document.createElement('dt'); term.textContent = this.value.bindings[action].join(' / ') || 'UNBOUND';
       const detail = document.createElement('dd'); detail.textContent = `${command?.label || action.replaceAll('_', ' ')}${command?.disabled || !command ? ' [UNAVAILABLE]' : ''}`; list.append(term, detail);
     }
+    for (const command of this.nativeCommands) {
+      const term = document.createElement('dt'); term.textContent = command.binding_labels.join(' / ');
+      const detail = document.createElement('dd'); detail.textContent = `Host command: ${command.description || command.action}`; list.append(term, detail);
+    }
     const done = document.createElement('button'); done.textContent = 'DONE'; done.onclick = () => this.help.close();
     const header = document.createElement('div'); header.className = 'shortcut-help-header'; header.append(title, done);
     this.help.append(header, intro, caveat, list); this.help.showModal(); title.focus({ preventScroll: true }); this.help.scrollTop = 0;
@@ -82,6 +90,7 @@ export class DesktopShortcuts {
     this.paint();
     if (result.navigate === 'confirm') { this.navigate.confirm(); return; }
     if (result.forward) this.forward(event);
+    if (result.command) { const native = this.nativeCommands.find(command => command.command_id === result.command); if (native) this.invokeNative(native); return; }
     if (!result.action) return;
     if (result.index !== undefined && this.isNavigating) { this.indexed(result.action, result.index); return; }
     if (!command || command.disabled) { this.reset(); return; }

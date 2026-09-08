@@ -1,3 +1,4 @@
+import { PopupWatch } from './popup-watch.ts';
 import { CommandCatalogWatch } from './command-catalog.ts';
 import { PaneScrollWatch } from './pane-scroll-watch.ts';
 import type { ScrollState } from '../shared/scrollbar.ts';
@@ -14,7 +15,7 @@ const validWorkspaceRows = (workspace: any): boolean => workspace && (workspace.
 const validSnapshot = (value: any): value is Snapshot => value && typeof value.version === 'string' && ['workspaces', 'tabs', 'panes', 'agents', 'layouts'].every(key => Array.isArray(value[key]) && value[key].length <= 4096) && (value.agent_view === undefined || validAgentView(value.agent_view)) && value.workspaces.every(validWorkspaceRows) && value.tabs.every((tab: any) => tab.custom_label === undefined || typeof tab.custom_label === 'boolean');
 const validAgentView = (view: any): boolean => view && Array.isArray(view.pane_ids) && view.pane_ids.length <= 4096 && view.pane_ids.every((id: any) => typeof id === 'string' && id.length <= 256) && new Set(view.pane_ids).size === view.pane_ids.length && (view.definition === null || view.definition && typeof view.definition.source === 'string' && view.definition.source.length <= 120 && (view.definition.label === undefined || typeof view.definition.label === 'string' && view.definition.label.length <= 128));
 interface Host {
-  commandWatch?: CommandCatalogWatch; view: HostView; epoch: number; api?: NativeEndpoint; timer?: ReturnType<typeof setTimeout>; health?: ReturnType<typeof setInterval>;
+  popupWatch?: PopupWatch; commandWatch?: CommandCatalogWatch; view: HostView; epoch: number; api?: NativeEndpoint; timer?: ReturnType<typeof setTimeout>; health?: ReturnType<typeof setInterval>;
   refreshTimer?: ReturnType<typeof setTimeout>; reading: boolean; dirty: boolean; attempts: number; eventSequence: number;
   pendingNotices: { sequence: number; notice: Notice }[];
   watchKey?: string; stopWatch?: () => void; watching: boolean; baseline: boolean; agentStates: Map<string, Agent>; fingerprint?: string;
@@ -69,7 +70,7 @@ export class Fleet extends EventEmitter {
     } finally { this.refreshingCatalog = false; }
   }
   private retire(host: Host) {
-    host.epoch++; host.commandWatch?.dispose(); host.commandWatch = undefined; host.view = { ...host.view, commands: undefined }; clearTimeout(host.timer); clearTimeout(host.refreshTimer); clearInterval(host.health);
+    host.epoch++; host.popupWatch?.dispose(); host.popupWatch = undefined; host.commandWatch?.dispose(); host.commandWatch = undefined; host.view = { ...host.view, popup: undefined, commandExecution: undefined, commands: undefined }; clearTimeout(host.timer); clearTimeout(host.refreshTimer); clearInterval(host.health);
     host.refreshTimer = undefined;
     host.stopWatch?.(); host.stopWatch = undefined; host.watchKey = undefined; host.api?.close(); host.api = undefined;
     host.reading = false; host.watching = false; host.dirty = false; host.pendingNotices = [];
@@ -97,6 +98,12 @@ export class Fleet extends EventEmitter {
       const api = await this.connect(host.view.machine);
       if (this.stopped || host.epoch !== epoch) { api.close(); return; }
       host.api = api;
+      host.view = { ...host.view, commandExecution: api.capabilities?.command_execution === true };
+      host.popupWatch = new PopupWatch(popup => {
+        if (this.stopped || host.epoch !== epoch || JSON.stringify(host.view.popup) === JSON.stringify(popup)) return;
+        host.view = { ...host.view, popup }; this.publishHost(host);
+      });
+      host.popupWatch.reconcile(api);
       host.commandWatch = new CommandCatalogWatch(commands => {
         if (this.stopped || host.epoch !== epoch || JSON.stringify(host.view.commands) === JSON.stringify(commands)) return;
         host.view = { ...host.view, commands }; this.publishHost(host);

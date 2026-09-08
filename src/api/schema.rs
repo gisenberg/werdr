@@ -236,6 +236,10 @@ pub enum Method {
     PaneClose(PaneTarget),
     #[serde(rename = "popup.close")]
     PopupClose(EmptyParams),
+    #[serde(rename = "popup.get")]
+    PopupGet(EmptyParams),
+    #[serde(rename = "popup.close_exact")]
+    PopupCloseExact(PopupCloseExactParams),
     #[serde(rename = "events.subscribe")]
     EventsSubscribe(EventsSubscribeParams),
     #[serde(rename = "events.wait")]
@@ -266,6 +270,8 @@ pub enum Method {
     PluginLogList(PluginLogListParams),
     #[serde(rename = "plugin.pane.open")]
     PluginPaneOpen(PluginPaneOpenParams),
+    #[serde(rename = "plugin.popup.open")]
+    PluginPopupOpen(PluginPopupOpenParams),
     #[serde(rename = "plugin.pane.focus")]
     PluginPaneFocus(PluginPaneFocusParams),
     #[serde(rename = "plugin.pane.close")]

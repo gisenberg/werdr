@@ -43,6 +43,7 @@ impl App {
     ) -> PluginInvocationContext {
         match &event.data {
             EventData::CommandManifestChanged { .. }
+            | EventData::PopupChanged { .. }
             | EventData::AgentViewChanged { .. }
             | EventData::NotificationSemantic { .. } => self.current_plugin_context(correlation_id),
             EventData::WorkspaceCreated { workspace }

@@ -1192,6 +1192,17 @@ impl App {
                 return self.handle_pane_send_input(request.id, params)
             }
             Method::PaneClose(target) => return self.handle_pane_close(request.id, target),
+            Method::PopupGet(_) => {
+                return responses::encode_success(
+                    request.id,
+                    ResponseResult::PopupSession {
+                        popup: self.popup_session_info(),
+                    },
+                );
+            }
+            Method::PopupCloseExact(params) => {
+                return self.handle_popup_close_exact(request.id, params);
+            }
             Method::PopupClose(_) => {
                 return if self.close_popup_pane() {
                     responses::encode_success(request.id, ResponseResult::Ok {})
@@ -1235,6 +1246,9 @@ impl App {
             }
             Method::PluginPaneOpen(params) => {
                 return self.handle_plugin_pane_open(request.id, params);
+            }
+            Method::PluginPopupOpen(params) => {
+                return self.handle_plugin_popup_open(request.id, params);
             }
             Method::PluginPaneFocus(params) => {
                 return self.handle_plugin_pane_focus(request.id, params);

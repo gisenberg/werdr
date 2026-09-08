@@ -17,6 +17,12 @@ type Selection = {
 export class NativeSelection {
   private state?: Selection;
   get hasSelection() { return !!this.state?.visible; }
+  commandSelection(): import('../shared/commands').CommandSelection | undefined {
+    const state = this.state;
+    if (!state?.visible) return;
+    if (!this.current(state) || state.scrolling || !state.context || !state.anchor || !state.cursor || !matchesNativeViewport(this.terminal(), state.context)) throw new Error('Terminal selection changed. Select the text again before running the command.');
+    return { anchor: { ...state.anchor }, cursor: { ...state.cursor }, content_revision: state.context.content_revision };
+  }
   private lastClick?: Point & { at: number };
   private edgeTimer?: ReturnType<typeof setInterval>;
   private highlightTimer?: ReturnType<typeof setTimeout>;

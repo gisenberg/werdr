@@ -96,7 +96,7 @@ impl App {
             .map(|entry| entry.binding.clone())
     }
 
-    fn command_pane_target(
+    pub(super) fn command_pane_target(
         &self,
         workspace_index: usize,
         pane_id: crate::layout::PaneId,

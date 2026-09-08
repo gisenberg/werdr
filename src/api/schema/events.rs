@@ -16,6 +16,8 @@ pub struct EventsSubscribeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum Subscription {
+    #[serde(rename = "popup.changed")]
+    PopupChanged {},
     #[serde(rename = "command.manifest_changed")]
     CommandManifestChanged {},
     #[serde(rename = "notification.semantic")]
@@ -203,6 +205,8 @@ pub enum EventMatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    #[serde(rename = "popup.changed")]
+    PopupChanged,
     #[serde(rename = "command.manifest_changed")]
     CommandManifestChanged,
     #[serde(rename = "notification.semantic")]
@@ -266,6 +270,7 @@ impl EventKind {
             EventKind::PaneAgentDetected => "pane.agent_detected",
             EventKind::PaneAgentStatusChanged => "pane.agent_status_changed",
             EventKind::CommandManifestChanged => "command.manifest_changed",
+            EventKind::PopupChanged => "popup.changed",
             EventKind::AgentViewChanged => "agent.view.changed",
             EventKind::LayoutUpdated => "layout.updated",
         }
@@ -302,6 +307,7 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::PaneAgentStatusChanged,
     EventKind::LayoutUpdated,
     EventKind::CommandManifestChanged,
+    EventKind::PopupChanged,
     EventKind::AgentViewChanged,
 ];
 
@@ -442,6 +448,7 @@ pub struct PaneScrollChangedEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventData {
+    PopupChanged {},
     CommandManifestChanged {},
     NotificationSemantic {
         #[serde(flatten)]

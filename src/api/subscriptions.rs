@@ -170,6 +170,7 @@ impl ActiveSubscription {
             Subscription::CommandManifestChanged {} => {
                 Ok(event_subscription(EventKind::CommandManifestChanged))
             }
+            Subscription::PopupChanged {} => Ok(event_subscription(EventKind::PopupChanged)),
             Subscription::AgentViewChanged {} => {
                 Ok(event_subscription(EventKind::AgentViewChanged))
             }

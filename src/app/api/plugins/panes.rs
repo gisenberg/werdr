@@ -14,8 +14,13 @@ impl App {
         params: PluginPaneOpenParams,
         plugin: &InstalledPluginInfo,
         pane: PluginManifestPane,
+        source: Option<(usize, crate::layout::PaneId)>,
+        return_popup: bool,
     ) -> String {
-        let context = self.current_plugin_context("plugin-pane");
+        let context = match source {
+            Some((workspace, pane)) => self.plugin_context_for_pane(workspace, pane, "plugin-pane"),
+            None => self.current_plugin_context("plugin-pane"),
+        };
         let cwd = self.plugin_pane_cwd(plugin, params.cwd);
         let extra_env =
             match self.plugin_pane_launch_env(plugin, &pane.id, &cwd, params.env, &context) {
@@ -24,21 +29,30 @@ impl App {
             };
         let width = params.width.or(pane.width);
         let height = params.height.or(pane.height);
-        if let Err(err) = self.spawn_popup_argv_command(
+        let produced = match self.spawn_popup_argv_command(
             &pane.command,
+            source,
             Some(cwd),
             extra_env,
             crate::app::popup::PopupGeometry { width, height },
         ) {
-            return encode_error(id, "plugin_pane_open_failed", err.to_string());
-        }
+            Ok(popup) => popup,
+            Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
+        };
         let Some(popup) = self.state.popup_pane.as_ref() else {
             return encode_error(id, "plugin_pane_open_failed", "plugin popup disappeared");
         };
         if let Some(terminal) = self.state.terminals.get_mut(&popup.terminal_id) {
             terminal.set_manual_label(pane.title);
         }
-        encode_success(id, ResponseResult::Ok {})
+        encode_success(
+            id,
+            if return_popup {
+                ResponseResult::PopupOpened { popup: produced }
+            } else {
+                ResponseResult::Ok {}
+            },
+        )
     }
 
     pub(super) fn open_plugin_overlay_pane(

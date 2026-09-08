@@ -27,6 +27,8 @@ import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
 import { NativeApiError } from './native-api.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
+import { noticeEndpointKey } from '../shared/fleet.ts';
+import { popupSession } from '../shared/popups.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
@@ -284,6 +286,14 @@ server.on('upgrade', async (req, socket, head) => {
     if (url.pathname !== '/ws/terminal' || terminalMachines.size >= 16) throw new Error('Unknown or unavailable socket');
     const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
     const pane = publicId(url.searchParams.get('pane'));
+    const target = url.searchParams.get('target');
+    if (target !== null && target !== 'popup') throw new Error('Invalid terminal target kind');
+    if (target === 'popup') {
+      const host = fleet.state().hosts.find(host => host.machine.id === machine.id);
+      if (!host?.popup || noticeEndpointKey(host.machine) !== noticeEndpointKey(machine)) throw new Error('Popup endpoint unavailable');
+      const popup = popupSession((await fleet.request(machine.id, 'popup.get', {}, false))?.popup);
+      if (!popup || popup.terminal_id !== pane || popup.owner_tab_id !== publicId(url.searchParams.get('owner_tab_id'))) throw new Error('Popup session changed');
+    }
     const cols = dimension(Number(url.searchParams.get('cols'))), rows = dimension(Number(url.searchParams.get('rows')));
     if (socket.destroyed || !session(req) || terminalMachines.size >= 16) { socket.destroy(); return; }
     terminalWsServer.handleUpgrade(req, socket, head, ws => {
@@ -312,7 +322,7 @@ server.on('upgrade', async (req, socket, head) => {
         if (ws.bufferedAmount > 4 * 1024 * 1024) { closeSocket(ws, 1013, 'Viewer too slow'); return; }
         ws.send(JSON.stringify(value));
       };
-      const stopScroll = fleet.watchPaneScroll(machine, pane, (scroll, ready) => send({ type: 'terminal.scroll-state', scroll: scroll ?? null, ready }));
+      const stopScroll = target === 'popup' ? () => {} : fleet.watchPaneScroll(machine, pane, (scroll, ready) => send({ type: 'terminal.scroll-state', scroll: scroll ?? null, ready }));
       child.stdout.on('data', (chunk: Buffer) => {
         if (released || ended) return;
         try {

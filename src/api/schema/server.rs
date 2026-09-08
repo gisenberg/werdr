@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Supports popup.get, popup.close_exact, plugin.popup.open and popup.changed subscriptions.
+    #[serde(default)]
+    pub popup_sessions: bool,
     /// Executes opaque commands with explicit context and producer-owned result identities.
     #[serde(default)]
     pub command_execution: bool,

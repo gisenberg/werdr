@@ -13,6 +13,43 @@ pub(crate) struct PopupGeometry {
 }
 
 impl App {
+    pub(crate) fn popup_session_info(&self) -> Option<crate::api::schema::CommandPopup> {
+        let popup = self.state.popup_pane.as_ref()?;
+        let (workspace, _) = self.parse_tab_id(&popup.owner_tab_id)?;
+        Some(crate::api::schema::CommandPopup {
+            terminal_id: popup.terminal_id.as_str().to_owned(),
+            owner_workspace_id: self.public_workspace_id(workspace),
+            owner_tab_id: popup.owner_tab_id.clone(),
+            width: popup.width,
+            height: popup.height,
+        })
+    }
+
+    pub(crate) fn handle_popup_close_exact(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PopupCloseExactParams,
+    ) -> String {
+        use crate::app::api::responses::{encode_error, encode_success};
+        let Some(popup) = self.state.popup_pane.as_ref() else {
+            return encode_error(id, "popup_not_open", "no popup is open");
+        };
+        if popup.terminal_id.as_str() != params.terminal_id
+            || popup.owner_tab_id != params.owner_tab_id
+        {
+            return encode_error(id, "popup_target_mismatch", "popup identity changed");
+        }
+        self.close_popup_pane();
+        encode_success(id, crate::api::schema::ResponseResult::Ok {})
+    }
+
+    fn emit_popup_changed(&mut self) {
+        self.emit_event(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::PopupChanged,
+            data: crate::api::schema::EventData::PopupChanged {},
+        });
+    }
+
     pub(crate) fn close_popup_pane(&mut self) -> bool {
         let Some(popup) = self.state.popup_pane.take() else {
             return false;
@@ -29,6 +66,7 @@ impl App {
         };
         self.render_dirty.request_generic();
         self.render_notify.notify_one();
+        self.emit_popup_changed();
         true
     }
 
@@ -40,6 +78,7 @@ impl App {
         geometry: PopupGeometry,
     ) -> std::io::Result<crate::api::schema::CommandPopup> {
         self.spawn_popup_command(
+            None,
             cwd,
             extra_env,
             geometry,
@@ -67,11 +106,13 @@ impl App {
     pub(crate) fn spawn_popup_argv_command(
         &mut self,
         argv: &[String],
+        source: Option<(usize, PaneId)>,
         cwd: Option<PathBuf>,
         extra_env: Vec<(String, String)>,
         geometry: PopupGeometry,
     ) -> std::io::Result<crate::api::schema::CommandPopup> {
         self.spawn_popup_command(
+            source,
             cwd,
             extra_env,
             geometry,
@@ -98,6 +139,7 @@ impl App {
 
     fn spawn_popup_command<F>(
         &mut self,
+        source: Option<(usize, PaneId)>,
         cwd: Option<PathBuf>,
         extra_env: Vec<(String, String)>,
         geometry: PopupGeometry,
@@ -116,26 +158,30 @@ impl App {
         if self.state.popup_pane.is_some() {
             return Err(std::io::Error::other("popup already open"));
         }
-        let Some(ws_idx) = self.state.active else {
-            return Err(std::io::Error::other("no active workspace"));
-        };
+        let (ws_idx, focused_pane) = source
+            .or_else(|| {
+                let workspace = self.state.active?;
+                Some((
+                    workspace,
+                    self.state.workspaces.get(workspace)?.focused_pane_id()?,
+                ))
+            })
+            .ok_or_else(|| std::io::Error::other("no popup source pane"))?;
         let ws = self
             .state
             .workspaces
             .get(ws_idx)
-            .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
-        let active_tab = ws
-            .active_tab()
-            .ok_or_else(|| std::io::Error::other("active tab disappeared"))?;
-        let focused_pane = ws
-            .focused_pane_id()
-            .ok_or_else(|| std::io::Error::other("active tab has no focused pane"))?;
+            .ok_or_else(|| std::io::Error::other("popup source workspace disappeared"))?;
+        let tab_index = ws
+            .find_tab_index_for_pane(focused_pane)
+            .ok_or_else(|| std::io::Error::other("popup source tab disappeared"))?;
+        let active_tab = &ws.tabs[tab_index];
         let cwd = cwd.or_else(|| {
             active_tab.cwd_for_pane(focused_pane, &self.state.terminals, &self.terminal_runtimes)
         });
         let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let owner_tab_id = self
-            .public_tab_id(ws_idx, ws.active_tab_index())
+            .public_tab_id(ws_idx, tab_index)
             .ok_or_else(|| std::io::Error::other("popup owning tab disappeared"))?;
         let pane_id = PaneId::alloc();
         let terminal_id = TerminalId::alloc();
@@ -176,7 +222,11 @@ impl App {
             width: geometry.width,
             height: geometry.height,
         });
+        if source.is_some() {
+            self.state.focus_pane_in_workspace(ws_idx, focused_pane);
+        }
         self.state.mode = Mode::Terminal;
+        self.emit_popup_changed();
         Ok(result)
     }
 }
@@ -306,5 +356,100 @@ mod tests {
         let response = app.handle_api_request(close());
         let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(response.error.code, "popup_not_open");
+    }
+
+    #[tokio::test]
+    async fn popup_discovery_and_exact_close_follow_producer_lifecycle() {
+        use crate::api::schema::{
+            EmptyParams, EventKind, Method, PopupCloseExactParams, Request, ResponseResult,
+            SuccessResponse,
+        };
+        let mut app = app_with_popup();
+        app.close_popup_pane();
+        let sequence = app.event_hub.current_sequence();
+        let mut receivers = Vec::new();
+        let mut spawn = |app: &mut App| {
+            app.spawn_popup_command(
+                None,
+                None,
+                Vec::new(),
+                super::PopupGeometry::default(),
+                |_, rows, cols, _, _, _| {
+                    let (runtime, receiver) =
+                        TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                            cols, rows, 0, b"POPUP", 4,
+                        );
+                    receivers.push(receiver);
+                    Ok((runtime, None))
+                },
+            )
+            .unwrap()
+        };
+        let first = spawn(&mut app);
+        let first_pane = app.state.popup_pane.as_ref().unwrap().pane_id;
+        let get = || Request {
+            id: "get".into(),
+            method: Method::PopupGet(EmptyParams::default()),
+        };
+        assert!(!crate::api::request_changes_ui(&get()));
+        let result: SuccessResponse = serde_json::from_str(&app.handle_api_request(get())).unwrap();
+        assert_eq!(
+            result.result,
+            ResponseResult::PopupSession {
+                popup: Some(first.clone())
+            }
+        );
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id: first_pane,
+        });
+        assert!(app.popup_session_info().is_none());
+        let second = spawn(&mut app);
+        assert_ne!(first.terminal_id, second.terminal_id);
+        // Delayed process-exit and browser-close messages cannot close a replacement.
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id: first_pane,
+        });
+        for stale in [
+            PopupCloseExactParams {
+                terminal_id: first.terminal_id.clone(),
+                owner_tab_id: second.owner_tab_id.clone(),
+            },
+            PopupCloseExactParams {
+                terminal_id: second.terminal_id.clone(),
+                owner_tab_id: "wrong-tab".into(),
+            },
+        ] {
+            let before = app.event_hub.current_sequence();
+            let request = Request {
+                id: "stale".into(),
+                method: Method::PopupCloseExact(stale),
+            };
+            assert!(crate::api::request_changes_ui(&request));
+            let response: crate::api::schema::ErrorResponse =
+                serde_json::from_str(&app.handle_api_request(request)).unwrap();
+            assert_eq!(response.error.code, "popup_target_mismatch");
+            assert_eq!(app.popup_session_info(), Some(second.clone()));
+            assert_eq!(app.event_hub.current_sequence(), before);
+        }
+        let response: SuccessResponse = serde_json::from_str(&app.handle_api_request(Request {
+            id: "close".into(),
+            method: Method::PopupCloseExact(PopupCloseExactParams {
+                terminal_id: second.terminal_id,
+                owner_tab_id: second.owner_tab_id,
+            }),
+        }))
+        .unwrap();
+        assert_eq!(response.result, ResponseResult::Ok {});
+        let result: SuccessResponse = serde_json::from_str(&app.handle_api_request(get())).unwrap();
+        assert_eq!(result.result, ResponseResult::PopupSession { popup: None });
+        assert!(!app.close_popup_pane());
+        let events = app.event_hub.events_after(sequence);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(_, event)| event.event == EventKind::PopupChanged)
+                .count(),
+            4
+        );
     }
 }

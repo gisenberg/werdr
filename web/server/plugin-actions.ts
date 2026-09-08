@@ -1,4 +1,6 @@
 import { publicId } from './herdr.ts';
+import { commandTarget } from '../shared/commands.ts';
+import { popupSession } from '../shared/popups.ts';
 import { ManagementError } from './machine-management.ts';
 import type { Plugin, PluginPlacement } from '../shared/plugins.ts';
 
@@ -49,8 +51,16 @@ export async function pluginAction(value: Record<string, unknown>, request: Requ
   if (!entry) throw new ManagementError('The plugin pane entrypoint is no longer available. Refresh the plugin list.');
   const placement = (value.placement ?? entry.placement) as PluginPlacement;
   if (!['overlay', 'popup', 'split', 'tab', 'zoomed'].includes(placement)) throw new ManagementError('Invalid plugin pane placement.');
-  if (placement === 'popup') throw new ManagementError('Native popup panes are not available in the browser yet. Choose another placement.');
   const cwd = value.cwd === undefined || value.cwd === '' ? {} : { cwd: text(value.cwd, 'pane working directory') };
+  if (placement === 'popup') {
+    let target;
+    try { target = commandTarget(value.target); } catch { throw new ManagementError('Choose an exact source pane for the popup.'); }
+    if (pane_id !== undefined && pane_id !== target.pane_id || value.workspace_id !== undefined && publicId(value.workspace_id) !== target.workspace_id) throw new ManagementError('Popup source identity does not match the selected pane.');
+    const result = await request('plugin.popup.open', { plugin_id, entrypoint, target, ...cwd });
+    const popup = popupSession(result?.popup);
+    if (!popup) throw new ManagementError('The native popup outcome is unavailable. Check the host before opening another popup.');
+    return { type: 'popup_opened', popup };
+  }
   const params: Record<string, unknown> = { plugin_id, entrypoint, placement, focus: true, ...cwd };
   if (placement === 'tab') params.workspace_id = publicId(value.workspace_id);
   else {

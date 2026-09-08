@@ -438,6 +438,21 @@ pub struct PluginPaneOpenParams {
     pub env: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PluginPopupOpenParams {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub target: super::commands::CommandTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
 )]

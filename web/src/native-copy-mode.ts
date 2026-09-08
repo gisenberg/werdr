@@ -255,6 +255,12 @@ export class NativeCopyMode {
       return result.text;
     });
   }
+  commandSelection(): import('../shared/commands').CommandSelection | undefined {
+    const range = this.selection();
+    if (!this.active || !range) return;
+    if (this.pending || this.dirty || !this.context || !matchesNativeViewport(this.terminal(), this.context)) throw new Error('Copy selection changed. Select the text again before running the command.');
+    return { anchor: { ...range.start }, cursor: { ...range.end }, content_revision: this.context.content_revision };
+  }
   private copy() {
     if (!this.pending && !this.selection()) { this.exit(); return; }
     const generation = this.generation;

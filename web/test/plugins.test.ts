@@ -15,7 +15,7 @@ test('plugin actions preserve the host-native context and never accept executabl
   await assert.rejects(pluginAction({ action: 'plugin.action.invoke', plugin_id: 'ok', action_id: 'a', selected_text: 'x'.repeat(32769) }, request));
 });
 
-test('pane placement uses the current native manifest and rejects unsupported popups before creating a process', async () => {
+test('pane placement uses the current native manifest and requires an exact popup source', async () => {
   const calls: { method: string; params: any }[] = [];
   const request = async (method: string, params: object = {}) => { calls.push({ method, params }); return { plugins: [{ plugin_id: 'example.workflow', panes: [{ id: 'board', placement: 'overlay' }, { id: 'popup', placement: 'popup' }] }] }; };
   const input = { action: 'plugin.pane.open', plugin_id: 'example.workflow', entrypoint: 'board', pane_id: 'pane:2', workspace_id: 'ws:1', command: ['bad'], env: { BAD: 'yes' } };
@@ -26,10 +26,22 @@ test('pane placement uses the current native manifest and rejects unsupported po
     calls.length = 0; await pluginAction({ ...input, placement, direction: 'down' }, request);
     assert.deepEqual(calls.at(-1)?.params, { plugin_id: 'example.workflow', entrypoint: 'board', placement, focus: true, ...(placement === 'tab' ? { workspace_id: 'ws:1' } : { target_pane_id: 'pane:2', direction: 'down' }) });
   }
-  calls.length = 0; await assert.rejects(pluginAction({ ...input, entrypoint: 'popup' }, request), /not available/);
+  calls.length = 0; await assert.rejects(pluginAction({ ...input, entrypoint: 'popup' }, request), /exact source/);
   assert.deepEqual(calls.map(call => call.method), ['plugin.list']);
   calls.length = 0; await assert.rejects(pluginAction({ ...input, entrypoint: 'gone' }, request), /no longer available/);
   assert.deepEqual(calls.map(call => call.method), ['plugin.list']);
+});
+
+test('popup creation is one scoped native operation and strips executable substitutions', async () => {
+  const target = { workspace_id: 'w1', tab_id: 'w1:t1', pane_id: 'w1:p1', terminal_id: 'terminal-1' };
+  const popup = { terminal_id: 'popup-2', owner_workspace_id: 'w1', owner_tab_id: 'w1:t1' };
+  const calls: { method: string; params: object }[] = [];
+  const result = await pluginAction({ action: 'plugin.pane.open', plugin_id: 'example.popup', entrypoint: 'popup', target, command: ['bad'], env: { BAD: 'yes' } }, async (method, params = {}) => {
+    calls.push({ method, params });
+    return method === 'plugin.list' ? { plugins: [{ plugin_id: 'example.popup', panes: [{ id: 'popup', placement: 'popup' }] }] } : { popup: { ...popup, command: ['private'] } };
+  });
+  assert.deepEqual(calls, [{ method: 'plugin.list', params: { plugin_id: 'example.popup' } }, { method: 'plugin.popup.open', params: { plugin_id: 'example.popup', entrypoint: 'popup', target } }]);
+  assert.deepEqual(result, { type: 'popup_opened', popup });
 });
 
 test('plugin logs are bounded and registry methods retain native authority', async () => {

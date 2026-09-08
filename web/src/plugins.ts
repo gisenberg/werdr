@@ -1,9 +1,10 @@
 import { PluginInstaller, pluginInstallForm, pluginInstallMarkup } from './plugin-install';
 import type { Api } from './host-manager';
 import type { Pane } from '../shared/fleet';
+import type { CommandTarget } from '../shared/commands';
 import type { Plugin, PluginLog, PluginPane } from '../shared/plugins';
 
-interface Target { machine: string; label: string; workspace?: string; pane?: string; selectedText?: string }
+interface Target { machine: string; label: string; workspace?: string; pane?: string; selectedText?: string; commandTarget?: CommandTarget; popups?: boolean }
 type PendingTarget = Omit<Target, 'selectedText'> & { selectedText?: Promise<string> };
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const pluginsMarkup = `<dialog id="plugins-dialog"><h1>PLUGINS</h1><div class="plugin-body"><p id="plugin-host"></p><p id="plugin-context"></p><div class="inline-actions"><button id="plugin-refresh">REFRESH</button><button id="plugin-focus-pane">FOCUS PLUGIN PANE</button><button id="plugin-close-pane">CLOSE PLUGIN PANE</button></div>${pluginInstallForm}<details id="plugin-link-details"><summary>LINK A PLUGIN DIRECTORY</summary><p>Plugins run their declared commands as your user. Link trusted code already present on this host.</p><form id="plugin-link-form"><label>DIRECTORY ON THIS HOST<input id="plugin-link-path" required maxlength="4096" autocomplete="off" spellcheck="false"></label><label class="plugin-checkbox"><input id="plugin-link-enabled" type="checkbox" checked> ENABLE AFTER LINKING</label><button type="submit">LINK PLUGIN</button></form></details><label>FIND PLUGIN<input id="plugin-search" type="search" autocomplete="off"></label><div id="plugin-list"></div><details id="plugin-log-details"><summary>COMMAND LOGS</summary><label>PLUGIN<select id="plugin-log-filter"><option value="">ALL PLUGINS</option></select></label><label>RECENT COMMANDS<select id="plugin-log-limit"><option>10</option><option selected>50</option><option>100</option><option>200</option></select></label><button id="plugin-log-refresh">REFRESH LOGS</button><div id="plugin-logs"></div></details><pre id="plugin-result" role="status"></pre><p id="plugin-error" role="alert"></p></div><div class="plugin-footer"><button id="plugin-done">DONE</button></div></dialog>${pluginInstallMarkup}`;
@@ -110,13 +111,13 @@ export class Plugins {
     row.append(node('h3', pane.title)); if (pane.description) row.append(node('p', pane.description));
     const controls = node('div', '', 'plugin-pane-controls');
     const label = node('label', 'PLACEMENT'), placement = document.createElement('select'); placement.setAttribute('aria-label', `${pane.title} placement`);
-    for (const value of ['overlay', 'popup', 'split', 'tab', 'zoomed']) { const option = new Option(value.toUpperCase() + (value === pane.placement ? ' (DEFAULT)' : ''), value); option.disabled = value === 'popup'; placement.add(option); }
+    for (const value of ['overlay', 'popup', 'split', 'tab', 'zoomed']) { const option = new Option(value.toUpperCase() + (value === pane.placement ? ' (DEFAULT)' : ''), value); option.disabled = value === 'popup' && !this.target?.popups; placement.add(option); }
     placement.value = pane.placement; placement.disabled = this.busy; label.append(placement); controls.append(label);
     const directionLabel = node('label', 'SPLIT DIRECTION'), direction = document.createElement('select'); direction.setAttribute('aria-label', `${pane.title} split direction`); direction.append(new Option('RIGHT', 'right'), new Option('DOWN', 'down')); direction.disabled = this.busy; directionLabel.append(direction); controls.append(directionLabel);
-    const open = this.button(`OPEN ${pane.title}`, () => void this.change('plugin.pane.open', { plugin_id: plugin.plugin_id, entrypoint: pane.id, placement: placement.value, direction: direction.value, pane_id: this.target?.pane, workspace_id: this.target?.workspace }));
-    const update = () => { open.disabled = this.busy || !plugin.enabled || placement.value === 'popup' || (placement.value === 'tab' ? !this.target?.workspace : !this.target?.pane); directionLabel.hidden = !['split', 'zoomed'].includes(placement.value); };
+    const open = this.button(`OPEN ${pane.title}`, () => void this.change('plugin.pane.open', { plugin_id: plugin.plugin_id, entrypoint: pane.id, placement: placement.value, direction: direction.value, pane_id: this.target?.pane, workspace_id: this.target?.workspace, target: this.target?.commandTarget }));
+    const update = () => { open.disabled = this.busy || !plugin.enabled || placement.value === 'popup' && (!this.target?.popups || !this.target.commandTarget) || (placement.value === 'tab' ? !this.target?.workspace : !this.target?.pane); directionLabel.hidden = !['split', 'zoomed'].includes(placement.value); };
     placement.onchange = update; update(); controls.append(open); row.append(controls, this.command(pane.command));
-    if (pane.placement === 'popup') row.append(node('p', 'Popup is not available in this browser yet. Choose another placement.'));
+    if (pane.placement === 'popup' && !this.target?.popups) row.append(node('p', 'This host needs native popup-session support. Choose another placement or update the host.'));
     return row;
   }
   private async change(action: string, params: object) {
@@ -125,6 +126,7 @@ export class Plugins {
     try {
       const result = await this.request(action, params); this.changed();
       if (epoch !== this.epoch) return;
+      if (result.type === 'popup_opened' && result.popup) { el<HTMLDialogElement>('plugins-dialog').close(); el<HTMLDialogElement>('settings-dialog').close(); return; }
       if (result.plugin_pane?.pane) {
         el<HTMLDialogElement>('plugins-dialog').close(); el<HTMLDialogElement>('settings-dialog').close();
         this.selectPane(target.machine, result.plugin_pane.pane); return;

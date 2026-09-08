@@ -350,6 +350,18 @@
             {
               "properties": {
                 "type": {
+                  "const": "popup_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "command_manifest_changed",
                   "type": "string"
                 }
@@ -1105,6 +1117,7 @@
         },
         "EventKind": {
           "enum": [
+            "popup.changed",
             "command.manifest_changed",
             "notification.semantic",
             "workspace_created",
@@ -4304,6 +4317,57 @@
           ],
           "type": "string"
         },
+        "PluginPopupOpenParams": {
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "entrypoint": {
+              "type": "string"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "plugin_id": {
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/schemas/request/$defs/CommandTarget"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "plugin_id",
+            "entrypoint",
+            "target"
+          ],
+          "type": "object"
+        },
         "PluginSetEnabledParams": {
           "properties": {
             "plugin_id": {
@@ -4383,6 +4447,21 @@
           },
           "required": [
             "plugin_id"
+          ],
+          "type": "object"
+        },
+        "PopupCloseExactParams": {
+          "properties": {
+            "owner_tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "owner_tab_id"
           ],
           "type": "object"
         },
@@ -4477,6 +4556,18 @@
         },
         "Subscription": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "popup.changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -6707,6 +6798,38 @@
         {
           "properties": {
             "method": {
+              "const": "popup.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.close_exact",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupCloseExactParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "events.subscribe",
               "type": "string"
             },
@@ -6936,6 +7059,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneOpenParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "plugin.popup.open",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PluginPopupOpenParams"
             }
           },
           "required": [
@@ -7930,6 +8069,18 @@
             {
               "properties": {
                 "type": {
+                  "const": "popup_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "command_manifest_changed",
                   "type": "string"
                 }
@@ -8700,6 +8851,7 @@
         },
         "EventKind": {
           "enum": [
+            "popup.changed",
             "command.manifest_changed",
             "notification.semantic",
             "workspace_created",
@@ -10437,6 +10589,44 @@
             },
             {
               "properties": {
+                "popup": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "popup_session",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "popup": {
+                  "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                },
+                "type": {
+                  "const": "popup_opened",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "popup"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "commands": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/CommandInfo"
@@ -11825,6 +12015,11 @@
             "passive_metadata": {
               "default": false,
               "description": "Inactive endpoint attachment never creates sessions or nudges live panes.",
+              "type": "boolean"
+            },
+            "popup_sessions": {
+              "default": false,
+              "description": "Supports popup.get, popup.close_exact, plugin.popup.open and popup.changed subscriptions.",
               "type": "boolean"
             },
             "semantic_notifications": {

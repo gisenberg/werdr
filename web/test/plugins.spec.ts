@@ -68,9 +68,18 @@ test('plugin overlay, split, zoomed and tab panes retain native input and restor
     await expect(page.locator('#plugins-dialog')).not.toBeVisible(); await expect(page.locator('#shield')).toBeHidden();
     await expect(page.locator('.terminal-pane:visible')).toHaveCount(1); expect(new URL(page.url()).searchParams.get('pane')).toBe(root);
   }
-  await open(page); const popup = page.locator('.plugin-entry[data-entrypoint=popup]'); await expect(popup.getByRole('button', { name: 'OPEN Popup Board' })).toBeDisabled();
+  await open(page); const popup = page.locator('.plugin-entry[data-entrypoint=popup]');
   const before = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.length;
-  const rejected = await page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', action: 'plugin.pane.open', plugin_id: 'example.browser-test', entrypoint: 'popup', pane_id: root, workspace_id: workspace } }); expect(rejected.ok()).toBe(false);
+  if (JSON.parse(await runtime.cli('status', '--json')).server.capabilities.popup_sessions) {
+    await expect(popup.getByRole('button', { name: 'OPEN Popup Board' })).toBeEnabled();
+    await popup.getByRole('button', { name: 'OPEN Popup Board' }).click();
+    await expect(page.locator('#plugins-dialog')).not.toBeVisible(); await expect(page.locator('#native-popup')).toBeVisible(); await expect(page.locator('#native-popup .pane-shield')).toBeHidden();
+    expect(new URL(page.url()).searchParams.get('pane')).toBe(root);
+    await page.locator('#native-popup').getByRole('button', { name: '[X] CLOSE', exact: true }).click(); await expect(page.locator('#native-popup')).not.toBeVisible();
+  } else {
+    await expect(popup.getByRole('button', { name: 'OPEN Popup Board' })).toBeDisabled();
+    const rejected = await page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', action: 'plugin.pane.open', plugin_id: 'example.browser-test', entrypoint: 'popup', pane_id: root, workspace_id: workspace } }); expect(rejected.ok()).toBe(false);
+  }
   expect(JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.panes.length).toBe(before);
 });
 

@@ -2847,6 +2847,7 @@ mod tests {
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: Some(crate::api::schema::ServerCapabilities {
+                popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,
                 semantic_notifications: true,
@@ -2926,6 +2927,7 @@ mod tests {
                 version: Some("0.6.2".to_string()),
                 protocol: Some(76),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
+                    popup_sessions: true,
                     command_execution: true,
                     command_catalog: true,
                     semantic_notifications: true,
@@ -3189,6 +3191,7 @@ mod tests {
                 version: Some("9.8.6".to_string()),
                 protocol: Some(76),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
+                    popup_sessions: true,
                     command_execution: true,
                     command_catalog: true,
                     semantic_notifications: true,

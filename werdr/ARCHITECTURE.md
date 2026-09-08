@@ -26,6 +26,14 @@ Token replacement or explicit access-token revocation invalidates token-authenti
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
 `ShortcutMode` owns prefix, Navigate, and resize state, while `DesktopShortcuts` resolves configured commands before terminal keyboard encoding.
 Bindings and prefix preferences live in the version-ten browser settings store, with migration and revision-checked saves.
+Configured host commands come from the optional native command catalog as opaque IDs, labels, action kinds, and descriptions.
+The browser dispatches an explicit workspace/tab/pane/terminal target through `command.execute` and uses only the producer's typed result for navigation.
+Plugin selections carry native coordinates and a content revision; executable command text and caller-provided selected text are excluded from this dispatch path.
+The native popup singleton is discovered through `popup.get` and `popup.changed`, independently of pane snapshots.
+`PopupSurface` owns its modal browser presentation and attaches to the exact popup terminal using the same native terminal transport.
+Popup creation retains its owning tab without adding a layout pane, and `popup.close_exact` rejects delayed closure of a replaced session.
+A pending popup command blocks underlying terminal input until discovery, failure, or the bounded post-response timeout.
+Missing optional capabilities disable only the corresponding commands or popup placement.
 `LastPane` records reconciled browser pane/terminal identity and resolves current ancestry when invoked.
 It clears on host changes, lost gateway continuity, and native API connection replacement, including replacements whose offline delta was missed.
 The gateway publishes a fresh `connectionGeneration` for each native connection attempt; this is a conservative connection boundary, not a native boot identifier.

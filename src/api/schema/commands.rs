@@ -66,6 +66,12 @@ pub struct CommandPopup {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PopupCloseExactParams {
+    pub terminal_id: String,
+    pub owner_tab_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandEffect {
     ShellStarted {},

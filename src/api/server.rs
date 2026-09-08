@@ -66,6 +66,7 @@ pub(crate) fn start_server_with_stop_control(
 
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
+        popup_sessions: true,
         command_execution: true,
         command_catalog: true,
         semantic_notifications: true,
@@ -482,6 +483,8 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneReleaseAgent(_) => "pane.release_agent",
         Method::PaneClose(_) => "pane.close",
         Method::PopupClose(_) => "popup.close",
+        Method::PopupGet(_) => "popup.get",
+        Method::PopupCloseExact(_) => "popup.close_exact",
         Method::EventsSubscribe(_) => "events.subscribe",
         Method::EventsWait(_) => "events.wait",
         Method::PaneWaitForOutput(_) => "pane.wait_for_output",
@@ -497,6 +500,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PluginActionInvoke(_) => "plugin.action.invoke",
         Method::PluginLogList(_) => "plugin.log.list",
         Method::PluginPaneOpen(_) => "plugin.pane.open",
+        Method::PluginPopupOpen(_) => "plugin.popup.open",
         Method::PluginPaneFocus(_) => "plugin.pane.focus",
         Method::PluginPaneClose(_) => "plugin.pane.close",
     }
@@ -1150,6 +1154,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,
                 semantic_notifications: true,

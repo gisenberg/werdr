@@ -723,6 +723,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,
                 semantic_notifications: true,
@@ -1558,6 +1559,15 @@ fn scoped_command_effects_keep_unknown_results_non_actionable() {
     let capabilities: ServerCapabilities =
         serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
     assert!(!capabilities.command_execution);
+    assert!(!capabilities.popup_sessions);
     let request: Request = serde_json::from_value(serde_json::json!({"id":"execute","method":"command.execute","params":{"command_id":"opaque","target":{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","terminal_id":"term1"}}})).unwrap();
     assert!(crate::api::request_changes_ui(&request));
+}
+
+#[test]
+fn popup_lifecycle_subscription_uses_public_dot_name() {
+    let subscription: Subscription =
+        serde_json::from_value(serde_json::json!({"type":"popup.changed"})).unwrap();
+    assert_eq!(subscription, Subscription::PopupChanged {});
+    assert_eq!(EventKind::PopupChanged.dot_name(), "popup.changed");
 }
