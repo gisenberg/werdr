@@ -175,8 +175,7 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/notices/read' && req.method === 'POST') { const value = await authorizedBody(req); await fleet.markNoticesRead(value.id === undefined ? undefined : publicId(value.id)); return reply(res, 200, { ok: true }); }
 
       if (url.pathname === '/api/snapshot' && req.method === 'GET') {
-        const machine = await resolveMachine(publicId(url.searchParams.get('machine')));
-        return reply(res, 200, await command(machine, ['api', 'snapshot']));
+        return reply(res, 200, await fleet.request(publicId(url.searchParams.get('machine')), 'session.snapshot', {}, false));
       }
       if (url.pathname === '/api/layout' && req.method === 'GET') {
         const result = await fleet.request(publicId(url.searchParams.get('machine')), 'layout.export', { tab_id: publicId(url.searchParams.get('tab')) }, false);

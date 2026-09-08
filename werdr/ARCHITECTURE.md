@@ -77,7 +77,13 @@ Windows SSH multiplexes bounded channels to the existing named pipe through a Po
 Neither path adds a TCP listener or a second session runtime.
 Agent status transitions create bounded, atomically persisted notification history; bootstrap does not announce existing work.
 Notifications cover observed transitions while the gateway is running, rather than reconstructing events missed during downtime.
-The browser applies ordered fleet revisions and resynchronizes after gaps or reconnects.
+Each gateway fleet instance has a generation ID, with ordered revisions inside that generation.
+HTTP snapshots and WebSocket snapshots share one browser ordering authority, and socket deltas remain tied to their accepted generation.
+Older snapshots cannot undo a newer projection; a restart may begin at a lower revision, while ambiguous generation changes reconnect before adoption.
+The browser resynchronizes after gaps or reconnects and reconciles the snapshot before recovering terminal attachments.
+Initial URL or saved selection restoration uses a scoped tuple and a fresh `session.snapshot` through the connected, pinned native endpoint.
+It keeps the terminal surface inert until cached metadata agrees on the requested scope and terminal identity, revalidating while metadata catches up.
+Missing targets, offline hosts, and endpoint replacement remain explicit, while newer navigation or a command supersedes the pending read.
 Host identity is pinned across in-flight operations, and disabling/removing a host retires metadata and terminal clients without terminating native sessions.
 
 Workspace grouping consumes native `WorkspaceInfo.worktree` repository membership, without inferring groups from display labels or checkout paths.

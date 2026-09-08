@@ -21,6 +21,7 @@ export class Fleet extends EventEmitter {
   private scrollWatches = new Set<() => void>();
   private actionQueues = new WeakMap<Host, { tail: Promise<unknown>; pending: number }>();
   private order: string[] = [];
+  private readonly generation = randomBytes(16).toString('hex');
   private revision = 0;
   private notices: Notice[] = [];
   private catalogTimer?: ReturnType<typeof setInterval>;
@@ -38,7 +39,7 @@ export class Fleet extends EventEmitter {
     await this.reloadCatalog();
     this.catalogTimer = setInterval(() => { void this.reloadCatalog().catch(error => this.emit('diagnostic', error)); }, 2000); this.catalogTimer.unref();
   }
-  state(): FleetState { return { revision: this.revision, hosts: this.order.map(id => this.hosts.get(id)!.view), notices: this.notices }; }
+  state(): FleetState { return { generation: this.generation, revision: this.revision, hosts: this.order.map(id => this.hosts.get(id)!.view), notices: this.notices }; }
   private publish(event: Omit<Extract<FleetEvent, { revision: number }>, 'revision'> | any) { if (!this.stopped) { for (const reconcile of this.scrollWatches) reconcile(); this.emit('event', { ...event, revision: ++this.revision } as FleetEvent); } }
   private publishHost(host: Host) { this.publish({ type: 'fleet.host', host: host.view }); }
   async reloadCatalog() {

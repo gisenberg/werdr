@@ -11,7 +11,7 @@ export interface Snapshot { agent_view?: AgentView; focused_workspace_id?: strin
 export type ConnectionState = 'connecting' | 'online' | 'offline' | 'disabled' | 'incompatible';
 export interface HostView { machine: Machine; connection: ConnectionState; detail?: string; version?: string; lastSeen?: number; retryAt?: number; snapshot?: Snapshot }
 export interface Notice { id: string; machineId: string; machineLabel: string; paneId: string; workspaceId: string; tabId: string; title: string; body: string; kind: 'attention' | 'finished'; created: number; read: boolean }
-export interface FleetState { revision: number; hosts: HostView[]; notices: Notice[] }
+export interface FleetState { generation: string; revision: number; hosts: HostView[]; notices: Notice[] }
 export type FleetEvent = { type: 'fleet.snapshot'; state: FleetState } | { type: 'fleet.host'; revision: number; host: HostView } | { type: 'fleet.catalog'; revision: number; hosts: HostView[] } | { type: 'fleet.notices'; revision: number; notices: Notice[]; added?: Notice };
 export interface SetupRequest { target: string; label: string; session: string; platform: 'posix' | 'windows' }
 export interface SetupJob { id: string; machineId?: string; state: 'running' | 'complete' | 'failed' | 'cancelled'; target: string; label: string; platform: 'posix' | 'windows'; output: string; started: number; ended?: number; error?: string }

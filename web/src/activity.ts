@@ -4,7 +4,7 @@ import type { Api } from './host-manager';
 export const activityMarkup = `<dialog id="activity-dialog"><h1>FLEET ACTIVITY</h1><p>Agent attention and completion events from every connected host.</p><div class="inline-actions"><button id="read-notices">MARK ALL READ</button><button id="desktop-notices">ENABLE DESKTOP NOTIFICATIONS</button></div><p id="activity-error" role="alert"></p><div id="notice-list"></div><button id="activity-done">DONE</button></dialog><button id="notice-toast" hidden></button>`;
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export class Activity {
-  private state: FleetState = { revision: 0, hosts: [], notices: [] };
+  private state: FleetState = { generation: '', revision: 0, hosts: [], notices: [] };
   private timer?: ReturnType<typeof setTimeout>;
   constructor(private readonly api: Api, private readonly select: (machine: string, workspace: string, tab: string, pane: string) => void, private readonly current: () => { machine: string; pane: string }, private readonly preferences: () => Preferences) {
     element('activity-done').onclick = () => element<HTMLDialogElement>('activity-dialog').close();

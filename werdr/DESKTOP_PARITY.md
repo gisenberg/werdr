@@ -9,7 +9,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 
 | Capability | Required browser behavior | Current evidence |
 | --- | --- | --- |
-| Fleet and session ownership | Host-scoped identity, independent reconnect, durable native processes, explicit takeover and closure | Existing fleet and controller tests; prolonged gateway-outage test verifies exhausted retries recover for every visible pane without page reload, forced takeover, or loss of native shell state |
+| Fleet and session ownership | Host-scoped identity, independent reconnect, durable native processes, explicit takeover and closure | Initial selection restoration validates scoped URLs and saved IDs against the pinned native endpoint before attaching; generation-aware HTTP/WebSocket ordering prevents stale snapshots from reversing selection; existing fleet and controller tests; prolonged gateway-outage test verifies exhausted retries recover for every visible pane without page reload, forced takeover, or loss of native shell state |
 | Desktop layout | Render native split tree simultaneously; preserve ratios; drag and keyboard resize; zoom, directional focus, swap, move, reorder | Implemented native split tree, independent controllers, drag and keyboard ratios, zoom, directional focus/resize/swap, pane moves and workspace/tab ordering; isolated browser tests exercise input, stable terminal DOM, phone fallback and gateway restart |
 | Visual hierarchy | Native semantic palette, compact cell rhythm, borders and active pane cues, configurable sidebar sections and contextual hints | Partial: native semantic palette, configurable split/outer/shared borders with native label precedence, top/bottom desktop tabs, and independently scrolling workspace/agent sections with a draggable saved split; native agent row tokens, per-agent layouts and conditional styles are implemented; workspace row tokens and contextual hints remain |
 | Themes | All native theme choices, custom semantic overrides, light/dark/system selection and live preview/cancel | Implemented palette extraction, preview/cancel, system switching and custom colors; package and browser tests cover these behaviors |
@@ -28,6 +28,9 @@ Each capability below needs native-reference evidence, implemented browser inter
 
 ## Verification
 
+`web/test/selection-restore.spec.ts` verifies fresh links absent from cached metadata, missing and contradictory IDs, unknown hosts, scoped URLs with saved descendants, newer navigation during a delayed read, transient read failures, and an older initial WebSocket snapshot arriving after HTTP restoration.
+Assertions cover selected IDs and the absence of unrelated terminal attachments.
+Unit tests cover endpoint replacement, gateway generations, old-stream deltas, stop invalidation, and terminal replacement or empty-to-populated cache races.
 `web/test/shortcuts.spec.ts` verifies native prefix commands, double-prefix forwarding in terminal and copy modes, held-key suppression, persistent resizing, indexed tab selection, IME bypass, editable-control isolation, remapping, preview cancellation, gateway restart, offline help, and delayed native layout responses.
 A forced move-response race verifies destination selection after automatic native fallback, while explicit navigation round trips and newer commands supersede older focus replies.
 The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.

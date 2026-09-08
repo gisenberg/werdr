@@ -95,6 +95,9 @@ Theme and font changes update the mounted terminal without releasing its control
 - Durable attention/completion activity with pane links and optional desktop notifications.
 - Workspace, tab, pane, and agent rename; agent start and prompt actions through `Ctrl/Cmd+K`.
 - Shareable host/workspace/tab/pane URLs and selection restored after reload.
+  URL coordinates form one request and do not inherit unrelated saved tab or pane IDs.
+  Restoration validates the requested scope with the native host and keeps terminal input blocked until fleet metadata agrees.
+  Missing or offline targets remain explicit; choosing a host or workspace cancels restoration.
 - Workspace/tab creation, pane splitting and closure, and explicit terminal takeover.
 - Live terminal input, resize, and scroll through herdr's controller stream.
 - Desktop and phone layouts with a collapsed mobile host drawer.

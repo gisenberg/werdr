@@ -39,6 +39,7 @@ test('host failures, colliding pane IDs, reconnects and notification persistence
   let fleet = new Fleet(async () => catalog, path, connect);
   try {
     await fleet.start();
+    const generation = fleet.state().generation; assert.match(generation, /^[0-9a-f]{32}$/);
     await until(() => fleet.state().hosts.filter(host => host.connection === 'online').length === 2);
     await until(() => endpoints.get('one')!.listeners.length === 2 && endpoints.get('two')!.listeners.length === 2);
     assert.ok([...endpoints.values()].every(endpoint => endpoint.listeners.every(listener => listener.subscriptions.every(item => item.type !== 'agent.view.changed'))), 'legacy runtimes must not receive the optional view subscription');
@@ -63,7 +64,9 @@ test('host failures, colliding pane IDs, reconnects and notification persistence
     await assert.rejects(fleet.request('two', 'session.snapshot'), /not connected/);
     await fleet.markNoticesRead();
     assert.equal((await stat(path)).mode & 0o777, 0o600);
+    assert.equal(fleet.state().generation, generation);
     fleet.stop(); fleet = new Fleet(async () => catalog, path, connect); await fleet.start();
+    assert.notEqual(fleet.state().generation, generation);
     assert.equal(fleet.state().notices.length, 2); assert.ok(fleet.state().notices.every(notice => notice.read));
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });

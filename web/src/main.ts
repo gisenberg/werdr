@@ -1,3 +1,4 @@
+import { initialSelection, SelectionRestoration } from './selection-restoration';
 import { DesktopShortcuts, type ShortcutCommand } from './desktop-shortcuts';
 import type { ShortcutAction } from '../shared/shortcuts';
 import { forgetAgentRows, renderAgentRows, resolveAgentRows, type RowToken } from './agent-row-renderer';
@@ -39,15 +40,14 @@ const boot = new BootConsole(value => api('/api/login', value), refresh);
 const status = (text: string) => { element('status').textContent = text; };
 let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = emptySnapshot();
-let fleetState: FleetState = { revision: 0, hosts: [], notices: [] };
+let fleetState: FleetState = { generation: '', revision: 0, hosts: [], notices: [] };
 let pendingHost: { id: string; intent: number } | undefined;
 let pendingPane: { machine: string; pane: string; tab: string } | undefined;
 const selections = new Map<string, { workspace: string; tab: string; pane: string }>();
-try {
-  const saved = JSON.parse(localStorage.getItem('werdr-selection') || '{}');
-  const query = new URLSearchParams(location.search);
-  machineId = query.get('machine') || saved.machine || 'local'; workspaceId = query.get('workspace') || saved.workspace || ''; tabId = query.get('tab') || saved.tab || ''; paneId = query.get('pane') || saved.pane || '';
-} catch {}
+let savedSelection: string | null = null;
+try { savedSelection = localStorage.getItem('werdr-selection'); } catch {}
+const initial = initialSelection(location.search, savedSelection);
+({ machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId } = initial.selection);
 let remembered = '', selectionIntent = 0;
 function rememberSelection() {
   const value = { machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId }; const encoded = JSON.stringify(value);
@@ -72,7 +72,8 @@ const fleet = new FleetClient(applyFleet, online => {
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
-function selectPane(id: string) { if (paneId === id && !pendingPane) return; ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
+const restoration = new SelectionRestoration(initial.restore ? initial.selection : undefined, async machine => (await api('/api/snapshot?' + new URLSearchParams({ machine }))).snapshot, () => { if (authenticated) { choose(); renderFleetNavigation(); } });
+function selectPane(id: string) { if (paneId === id && !pendingPane && !restoration.active) return; restoration.cancel(); ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
@@ -96,14 +97,16 @@ function machineContext(id: string) {
 }
 function selectHost(id: string, fulfill = false) {
   if (!fulfill) { ++selectionIntent; pendingHost = undefined; }
+  const restoring = restoration.active; restoration.cancel();
+  if (restoring) { workspaceId = ''; tabId = ''; paneId = ''; }
   if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = { id, intent: selectionIntent }; fleet.resync(); return; }
-  if (machineId === id) return;
+  if (machineId === id) { if (restoring) { choose(); renderFleetNavigation(); } return; }
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
-  ++selectionIntent;
+  restoration.cancel(); ++selectionIntent;
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
   if (machineId !== machine) detach();
   if (waitForSnapshot) surface.waitForSelection();
@@ -135,7 +138,7 @@ function applyFleet(state: FleetState, added?: Notice) {
   const previous = selectedHost()?.connection; fleetState = state;
   if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
   if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
-  if (!selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
+  if (!restoration.active && !selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
     detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
@@ -171,9 +174,9 @@ function renderFleetNavigation() {
   const current = selectedHost(); const online = current?.connection === 'online';
   element<HTMLButtonElement>('settings-integrations').disabled = !online;
   element<HTMLButtonElement>('settings-plugins').disabled = !online;
-  element<HTMLButtonElement>('create').disabled = !online || !!pendingPane;
+  element<HTMLButtonElement>('create').disabled = !online || (!!pendingPane || restoration.active);
   const connected = fleetState.hosts.filter(host => host.connection === 'online').length;
-  status(`${online ? '[OK]' : '[' + (current?.connection || 'connecting').toUpperCase() + ']'} ${current?.machine.label || ''} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
+  status(`${online ? '[OK]' : '[' + (current?.connection || (fleetState.hosts.length ? 'unavailable' : 'connecting')).toUpperCase() + ']'} ${current?.machine.label || machineId} / ${connected}/${fleetState.hosts.filter(host => host.machine.enabled).length} HOSTS ONLINE / ${snapshot.workspaces.length} WORKSPACES / ${snapshot.panes.length} PANES`);
   if (element<HTMLDialogElement>('command-dialog').open) refreshCommands();
 }
 
@@ -250,11 +253,11 @@ function navigation(id: string, items: NavigationItem[]) {
 function renderNavigation() {
   shortcuts?.sync();
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
-  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
+  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   updateShieldBounds();
-  element<HTMLButtonElement>('new-tab').disabled = !workspaceId || !!pendingPane || selectedHost()?.connection !== 'online';
-  for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || !!pendingPane || selectedHost()?.connection !== 'online';
+  element<HTMLButtonElement>('new-tab').disabled = !workspaceId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
+  for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
 }
 function updateShieldBounds() {
   const terminal = element('terminal');
@@ -263,6 +266,11 @@ function updateShieldBounds() {
 }
 new ResizeObserver(updateShieldBounds).observe(element('terminal'));
 function choose() {
+  if (restoration.active) {
+    const restored = restoration.update(selectedHost());
+    if (!restored) { surface.waitForSelection(); element('shield').textContent = restoration.message; renderNavigation(); return; }
+    ({ machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId } = restored);
+  }
   // Connecting hosts have no snapshot yet. Preserve deep links and saved selection
   // until the native server can authoritatively reconcile those IDs.
   if (!selectedHost()?.snapshot) { renderNavigation(); element('shield').textContent = selectedHost()?.detail || 'Connecting to host...'; return; }
@@ -289,8 +297,9 @@ async function refresh() {
     authenticated = true; element('settings').hidden = false; element('sessions').hidden = false; element('access-token').hidden = !session.canGenerateToken;
     await settings.refresh();
     fleet.start();
+    const observedVersion = fleet.version;
     const state = await api('/api/fleet');
-    if (state.revision >= fleetState.revision || !fleetState.hosts.length) applyFleet(state);
+    fleet.acceptSnapshot(state, observedVersion);
   } catch (error) { status(`[OFFLINE] ${(error as Error).message}`); }
   finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } }
 }
@@ -298,6 +307,7 @@ function detach() { surface.clear(); }
 async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId) {
   const interaction = interactionRevision, selection = ++selectionIntent, endpoint = machineContext(selected), source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
+  restoration.supersede();
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
     const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
@@ -308,7 +318,7 @@ async function action(action: string, id?: string, extra: object = {}, selected 
     if (applySelection && action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
     if (applySelection && created && action !== 'pane.close' && (created.pane_id !== paneId || created.tab_id !== tabId || created.workspace_id !== workspaceId || !snapshot.panes.some(pane => pane.pane_id === created.pane_id))) {
-      workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); if (interactionRevision === interaction) surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
+      restoration.cancel(); workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); if (interactionRevision === interaction) surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
     }
     // Layout mutations report the runtime's focus, which may belong to another
     // client. Only an explicit focus action changes this browser's selection.
@@ -446,7 +456,7 @@ for (const [formId, actionName] of [['agent-start-form', 'agent.start'], ['agent
 }
 function refreshCommands() {
   const machine = machineId, workspace = workspaceId, tab = tabId, pane = paneId;
-  const online = selectedHost()?.connection === 'online' && !pendingPane;
+  const online = selectedHost()?.connection === 'online' && !pendingPane && !restoration.active;
   commands = [
     { id: 'help', label: 'Keyboard shortcuts and prefix help', run: () => shortcuts?.openHelp() },
     { id: 'settings', label: 'Browser settings', run: () => void settings.open() },
@@ -563,7 +573,7 @@ function selectKeyboardTarget(target: { workspace: string; tab: string; pane: st
   selectTarget(machineId, target.workspace, target.tab, target.pane); if (paneId) surface.requestFocus(paneId);
 }
 shortcuts = new DesktopShortcuts(preferences.shortcuts,
-  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${!!pendingPane}`, attachment: surface.active, available: authenticated }),
+  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${(!!pendingPane || restoration.active)}`, attachment: surface.active, available: authenticated }),
   () => { refreshCommands(); return commands; },
   (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) selectKeyboardTarget(target); },
   () => { if (paneId) surface.requestFocus(paneId); }, event => surface.active?.sendKey(event));
