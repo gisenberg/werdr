@@ -2576,6 +2576,7 @@ pub const GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SELECTION: GhosttyTerminalDa
 pub const GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE: GhosttyTerminalData = 32;
 #[doc = " Whether xterm modifyOtherKeys mode 2 is enabled.\n\n Output type: bool *"]
 pub const GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_MODIFY_OTHER_KEYS: GhosttyTerminalData = 33;
+#[doc = " Whether xterm modifyOtherKeys mode 2 is enabled.\n\n Output type: bool *"]
 pub const GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_MAX_VALUE: GhosttyTerminalData = 2147483647;
 #[doc = " Terminal data types.\n\n These values specify what type of data to extract from a terminal\n using `ghostty_terminal_get`.\n\n @ingroup terminal"]
 pub type GhosttyTerminalData = ::std::os::raw::c_uint;
@@ -2826,6 +2827,16 @@ impl Default for GhosttyFormatterTerminalOptions {
             s.assume_init()
         }
     }
+}
+unsafe extern "C" {
+    #[doc = " Format all retained content of an explicitly selected screen as VT sequences.\n\n Includes current cursor, SGR, hyperlink, protection, charset and Kitty keyboard\n state. Does not include terminal-global modes, palette, saved cursor or parser\n state. This is a screen export, not a complete terminal checkpoint.\n\n Never switches screens, initializes an unused alternate screen, or writes to\n the terminal. Serialize this call with terminal mutation as with other reads.\n An uninitialized or invalid screen returns GHOSTTY_INVALID_VALUE.\n On failure, out_ptr is NULL and out_len is zero.\n Free successful output with ghostty_free() using the same allocator.\n\n @ingroup formatter"]
+    pub fn ghostty_formatter_screen_vt_alloc(
+        terminal: GhosttyTerminal,
+        screen: GhosttyTerminalScreen,
+        allocator: *const GhosttyAllocator,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
 }
 unsafe extern "C" {
     #[doc = " Create a formatter for a terminal's active screen.\n\n The terminal must outlive the formatter. The formatter stores a borrowed\n reference to the terminal and reads its current state on each format call.\n\n @param allocator Pointer to allocator, or NULL to use the default allocator\n @param formatter Pointer to store the created formatter handle\n @param terminal The terminal to format (must not be NULL)\n @param options Formatting options\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup formatter"]

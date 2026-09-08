@@ -1,0 +1,99 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/formatter.h b/vendor/libghostty-vt/include/ghostty/vt/formatter.h
+index 5cdcd11a..6e74b535 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/formatter.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/formatter.h
+@@ -117,6 +117,28 @@ typedef struct {
+   const GhosttySelection *selection;
+ } GhosttyFormatterTerminalOptions;
+ 
++/**
++ * Format all retained content of an explicitly selected screen as VT sequences.
++ *
++ * Includes current cursor, SGR, hyperlink, protection, charset and Kitty keyboard
++ * state. Does not include terminal-global modes, palette, saved cursor or parser
++ * state. This is a screen export, not a complete terminal checkpoint.
++ *
++ * Never switches screens, initializes an unused alternate screen, or writes to
++ * the terminal. Serialize this call with terminal mutation as with other reads.
++ * An uninitialized or invalid screen returns GHOSTTY_INVALID_VALUE.
++ * On failure, out_ptr is NULL and out_len is zero.
++ * Free successful output with ghostty_free() using the same allocator.
++ *
++ * @ingroup formatter
++ */
++GHOSTTY_API GhosttyResult ghostty_formatter_screen_vt_alloc(
++    GhosttyTerminal terminal,
++    GhosttyTerminalScreen screen,
++    const GhosttyAllocator* allocator,
++    uint8_t** out_ptr,
++    size_t* out_len);
++
+ /**
+  * Create a formatter for a terminal's active screen.
+  *
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index e01cdbb8..59811eac 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -228,6 +228,7 @@ comptime {
+         @export(&c.sgr_attribute_tag, .{ .name = "ghostty_sgr_attribute_tag" });
+         @export(&c.sgr_attribute_value, .{ .name = "ghostty_sgr_attribute_value" });
+         @export(&c.formatter_terminal_new, .{ .name = "ghostty_formatter_terminal_new" });
++        @export(&c.formatter_screen_vt_alloc, .{ .name = "ghostty_formatter_screen_vt_alloc" });
+         @export(&c.formatter_format_buf, .{ .name = "ghostty_formatter_format_buf" });
+         @export(&c.formatter_format_alloc, .{ .name = "ghostty_formatter_format_alloc" });
+         @export(&c.formatter_free, .{ .name = "ghostty_formatter_free" });
+diff --git a/vendor/libghostty-vt/src/terminal/c/formatter.zig b/vendor/libghostty-vt/src/terminal/c/formatter.zig
+index 5b4504c8..9d2b825f 100644
+--- a/vendor/libghostty-vt/src/terminal/c/formatter.zig
++++ b/vendor/libghostty-vt/src/terminal/c/formatter.zig
+@@ -103,6 +103,37 @@ pub const TerminalOptions = extern struct {
+     };
+ };
+ 
++/// Format an explicitly selected screen without changing terminal modes or focus.
++/// Unlike a retained formatter handle, the screen reference never outlives this call.
++pub fn screen_vt_alloc(
++    terminal_: terminal_c.Terminal,
++    screen_raw: c_int,
++    alloc_: ?*const CAllocator,
++    out_ptr: *?[*]u8,
++    out_len: *usize,
++) callconv(lib.calling_conv) Result {
++    out_ptr.* = null;
++    out_len.* = 0;
++    const t = (terminal_ orelse return .invalid_value).terminal;
++    const screen = std.meta.intToEnum(terminal_c.TerminalScreen, screen_raw) catch
++        return .invalid_value;
++    const selected = t.screens.get(screen) orelse return .invalid_value;
++    var formatter: formatterpkg.ScreenFormatter = .init(selected, .{
++        .emit = .vt,
++        .unwrap = false,
++        .trim = false,
++    });
++    formatter.extra = .all;
++    const alloc = lib.alloc.default(alloc_);
++    var writer: std.Io.Writer.Allocating = .init(alloc);
++    defer writer.deinit();
++    formatter.format(&writer.writer) catch return .out_of_memory;
++    const bytes = writer.toOwnedSlice() catch return .out_of_memory;
++    out_ptr.* = bytes.ptr;
++    out_len.* = bytes.len;
++    return .success;
++}
++
+ pub fn terminal_new(
+     alloc_: ?*const CAllocator,
+     result: *Formatter,
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index 37dc5768..5b741088 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -76,6 +76,7 @@ pub const focus_encode = focus.encode;
+ pub const mode_report_encode = modes.report_encode;
+ 
+ pub const formatter_terminal_new = formatter.terminal_new;
++pub const formatter_screen_vt_alloc = formatter.screen_vt_alloc;
+ pub const formatter_format_buf = formatter.format_buf;
+ pub const formatter_format_alloc = formatter.format_alloc;
+ pub const formatter_free = formatter.free;

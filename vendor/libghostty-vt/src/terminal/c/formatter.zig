@@ -103,6 +103,37 @@ pub const TerminalOptions = extern struct {
     };
 };
 
+/// Format an explicitly selected screen without changing terminal modes or focus.
+/// Unlike a retained formatter handle, the screen reference never outlives this call.
+pub fn screen_vt_alloc(
+    terminal_: terminal_c.Terminal,
+    screen_raw: c_int,
+    alloc_: ?*const CAllocator,
+    out_ptr: *?[*]u8,
+    out_len: *usize,
+) callconv(lib.calling_conv) Result {
+    out_ptr.* = null;
+    out_len.* = 0;
+    const t = (terminal_ orelse return .invalid_value).terminal;
+    const screen = std.meta.intToEnum(terminal_c.TerminalScreen, screen_raw) catch
+        return .invalid_value;
+    const selected = t.screens.get(screen) orelse return .invalid_value;
+    var formatter: formatterpkg.ScreenFormatter = .init(selected, .{
+        .emit = .vt,
+        .unwrap = false,
+        .trim = false,
+    });
+    formatter.extra = .all;
+    const alloc = lib.alloc.default(alloc_);
+    var writer: std.Io.Writer.Allocating = .init(alloc);
+    defer writer.deinit();
+    formatter.format(&writer.writer) catch return .out_of_memory;
+    const bytes = writer.toOwnedSlice() catch return .out_of_memory;
+    out_ptr.* = bytes.ptr;
+    out_len.* = bytes.len;
+    return .success;
+}
+
 pub fn terminal_new(
     alloc_: ?*const CAllocator,
     result: *Formatter,

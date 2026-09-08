@@ -261,6 +261,10 @@ An isolated handoff test reproduces the old loss of the first 296 of 400 lines a
 The resumable-agent handoff test verifies all 400 history lines while retaining its existing agent-session identity checks.
 These changes do not recover history already omitted by an older exporting runtime.
 `PaneRuntime::handoff_history_ansi()` still omits alternate-screen history, and complete terminal parser-state restoration remains unverified.
+The candidate now has a read-only `Terminal::screen_vt` export for an explicit primary or alternate screen through a tracked libghostty-vt C API patch.
+Tests verify retained inactive primary history, unchanged active-screen identity and cursor, rejection of missing/invalid screens, and reconstruction of both buffers with ANSI style and subsequent input.
+The export includes current screen-level formatting state but deliberately does not claim to preserve saved cursors, terminal-global modes, or parser continuation.
+It is not yet wired into runtime handoff; those remaining state components need an explicit restore contract before the alternate-screen rollout gate can close.
 The handoff implementation transfers Unix file descriptors and does not provide a Windows ConPTY transfer path.
 Service supervision must preserve both the imported runtime and existing shell processes when the exporting runtime exits; moving only the new runtime outside a service control group is insufficient.
 

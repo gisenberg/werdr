@@ -1294,6 +1294,39 @@ impl Terminal {
         )
     }
 
+    /// Export one screen without switching the live terminal's active buffer.
+    /// Global modes, saved cursors and parser continuation are separate state.
+    pub fn screen_vt(&self, screen: ActiveScreen) -> Result<String, Error> {
+        let screen = match screen {
+            ActiveScreen::Primary => ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_PRIMARY,
+            ActiveScreen::Alternate => ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_ALTERNATE,
+        };
+        let mut bytes = ptr::null_mut();
+        let mut len = 0;
+        unsafe {
+            ffi::ghostty_formatter_screen_vt_alloc(
+                self.raw,
+                screen,
+                ptr::null(),
+                &mut bytes,
+                &mut len,
+            )
+            .into_result()?;
+        }
+        let result = if len == 0 {
+            String::new()
+        } else {
+            String::from_utf8_lossy(unsafe { slice::from_raw_parts(bytes.cast_const(), len) })
+                .into_owned()
+        };
+        if !bytes.is_null() {
+            unsafe {
+                ffi::ghostty_free(ptr::null(), bytes, len);
+            }
+        }
+        Ok(result)
+    }
+
     pub fn keyboard_state_ansi(&self) -> Result<String, Error> {
         self.format_keyboard_state_ansi(false)
     }
@@ -3988,6 +4021,91 @@ mod tests {
         terminal.write(b"\x1bc");
 
         assert!(terminal.mode_get(MODE_GRAPHEME_CLUSTER).unwrap());
+    }
+
+    #[test]
+    fn explicit_screen_export_preserves_inactive_history_without_switching() {
+        let mut terminal = Terminal::new(40, 5, 1_000_000).unwrap();
+        assert!(terminal.screen_vt(ActiveScreen::Alternate).is_err());
+        for row in 0..200 {
+            terminal.write(format!("PRIMARY_{row:03} é 東京\r\n").as_bytes());
+        }
+        let primary = terminal.screen_vt(ActiveScreen::Primary).unwrap();
+        terminal.write(b"\x1b[?1049h\x1b[32mALTERNATE\x1b[3;7H");
+        let alternate = terminal.screen_vt(ActiveScreen::Alternate).unwrap();
+        let cursor = terminal.cursor_y().unwrap();
+        let history = terminal.screen_vt(ActiveScreen::Primary).unwrap();
+        assert_eq!(history, primary);
+        assert!(history.contains("PRIMARY_000 é 東京"));
+        assert!(history.contains("PRIMARY_199 é 東京"));
+        assert!(!history.contains("ALTERNATE"));
+        assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Alternate);
+        assert_eq!(terminal.cursor_y().unwrap(), cursor);
+        assert_eq!(
+            terminal.screen_vt(ActiveScreen::Alternate).unwrap(),
+            alternate
+        );
+        terminal.write(b"X");
+        assert!(terminal
+            .screen_vt(ActiveScreen::Alternate)
+            .unwrap()
+            .contains('X'));
+        terminal.write(b"\x1b[?1049l");
+        assert_eq!(terminal.screen_vt(ActiveScreen::Primary).unwrap(), primary);
+    }
+
+    #[test]
+    fn explicit_screen_export_rejects_missing_and_invalid_sources() {
+        let terminal = Terminal::new(40, 5, 1_000_000).unwrap();
+        for (source, screen) in [(ptr::null_mut(), 0), (terminal.raw, 99), (terminal.raw, 1)] {
+            let mut bytes = ptr::dangling_mut::<u8>();
+            let mut len = 123;
+            let result = unsafe {
+                ffi::ghostty_formatter_screen_vt_alloc(
+                    source,
+                    screen,
+                    ptr::null(),
+                    &mut bytes,
+                    &mut len,
+                )
+            };
+            assert_eq!(result, ffi::GhosttyResult_GHOSTTY_INVALID_VALUE);
+            assert!(bytes.is_null());
+            assert_eq!(len, 0);
+        }
+        assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Primary);
+    }
+
+    #[test]
+    fn explicit_screen_exports_restore_both_buffers_and_current_cursor() {
+        let mut source = Terminal::new(40, 5, 1_000_000).unwrap();
+        for row in 0..40 {
+            source.write(format!("\x1b[31mPRIMARY_{row:03}\x1b[0m\r\n").as_bytes());
+        }
+        source.write(b"\x1b[?1049h\x1b[32mALTERNATE\x1b[3;7H");
+        let primary = source.screen_vt(ActiveScreen::Primary).unwrap();
+        let alternate = source.screen_vt(ActiveScreen::Alternate).unwrap();
+        let mut restored = Terminal::new(40, 5, 1_000_000).unwrap();
+        restored.write(primary.as_bytes());
+        restored.write(b"\x1b[?1049h");
+        restored.write(alternate.as_bytes());
+        assert_eq!(
+            restored.read_ansi_viewport((0, 0), (39, 4), false).unwrap(),
+            source.read_ansi_viewport((0, 0), (39, 4), false).unwrap()
+        );
+        assert_eq!(restored.cursor_y().unwrap(), source.cursor_y().unwrap());
+        source.write(b"X");
+        restored.write(b"X");
+        assert_eq!(
+            restored.screen_vt(ActiveScreen::Alternate).unwrap(),
+            source.screen_vt(ActiveScreen::Alternate).unwrap()
+        );
+        source.write(b"\x1b[?1049l");
+        restored.write(b"\x1b[?1049l");
+        assert_eq!(
+            restored.screen_vt(ActiveScreen::Primary).unwrap(),
+            source.screen_vt(ActiveScreen::Primary).unwrap()
+        );
     }
 
     #[test]

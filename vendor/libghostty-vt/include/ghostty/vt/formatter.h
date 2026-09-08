@@ -118,6 +118,28 @@ typedef struct {
 } GhosttyFormatterTerminalOptions;
 
 /**
+ * Format all retained content of an explicitly selected screen as VT sequences.
+ *
+ * Includes current cursor, SGR, hyperlink, protection, charset and Kitty keyboard
+ * state. Does not include terminal-global modes, palette, saved cursor or parser
+ * state. This is a screen export, not a complete terminal checkpoint.
+ *
+ * Never switches screens, initializes an unused alternate screen, or writes to
+ * the terminal. Serialize this call with terminal mutation as with other reads.
+ * An uninitialized or invalid screen returns GHOSTTY_INVALID_VALUE.
+ * On failure, out_ptr is NULL and out_len is zero.
+ * Free successful output with ghostty_free() using the same allocator.
+ *
+ * @ingroup formatter
+ */
+GHOSTTY_API GhosttyResult ghostty_formatter_screen_vt_alloc(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    const GhosttyAllocator* allocator,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
+/**
  * Create a formatter for a terminal's active screen.
  *
  * The terminal must outlive the formatter. The formatter stores a borrowed
