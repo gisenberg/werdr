@@ -89,6 +89,31 @@ Test native capability failures and remote isolation rather than masking unsuppo
 Run the package check and relevant browser tests during editing, then the full archive deployment checks and live verification before completion.
 Keep this matrix incomplete until each row has direct evidence.
 
+## Lifecycle action audit
+
+The native reference for these remaining bindings is `src/client/shell/actions.rs`, with defaults in `src/config/model.rs`.
+All four actions are absent from `web/shared/shortcuts.ts`.
+
+| Action | Native behavior | Browser acceptance requirement |
+| --- | --- | --- |
+| `detach` (`prefix+q`) | Sets the client detach outcome without closing a pane or stopping the runtime | Suspend this browser's terminal connections and reconnect work, preserve native sessions, and provide an explicit return path; verify independent viewers and unchanged native process identities |
+| `reload_config` (`prefix+shift+r`) | Requests `server.reload_config` on the active endpoint and separately reloads client configuration | Scope the native request to the selected host, refresh browser preferences separately, retain input and selection, and report either failure without implying both reloads succeeded |
+| `open_notification_target` (`prefix+o`) | Consumes the currently visible notification, promotes the queue, and focuses its pane across endpoints; an offline pane target retains the notification and displays an unavailable notice | Implement explicit visible-toast identity and queue policy before binding this action; verify expiry, offline retention, pane removal, cross-host targeting, and notices without pane targets |
+| `last_pane` (unbound) | Focuses the previous valid pane in the active endpoint snapshot, including another tab or workspace; ignores a missing or already-focused target | Track reconciled browser selection, revalidate the complete target against the current host snapshot, and verify toggling, closure, delayed focus responses, endpoint changes, and reconnects |
+
+Native last-pane history is updated by focused-pane transitions in `src/client/shell/state.rs` and cleared by endpoint projection reset, including native boot changes.
+The browser intentionally owns its selection, so following unrelated global native focus changes would violate the existing independent-viewer behavior.
+Neither the public `SessionSnapshot` nor the browser `Snapshot` currently includes native boot identity.
+A browser implementation must invalidate history across an uncertain connection replacement instead of assuming reused pane IDs belong to the same runtime.
+Gateway event generation is not native boot identity.
+
+The browser activity implementation currently replaces one toast and maintains a durable notice list.
+Native `src/client/shell/notification_policy.rs` instead owns a bounded queue, kind-specific duration, delayed validation, and active-target suppression based on tab or workspace context.
+Binding the latest durable activity entry would not reproduce native visible-notification targeting.
+The existing runtime-settings save flow also does not establish a standalone reload binding: that action must reload existing configuration without writing it.
+
+These are audited requirements, not implemented or verified capabilities.
+
 ## Native runtime rollout gate
 
 Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.
