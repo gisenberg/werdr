@@ -799,6 +799,9 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "herdr".into(),
+                custom_label: None,
+                branch: None,
+                git_ahead_behind: None,
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
@@ -886,6 +889,9 @@ fn worktree_lifecycle_events_round_trip() {
         workspace_id: "w_2".into(),
         number: 2,
         label: "herdr".into(),
+        custom_label: None,
+        branch: None,
+        git_ahead_behind: None,
         focused: true,
         pane_count: 1,
         tab_count: 1,
@@ -1484,5 +1490,32 @@ fn semantic_notification_json_subscription_and_optional_capability() {
         serde_json::from_value::<SemanticNotificationSound>(serde_json::json!("future_sound"))
             .unwrap(),
         SemanticNotificationSound::Unknown
+    );
+}
+
+#[test]
+fn workspace_sidebar_facts_are_optional_for_older_endpoints() {
+    let legacy = serde_json::json!({
+        "workspace_id": "w1", "number": 1, "label": "repo", "focused": true,
+        "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1",
+        "agent_status": "unknown"
+    });
+    let mut workspace: WorkspaceInfo = serde_json::from_value(legacy).unwrap();
+    assert_eq!(workspace.custom_label, None);
+    assert_eq!(workspace.branch, None);
+    assert_eq!(workspace.git_ahead_behind, None);
+    let absent = serde_json::to_value(&workspace).unwrap();
+    for field in ["custom_label", "branch", "git_ahead_behind"] {
+        assert!(absent.get(field).is_none());
+    }
+    workspace.custom_label = Some(false);
+    workspace.branch = Some("worktree/topic".into());
+    workspace.git_ahead_behind = Some((0, 0));
+    let json = serde_json::to_value(&workspace).unwrap();
+    assert_eq!(json["custom_label"], false);
+    assert_eq!(json["git_ahead_behind"], serde_json::json!([0, 0]));
+    assert_eq!(
+        serde_json::from_value::<WorkspaceInfo>(json).unwrap(),
+        workspace
     );
 }

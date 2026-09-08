@@ -379,6 +379,47 @@ mod tests {
         workspace::Workspace,
     };
 
+    #[tokio::test]
+    async fn workspace_info_projects_native_sidebar_facts_without_relabeling() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("workspace-facts")];
+        app.state.ensure_test_terminals();
+        app.state.workspaces[0].custom_name = Some("Manual label".into());
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let cwd = app.state.workspaces[0].resolved_identity_cwd().unwrap();
+        app.state.apply_workspace_git_statuses(
+            &app.terminal_runtimes,
+            vec![crate::workspace::WorkspaceGitStatus {
+                workspace_id,
+                resolved_identity_cwd: cwd.clone(),
+                status_cache_key: cwd,
+                demand: crate::workspace::GitStatusRefreshDemand::ALL,
+                auto_label: "Derived label".into(),
+                branch: Some("worktree/topic".into()),
+                ahead_behind: Some((2, 1)),
+                space: None,
+            }],
+        );
+        let info = app.workspace_info(0);
+        assert_eq!(info.label, "Manual label");
+        assert_eq!(info.custom_label, Some(true));
+        assert_eq!(info.branch.as_deref(), Some("worktree/topic"));
+        assert_eq!(info.git_ahead_behind, Some((2, 1)));
+        app.state.workspaces[0].custom_name = None;
+        let automatic = app.workspace_info(0);
+        assert_eq!(automatic.custom_label, Some(false));
+        assert_eq!(automatic.label, "Derived label");
+        assert_eq!(automatic.branch, info.branch);
+        assert_eq!(automatic.git_ahead_behind, info.git_ahead_behind);
+    }
+
     // `new_cwd = follow` must anchor on the focused pane for every creation
     // surface. Splits and tabs already do; a new workspace must follow the
     // focused pane too, not the source workspace's first-tab root pane.

@@ -1483,8 +1483,42 @@
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
             },
+            "branch": {
+              "description": "Cached native Git metadata; absence does not imply a clean repository.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "custom_label": {
+              "description": "Whether the label was explicitly supplied rather than derived from cwd.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
+            },
+            "git_ahead_behind": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "label": {
               "type": "string"
@@ -11603,8 +11637,42 @@
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
+            "branch": {
+              "description": "Cached native Git metadata; absence does not imply a clean repository.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "custom_label": {
+              "description": "Whether the label was explicitly supplied rather than derived from cwd.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
+            },
+            "git_ahead_behind": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "label": {
               "type": "string"
