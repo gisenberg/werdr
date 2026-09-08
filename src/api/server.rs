@@ -70,6 +70,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
+        passive_metadata: true,
         health_check: true,
     })
 }
@@ -1149,6 +1150,7 @@ mod tests {
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                 ),
                 surface_interest: true,
+                passive_metadata: true,
                 health_check: true,
             }),
             None,

@@ -11,6 +11,16 @@ impl HeadlessServer {
         client_id: u64,
         active: bool,
     ) -> Option<(bool, u64)> {
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.is_shell_client())
+        {
+            return None;
+        }
+        if active {
+            self.app.ensure_default_workspace();
+        }
         let focus_before = self.shell_focus_targets();
         let focused_tabs_before = self.focused_shell_tabs();
         let (changed, projection_revision) = {
@@ -70,6 +80,7 @@ impl HeadlessServer {
             self.sent_window_title = None;
             self.resize_shared_runtime_to_effective_size_with_pending_agent_resumes(true);
             self.claim_shell_tab_geometry(client_id, true);
+            self.nudge_handoff_panes_on_first_client_attach();
         } else {
             self.tab_geometry_controllers
                 .retain(|_, controller_id| *controller_id != client_id);

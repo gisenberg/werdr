@@ -415,6 +415,7 @@ mod tests {
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,
                 surface_interest: true,
+                passive_metadata: false,
                 health_check: true,
             }),
         }

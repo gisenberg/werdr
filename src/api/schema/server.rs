@@ -24,6 +24,9 @@ pub struct ServerCapabilities {
     /// Whether this server supports explicit client-shell surface interest.
     #[serde(default)]
     pub surface_interest: bool,
+    /// Inactive endpoint attachment never creates sessions or nudges live panes.
+    #[serde(default)]
+    pub passive_metadata: bool,
     /// Whether this server supports endpoint health probes.
     #[serde(default)]
     pub health_check: bool,

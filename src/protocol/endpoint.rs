@@ -20,6 +20,7 @@ pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
 pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
 pub const INPUT_CODEC_V1: &str = "shell.input.semantic.v1";
 pub const BLOB_CODEC_V1: &str = "shell.blob.v1";
+pub const PASSIVE_METADATA_CAPABILITY: &str = "passive_metadata";
 pub const SURFACE_INTEREST_CAPABILITY: &str = "surface_interest";
 pub const PRESENTATION_EFFECTS_FENCE_CAPABILITY: &str = "presentation_effects_fence";
 pub const PRESENTATION_EFFECTS_SYNC_KIND: &str = "endpoint.presentation.sync.v1";
@@ -112,6 +113,7 @@ impl EndpointServerWelcome {
             methods,
             capabilities: vec![
                 SURFACE_INTEREST_CAPABILITY.into(),
+                PASSIVE_METADATA_CAPABILITY.into(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
                 HEALTH_CHECK_CAPABILITY.into(),
             ],
@@ -282,6 +284,7 @@ mod tests {
             welcome.capabilities,
             vec![
                 SURFACE_INTEREST_CAPABILITY.to_string(),
+                PASSIVE_METADATA_CAPABILITY.to_string(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.to_string(),
                 HEALTH_CHECK_CAPABILITY.to_string(),
             ]

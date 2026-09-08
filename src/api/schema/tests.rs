@@ -727,6 +727,7 @@ fn success_response_round_trips() {
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
+                passive_metadata: true,
                 health_check: true,
             }),
         },

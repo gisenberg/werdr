@@ -1076,6 +1076,14 @@ impl HeadlessServer {
     }
 
     fn remove_client_and_resize_if_needed(&mut self, client_id: u64) {
+        if !self.clients.contains_key(&client_id) {
+            return;
+        }
+        let passive = self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.is_shell_client() && !client.shell_surface_active);
+
         let restore_shell_controller = self.clients.get(&client_id).and_then(|client| {
             let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
                 return None;
@@ -1083,6 +1091,9 @@ impl HeadlessServer {
             self.shell_geometry_controller_for_terminal(terminal_id)
         });
         self.remove_client(client_id);
+        if passive {
+            return;
+        }
         if let Some((controller_id, target)) = restore_shell_controller {
             self.restore_shell_tab_geometry(controller_id, target);
         } else {
@@ -1971,7 +1982,9 @@ impl HeadlessServer {
                     render_encoding = ?protocol::RenderEncoding::SemanticFrame,
                     "client connected"
                 );
-                self.app.ensure_default_workspace();
+                if surface_active {
+                    self.app.ensure_default_workspace();
+                }
                 let first_app_client = self.app_client_count() == 0;
                 let last_activity = self.allocate_activity_stamp();
                 let observed = crate::kitty_graphics::HostCellSize {
@@ -2017,19 +2030,24 @@ impl HeadlessServer {
                 connection.shell_location = Some(location);
                 connection.shell_snapshot = Some(seed_snapshot);
                 self.clients.insert(client_id, connection);
-                if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
+                if surface_active
+                    && self.app.state.popup_pane.is_some()
+                    && self.popup_owner_tab_id.is_none()
+                {
                     self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
                 }
                 self.send_to_client(client_id, snapshot_message);
                 if surface_active {
                     self.foreground_client_id = Some(client_id);
                 }
-                if first_app_client {
+                if surface_active && first_app_client {
                     self.app.mark_git_status_refresh_due(Instant::now());
                 }
-                self.sync_foreground_client_state();
-                self.claim_unowned_shell_tab_geometry(client_id, true);
-                self.nudge_handoff_panes_on_first_client_attach();
+                if surface_active {
+                    self.sync_foreground_client_state();
+                    self.claim_unowned_shell_tab_geometry(client_id, true);
+                    self.nudge_handoff_panes_on_first_client_attach();
+                }
                 true
             }
             ServerEvent::GraphicsTransmissionResult {

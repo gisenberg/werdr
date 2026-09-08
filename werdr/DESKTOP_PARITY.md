@@ -77,6 +77,12 @@ Keep this matrix incomplete until each row has direct evidence.
 ## Native runtime rollout gate
 
 Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.
+
+A passive endpoint metadata reader cannot safely bypass this rollout gate on the current production runtimes.
+Their `surface_interest` support prevents surface activation but still permits default-workspace creation during attachment and geometry repair during disconnection.
+The candidate now advertises a separate `passive_metadata` capability after eliminating these attachment and teardown side effects, and `herdr api projection [--watch]` requires that capability before connecting.
+The reader exposes native ordering and custom-label facts without fabricating a view definition; the public snapshot and view API remain authoritative.
+This capability is not deployed to production runtimes, and browser integration of this reader is not enabled.
 Keep the optional-capability fallback until the owning runtime advertises the field.
 A gateway restart and a native runtime replacement have different process-lifetime consequences.
 

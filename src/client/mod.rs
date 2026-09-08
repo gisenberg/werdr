@@ -28,6 +28,7 @@ mod handshake;
 mod input;
 mod loop_config;
 mod notifications;
+mod runtime_projection;
 mod shell;
 mod shell_runtime;
 mod startup;
@@ -50,6 +51,7 @@ use shell_runtime::*;
 use state::ClientState;
 use transport::*;
 
+pub use runtime_projection::run_runtime_projection;
 #[cfg(test)]
 pub(crate) use shell::{ClientShellConfig, ClientShellState};
 pub use startup::{run_client, run_terminal_attach};

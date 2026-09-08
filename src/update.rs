@@ -2853,6 +2853,7 @@ mod tests {
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                 ),
                 surface_interest: true,
+                passive_metadata: false,
                 health_check: true,
             }),
         };
@@ -2927,6 +2928,7 @@ mod tests {
                         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                     ),
                     surface_interest: true,
+                    passive_metadata: false,
                     health_check: true,
                 }),
             },
@@ -3185,6 +3187,7 @@ mod tests {
                         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                     ),
                     surface_interest: true,
+                    passive_metadata: false,
                     health_check: true,
                 }),
             },

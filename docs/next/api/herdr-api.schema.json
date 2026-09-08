@@ -11220,6 +11220,11 @@
             "live_handoff": {
               "type": "boolean"
             },
+            "passive_metadata": {
+              "default": false,
+              "description": "Inactive endpoint attachment never creates sessions or nudges live panes.",
+              "type": "boolean"
+            },
             "surface_interest": {
               "default": false,
               "description": "Whether this server supports explicit client-shell surface interest.",

@@ -723,3 +723,89 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
     shutdown_test_runtimes(&mut source_server);
     shutdown_test_runtimes(&mut target_server);
 }
+
+#[tokio::test]
+async fn passive_attachment_preserves_empty_runtime_and_pending_handoff() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces.clear();
+    server.app.state.active = None;
+    server.app.state.mode = crate::app::Mode::Navigate;
+    server.pending_handoff_repaint_nudge = true;
+    let original_size = server.effective_size;
+    let (writer, control_rx, render_rx) = test_client_writer();
+    server.handle_server_event(ServerEvent::ClientShellConnected {
+        client_id: 73,
+        surface_cols: 101,
+        surface_rows: 37,
+        cell_width_px: 9,
+        cell_height_px: 18,
+        pixel_mouse: false,
+        direct_graphics: false,
+        endpoint_keybindings: false,
+        mouse_capture: false,
+        surface_active: false,
+        writer,
+    });
+    assert!(server.app.state.workspaces.is_empty());
+    assert!(server.pending_handoff_repaint_nudge);
+    assert_eq!(server.foreground_client_id, None);
+    assert_eq!(server.effective_size, original_size);
+    assert!(server.tab_geometry_controllers.is_empty());
+    assert!(matches!(
+        read_server_message(control_rx.recv().unwrap()),
+        ServerMessage::EndpointControl { .. }
+    ));
+    server.render_and_stream();
+    assert!(render_rx.try_recv().is_err());
+    assert!(server.app.state.workspaces.is_empty());
+    assert!(server.pending_handoff_repaint_nudge);
+    assert!(server.set_client_shell_surface_active(73, true).is_some());
+    assert!(!server.app.state.workspaces.is_empty());
+    assert_eq!(server.foreground_client_id, Some(73));
+}
+
+#[tokio::test]
+async fn passive_detach_and_disconnect_preserve_active_shell_render_baseline() {
+    let mut server = test_headless_server();
+    let _input_rx = install_focused_test_runtime(&mut server, b"unchanged");
+    let mut receivers = Vec::new();
+    for client_id in [80, 81, 82] {
+        let (writer, control_rx, render_rx) = test_client_writer();
+        receivers.push((control_rx, render_rx));
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            client_id,
+            surface_cols: 80,
+            surface_rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: client_id == 80,
+            writer,
+        });
+    }
+    for event in [
+        ServerEvent::ClientDetach { client_id: 81 },
+        ServerEvent::ClientDisconnected { client_id: 82 },
+        ServerEvent::ClientDisconnected { client_id: 81 },
+        ServerEvent::ClientDisconnected { client_id: 82 },
+    ] {
+        server.render_and_stream();
+        assert!(server.clients[&80]
+            .render_state
+            .last_pane_surface()
+            .is_some());
+        let controllers = server.tab_geometry_controllers.clone();
+        let original_size = server.effective_size;
+        server.handle_server_event(event);
+        assert!(server.clients[&80]
+            .render_state
+            .last_pane_surface()
+            .is_some());
+        assert_eq!(server.foreground_client_id, Some(80));
+        assert_eq!(server.effective_size, original_size);
+        assert_eq!(server.tab_geometry_controllers, controllers);
+    }
+}
