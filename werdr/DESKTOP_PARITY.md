@@ -128,10 +128,19 @@ Offline, partial, failed, unsupported, and malformed native outcomes do not impl
 Settings previews opened while a read is pending remain intact, duplicate reloads are suppressed, and detach or authentication changes discard old results.
 `web/test/configuration-reload.spec.ts` verifies actual new-terminal cwd adoption, byte-for-byte configuration preservation, typed input and terminal identity, separate failures, offline host scope, preview focus, detach/resume races, and visible status tokens on phones.
 The version-twelve settings migration preserves existing keys and considers the Detach and Reload defaults independently when upgrading older stores.
-Live deployment verification for Reload remains outstanding.
+Reload passed live desktop and phone verification on the POSIX host and both Windows hosts, preserving configuration files, preferences, terminal connections, pending input, and existing pane identities.
 Detach passed isolated lifecycle and browser tests plus live POSIX and Windows verification, with existing native identities and settings preserved.
 Last-pane unit and browser tests cover split/tab/workspace toggling, unchanged selections, preview isolation, current ancestry, closure, reused terminal identity, settings migration, and gateway or unloaded-host transitions.
 Exact retention across a reconnect to the same native boot remains unproven until the public API exposes native boot identity; conservative resets preserve safety but do not establish that part of native parity.
+
+## Windows resize recovery
+
+Restoring Copy mode's native scroll offset before shrinking the terminal could leave the live Windows viewport empty.
+The Windows recent-output cache masked that empty screen, preventing the existing resize recovery from running.
+Resize recovery now reads the actual terminal text and ANSI instead of consulting that cache.
+The regression test fails on Windows before the fix and passes afterward; Linux also retains the screen, and existing blank-screen and scrolled-history resize tests remain covered.
+An isolated real PowerShell comparison reproduces the loss in the official runtime and verifies retention in the fixed build.
+This fix requires adoption by the owning native runtime; the deployed Windows runtimes remain unchanged while their live sessions require preservation.
 
 ## Native runtime rollout gate
 

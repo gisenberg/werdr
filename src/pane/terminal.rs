@@ -1662,7 +1662,14 @@ impl GhosttyPaneTerminal {
                         .saturating_sub(scrollbar.offset + scrollbar.len)
                 })
                 .unwrap_or(0);
-            let bottom_before_resize = ghostty_detection_text(&mut core)
+            // Resize recovery needs the actual screen. The Windows recent-read
+            // cache may still contain text after a resize moved it out of view.
+            let old_rows = core
+                .terminal
+                .rows()
+                .map(usize::from)
+                .unwrap_or(DEFAULT_DETECTION_ROWS);
+            let bottom_before_resize = ghostty_recent_text_for_terminal(&core.terminal, old_rows)
                 .map(|text| !text.trim().is_empty())
                 .unwrap_or(false);
             let resize_recovery_probe_lines = usize::from(rows)
@@ -1672,7 +1679,7 @@ impl GhosttyPaneTerminal {
                 == Some(crate::ghostty::ActiveScreen::Primary)
                 && bottom_before_resize
             {
-                ghostty_recent_ansi(&mut core, resize_recovery_probe_lines, true)
+                ghostty_recent_ansi_for_terminal(&core.terminal, resize_recovery_probe_lines, true)
                     .ok()
                     .filter(|ansi| !ansi.trim().is_empty())
             } else {
@@ -1684,9 +1691,10 @@ impl GhosttyPaneTerminal {
                 .resize(cols, rows, cell_width_px, cell_height_px);
             let terminal_responses = self.drain_pending_pty_responses();
 
-            let bottom_is_blank = ghostty_detection_text(&mut core)
-                .map(|text| text.trim().is_empty())
-                .unwrap_or(false);
+            let bottom_is_blank =
+                ghostty_recent_text_for_terminal(&core.terminal, usize::from(rows))
+                    .map(|text| text.trim().is_empty())
+                    .unwrap_or(false);
             if bottom_is_blank {
                 if let Some(ansi) = replay_ansi.as_deref() {
                     core.terminal.scroll_viewport_bottom();
@@ -2792,14 +2800,6 @@ fn ghostty_recent_text_unwrapped_snapshot(
 ) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
     let text = ghostty_recent_text_unwrapped_for_terminal(&core.terminal, lines)?;
     Ok(finish_recent_snapshot(core, text, lines, true))
-}
-
-fn ghostty_recent_ansi(
-    core: &mut GhosttyPaneCore,
-    lines: usize,
-    unwrap: bool,
-) -> Result<String, crate::ghostty::Error> {
-    ghostty_recent_ansi_snapshot(core, lines, unwrap).map(|snapshot| snapshot.text)
 }
 
 fn ghostty_recent_ansi_snapshot(
@@ -5448,6 +5448,29 @@ mod tests {
         assert!(ansi.contains("blue"));
         assert!(ansi.contains("line4"));
         assert!(ansi.contains("\x1b["));
+    }
+
+    #[test]
+    fn resize_after_explicit_live_scroll_preserves_short_screen() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(130, 45, 10_000).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        pane.process_pty_bytes(
+            PaneId::from_raw(1),
+            0,
+            b"PS C:\\work\\resize> Write-Output 'RESIZE_RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ'\r\nRESIZE_RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\nPS C:\\work\\resize> ",
+            &tx,
+        );
+        pane.set_scroll_offset_from_bottom(0);
+        assert!(pane.visible_text().contains("RESIZE_RETAIN_ME"));
+
+        pane.resize(37, 41, 0, 0);
+
+        assert!(
+            pane.visible_text().contains("RESIZE_RETAIN_ME"),
+            "resize lost the live screen after restoring Copy mode's scroll offset"
+        );
+        assert_eq!(pane.scroll_metrics().unwrap().offset_from_bottom, 0);
     }
 
     #[test]
