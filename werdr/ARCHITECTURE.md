@@ -81,6 +81,11 @@ Windows onboarding stages the fork's checksum-pinned installer only after explic
 Platform hints are separate from the native catalog and only apply while ID, target, and named session match.
 Setup logs and input are bounded, jobs are scoped to their browser-session owner, and session revocation cancels their work.
 The browser action adapter exposes an explicit native-method allowlist instead of a general RPC proxy.
+GitHub plugin installation uses the selected host's native CLI in an interactive PTY, preserving its manifest/command preview, confirmation, Git checkout provenance, replacement checks, and build failures.
+The gateway accepts only an owner/repository/subdirectory source and optional Git ref, never a shell command or automatic confirmation flag.
+Installer jobs retain their pinned host and browser-session owner, bound concurrency, input, output, and duration, and stop on revocation or gateway shutdown.
+Closing the dialog leaves a running job available in the same browser session's history; a finished command can represent a declined installation, so the UI retains the native outcome text and exit code.
+Managed uninstall delegates checkout removal to the native CLI and preserves its separate plugin configuration and state.
 
 ## Why a fork
 

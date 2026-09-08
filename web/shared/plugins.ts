@@ -14,3 +14,7 @@ export interface PluginLog {
   status: 'running' | 'succeeded' | 'failed'; started_unix_ms: number; finished_unix_ms?: number;
   exit_code?: number; stdout?: string; stderr?: string; error?: string;
 }
+export interface PluginInstallJob {
+  id: string; machine: string; label: string; operation: 'install' | 'uninstall'; source: string; ref?: string;
+  state: 'running' | 'complete' | 'failed' | 'cancelled'; output: string; started: number; ended?: number; exitCode?: number | null;
+}

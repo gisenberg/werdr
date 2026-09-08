@@ -1,0 +1,18 @@
+# MIT-licensed installer fixture. Each action prints one fixed verification line.
+id = "werdr.verification.github-install"
+name = "Werdr GitHub installer verification"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos", "windows"]
+
+[[actions]]
+id = "posix"
+title = "Verify POSIX installer"
+platforms = ["linux", "macos"]
+command = ["sh", "-c", "printf 'WERDR_GITHUB_INSTALL_OK\\n'"]
+
+[[actions]]
+id = "windows"
+title = "Verify Windows installer"
+platforms = ["windows"]
+command = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Write-Output 'WERDR_GITHUB_INSTALL_OK'"]

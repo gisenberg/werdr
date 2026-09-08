@@ -1,3 +1,4 @@
+import { PluginInstaller, pluginInstallForm, pluginInstallMarkup } from './plugin-install';
 import type { Api } from './host-manager';
 import type { Pane } from '../shared/fleet';
 import type { Plugin, PluginLog, PluginPane } from '../shared/plugins';
@@ -5,13 +6,14 @@ import type { Plugin, PluginLog, PluginPane } from '../shared/plugins';
 interface Target { machine: string; label: string; workspace?: string; pane?: string; selectedText?: string }
 type PendingTarget = Omit<Target, 'selectedText'> & { selectedText?: Promise<string> };
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-export const pluginsMarkup = `<dialog id="plugins-dialog"><h1>PLUGINS</h1><div class="plugin-body"><p id="plugin-host"></p><p id="plugin-context"></p><div class="inline-actions"><button id="plugin-refresh">REFRESH</button><button id="plugin-focus-pane">FOCUS PLUGIN PANE</button><button id="plugin-close-pane">CLOSE PLUGIN PANE</button></div><details id="plugin-link-details"><summary>LINK A PLUGIN DIRECTORY</summary><p>Plugins run their declared commands as your user. Link trusted code already present on this host.</p><form id="plugin-link-form"><label>DIRECTORY ON THIS HOST<input id="plugin-link-path" required maxlength="4096" autocomplete="off" spellcheck="false"></label><label class="plugin-checkbox"><input id="plugin-link-enabled" type="checkbox" checked> ENABLE AFTER LINKING</label><button type="submit">LINK PLUGIN</button></form></details><label>FIND PLUGIN<input id="plugin-search" type="search" autocomplete="off"></label><div id="plugin-list"></div><details id="plugin-log-details"><summary>COMMAND LOGS</summary><label>PLUGIN<select id="plugin-log-filter"><option value="">ALL PLUGINS</option></select></label><label>RECENT COMMANDS<select id="plugin-log-limit"><option>10</option><option selected>50</option><option>100</option><option>200</option></select></label><button id="plugin-log-refresh">REFRESH LOGS</button><div id="plugin-logs"></div></details><pre id="plugin-result" role="status"></pre><p id="plugin-error" role="alert"></p></div><div class="plugin-footer"><button id="plugin-done">DONE</button></div></dialog>`;
+export const pluginsMarkup = `<dialog id="plugins-dialog"><h1>PLUGINS</h1><div class="plugin-body"><p id="plugin-host"></p><p id="plugin-context"></p><div class="inline-actions"><button id="plugin-refresh">REFRESH</button><button id="plugin-focus-pane">FOCUS PLUGIN PANE</button><button id="plugin-close-pane">CLOSE PLUGIN PANE</button></div>${pluginInstallForm}<details id="plugin-link-details"><summary>LINK A PLUGIN DIRECTORY</summary><p>Plugins run their declared commands as your user. Link trusted code already present on this host.</p><form id="plugin-link-form"><label>DIRECTORY ON THIS HOST<input id="plugin-link-path" required maxlength="4096" autocomplete="off" spellcheck="false"></label><label class="plugin-checkbox"><input id="plugin-link-enabled" type="checkbox" checked> ENABLE AFTER LINKING</label><button type="submit">LINK PLUGIN</button></form></details><label>FIND PLUGIN<input id="plugin-search" type="search" autocomplete="off"></label><div id="plugin-list"></div><details id="plugin-log-details"><summary>COMMAND LOGS</summary><label>PLUGIN<select id="plugin-log-filter"><option value="">ALL PLUGINS</option></select></label><label>RECENT COMMANDS<select id="plugin-log-limit"><option>10</option><option selected>50</option><option>100</option><option>200</option></select></label><button id="plugin-log-refresh">REFRESH LOGS</button><div id="plugin-logs"></div></details><pre id="plugin-result" role="status"></pre><p id="plugin-error" role="alert"></p></div><div class="plugin-footer"><button id="plugin-done">DONE</button></div></dialog>${pluginInstallMarkup}`;
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className?: string) {
   const element = document.createElement(tag); element.textContent = text; if (className) element.className = className; return element;
 }
 
 export class Plugins {
+  private installer: PluginInstaller;
   private target?: Target;
   private items: Plugin[] = [];
   private logs: PluginLog[] = [];
@@ -21,8 +23,9 @@ export class Plugins {
   private readingLogs = false;
   private logsDirty = false;
   constructor(private api: Api, private selected: () => PendingTarget | undefined, private selectPane: (machine: string, pane: Pane) => void, private changed: () => void) {
+    this.installer = new PluginInstaller(api, () => { this.changed(); if (el<HTMLDialogElement>('plugins-dialog').open) void this.load(); });
     el('plugin-done').onclick = () => el<HTMLDialogElement>('plugins-dialog').close();
-    el('plugins-dialog').addEventListener('close', () => { if (!el<HTMLDialogElement>('plugins-dialog').open) { ++this.epoch; clearTimeout(this.poll); } });
+    el('plugins-dialog').addEventListener('close', () => { if (!el<HTMLDialogElement>('plugins-dialog').open) { ++this.epoch; clearTimeout(this.poll); this.installer.hide(); } });
     el('plugin-refresh').onclick = () => void this.load();
     el('plugin-search').oninput = () => this.render();
     el('plugin-log-refresh').onclick = () => void this.loadLogs();
@@ -40,7 +43,7 @@ export class Plugins {
     el('plugin-context').textContent = target.pane ? `CONTEXT ${target.workspace} / ${target.pane}` : 'GLOBAL CONTEXT';
     el('plugin-error').textContent = ''; el('plugin-result').textContent = '';
     el<HTMLInputElement>('plugin-search').value = ''; el<HTMLInputElement>('plugin-link-path').value = '';
-    this.render(); this.renderLogs(); el<HTMLDialogElement>('plugins-dialog').showModal();
+    this.render(); this.renderLogs(); this.installer.open(target.machine); el<HTMLDialogElement>('plugins-dialog').showModal();
     void Promise.resolve(target.selectedText).then(text => {
       if (epoch !== this.epoch || !this.target) return;
       this.target.selectedText = text;
@@ -65,6 +68,7 @@ export class Plugins {
     finally { if (epoch === this.epoch) { this.busy = false; this.render(); } }
   }
   private render() {
+    this.installer.disable(this.busy);
     for (const id of ['plugin-refresh', 'plugin-focus-pane', 'plugin-close-pane']) el<HTMLButtonElement>(id).disabled = this.busy || id !== 'plugin-refresh' && !this.target?.pane;
     for (const field of el('plugin-link-form').querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button')) field.disabled = this.busy;
     const parent = el('plugin-list'); parent.replaceChildren();
@@ -76,6 +80,7 @@ export class Plugins {
       const toggle = this.button(plugin.enabled ? 'DISABLE' : 'ENABLE', () => void this.change(plugin.enabled ? 'plugin.disable' : 'plugin.enable', { plugin_id: plugin.plugin_id }));
       const remove = this.button('UNLINK', () => { if (confirm(`Unlink ${plugin.name} from ${this.target?.label}? Its files and running panes will remain.`)) void this.change('plugin.unlink', { plugin_id: plugin.plugin_id }); });
       row.append(toggle, remove);
+      if (plugin.source.kind === 'github') row.append(this.button('UNINSTALL', () => { if (confirm(`Uninstall ${plugin.name} on ${this.target?.label} and remove its managed checkout? Native plugin config and state will be preserved.`)) this.installer.uninstall(plugin.plugin_id); }));
       const details = node('details', ''); details.append(node('summary', 'MANIFEST AND SOURCE'));
       details.append(node('p', `${plugin.manifest_path}\n${plugin.source.kind === 'github' ? `${plugin.source.owner}/${plugin.source.repo} @ ${plugin.source.resolved_commit || plugin.source.requested_ref || 'default'}` : 'LOCAL DIRECTORY'}`));
       details.append(node('p', `HERDR >= ${plugin.min_herdr_version} / ${(plugin.platforms || ['host platform']).join(', ')}`));

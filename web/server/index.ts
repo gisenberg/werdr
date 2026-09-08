@@ -22,6 +22,7 @@ import { browserAction } from './browser-actions.ts';
 import { copyContext, copyReadActions } from './copy-actions.ts';
 import { openScrollbackEditor, paneExists } from './scrollback-editor.ts';
 import { pluginAction } from './plugin-actions.ts';
+import { PluginInstallations } from './plugin-install.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
 import { SettingsValidationError } from '../shared/settings.ts';
 import { NativeApiError } from './native-api.ts';
@@ -46,6 +47,7 @@ const settings = await settingsStore(process.env.WERDR_SETTINGS_FILE || resolve(
 const sessionTokens = new Map<string, string>();
 const fleet = new Fleet(() => management.catalog(), process.env.WERDR_NOTIFICATION_FILE || resolve(dirname(tokenPath), 'fleet-notifications.json'));
 const management = new MachineManagement(process.env.WERDR_MACHINE_PLATFORM_FILE || resolve(dirname(tokenPath), 'machine-platforms.json'), async () => { await fleet.reloadCatalog(); for (const host of fleet.state().hosts) if (host.machine.enabled) fleet.retry(host.machine.id); });
+const pluginInstallations = new PluginInstallations(machine => fleet.retry(machine));
 await management.start();
 fleet.on('diagnostic', error => console.error(error.message));
 await fleet.start();
@@ -58,7 +60,7 @@ function closeSocket(ws: WebSocket, code: number, reason?: string) {
   ws.close(code, reason);
 }
 function disconnectSessions(ids: string[], reason: string) {
-  management.revoke(ids);
+  management.revoke(ids); pluginInstallations.revoke(ids);
   for (const [ws, owner] of sockets) if (ids.includes(owner)) closeSocket(ws, 1008, reason);
 }
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
@@ -154,6 +156,21 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/setup/job' && req.method === 'GET') return reply(res, 200, { job: management.get(id.id, publicId(url.searchParams.get('id'))) });
       if (url.pathname === '/api/setup/input' && req.method === 'POST') { const value = await authorizedBody(req); management.input(id.id, publicId(value.id), value.input); return reply(res, 200, { ok: true }); }
       if (url.pathname === '/api/setup/cancel' && req.method === 'POST') { const value = await authorizedBody(req); management.cancel(id.id, publicId(value.id)); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/plugins/install' && req.method === 'POST') {
+        const value = await authorizedBody(req), machine = publicId(value.machine);
+        const job = await fleet.action(machine, async request => {
+          await request('plugin.list', {}, false);
+          if (!session(req)) throw new ManagementError('Sign in required', 401);
+          const host = fleet.state().hosts.find(host => host.machine.id === machine && host.connection === 'online');
+          if (!host) throw new ManagementError('Selected host is unavailable.', 409);
+          return pluginInstallations.begin(id.id, host.machine, value);
+        });
+        return reply(res, 200, { job });
+      }
+      if (url.pathname === '/api/plugins/jobs' && req.method === 'GET') return reply(res, 200, { jobs: pluginInstallations.list(id.id, publicId(url.searchParams.get('machine'))) });
+      if (url.pathname === '/api/plugins/job' && req.method === 'GET') return reply(res, 200, { job: pluginInstallations.get(id.id, publicId(url.searchParams.get('id'))) });
+      if (url.pathname === '/api/plugins/input' && req.method === 'POST') { const value = await authorizedBody(req); pluginInstallations.input(id.id, publicId(value.id), value.input); return reply(res, 200, { ok: true }); }
+      if (url.pathname === '/api/plugins/cancel' && req.method === 'POST') { const value = await authorizedBody(req); pluginInstallations.cancel(id.id, publicId(value.id)); return reply(res, 200, { ok: true }); }
       if (url.pathname === '/api/hosts/retry' && req.method === 'POST') { const value = await authorizedBody(req); fleet.retry(publicId(value.id)); return reply(res, 200, { ok: true }); }
       if (url.pathname === '/api/notices/read' && req.method === 'POST') { const value = await authorizedBody(req); await fleet.markNoticesRead(value.id === undefined ? undefined : publicId(value.id)); return reply(res, 200, { ok: true }); }
 
@@ -185,7 +202,7 @@ const handler: RequestListener = async (req, res) => {
           const read = ['plugin.list', 'plugin.action.list', 'plugin.log.list'].includes(value.action);
           const result = read
             ? await pluginAction(value, (method, params, invalidate) => fleet.request(machine, method, params, invalidate))
-            : await fleet.action(machine, request => pluginAction(value, request));
+            : await fleet.action(machine, request => { pluginInstallations.assertAvailable(machine); return pluginAction(value, request); });
           return reply(res, 200, result);
         }
         const { method, params } = browserAction(value);
@@ -358,7 +375,7 @@ const cleanup = setInterval(() => {
 }, 30_000);
 cleanup.unref();
 function shutdown() {
-  management.stop(); fleet.stop();
+  management.stop(); pluginInstallations.stop(); fleet.stop();
   for (const ws of sockets.keys()) closeSocket(ws, 1001, 'Gateway restarting');
   server.close(); clearInterval(cleanup); clearInterval(certificateTimer);
   setTimeout(() => process.exit(0), 3000).unref();

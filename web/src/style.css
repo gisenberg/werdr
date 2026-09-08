@@ -276,3 +276,7 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 .pane-scrollbar-thumb { color: var(--herdr-overlay0); }
 .pane-active .pane-scrollbar-track { color: var(--herdr-overlay0); }
 .pane-active .pane-scrollbar-thumb { color: var(--herdr-overlay1); }
+
+#plugin-install-output { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 40vh; min-height: 120px; border: 1px solid var(--herdr-surface1); padding: 12px; }
+#plugin-install-status, #plugin-install-error, #plugin-install-jobs { overflow-wrap: anywhere; }
+#plugin-install-input-form[hidden], #plugin-install-cancel[hidden] { display: none; }
