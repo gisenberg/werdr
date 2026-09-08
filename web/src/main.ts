@@ -1,4 +1,5 @@
 import { ClientLifecycle, ClientCancelled } from './client-lifecycle';
+import { ConfigurationReload } from './configuration-reload';
 import { DetachedScreen } from './detached-screen';
 import { MobileSwitcher } from './mobile-switcher';
 import { LastPane } from './last-pane';
@@ -101,6 +102,7 @@ const navigatePreview = new NavigatePreview();
 let shortcuts: DesktopShortcuts | undefined;
 let returnToEmptySwitcher = false;
 const mobileSwitcher = new MobileSwitcher(app, () => { surface.active?.copyMode.exit(true, false); shortcuts?.reset(); if (paneId) surface.requestFocus(paneId); }, () => surface.active?.focus());
+const configurationReload = new ConfigurationReload(api, current => settings.refresh(current), lifecycle, status, () => refreshCommands());
 const settings = new Settings(api, (value, nextColors) => {
   shortcuts?.update(value.shortcuts);
   preferences = value; colors = nextColors; sidebarSplit.update(value.sidebarSectionPercent);
@@ -339,7 +341,7 @@ async function refresh() {
     const session = await api('/api/session');
     if (!lifecycle.current(epoch)) return;
     authenticated = true; element('settings').hidden = false; element('sessions').hidden = false; element('access-token').hidden = !session.canGenerateToken;
-    await settings.refresh();
+    await settings.refresh(() => lifecycle.current(epoch));
     if (!lifecycle.current(epoch)) return;
     activity.setActive(true);
     fleet.start();
@@ -548,6 +550,7 @@ function refreshCommands() {
   const online = selectedHost()?.connection === 'online' && !pendingPane && !restoration.active;
   commands = [
     { id: 'detach', label: 'Detach this browser', run: detachClient },
+    { id: 'reload_config', label: 'Reload host configuration and browser preferences', disabled: !selectedHost() || configurationReload.busy, run: () => { const host = selectedHost(); if (host) void configurationReload.run(host.machine.id, host.machine.label); } },
     { id: 'help', label: 'Keyboard shortcuts and prefix help', run: () => shortcuts?.openHelp() },
     { id: 'settings', label: 'Browser settings', run: () => void settings.open() },
     { id: 'command_palette', label: 'Command palette', run: () => openCommands() },

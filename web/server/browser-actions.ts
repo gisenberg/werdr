@@ -13,6 +13,7 @@ export function browserAction(value: Record<string, unknown>): { method: string;
   if (method.startsWith('worktree.')) return worktreeAction(value);
   const id = () => publicId(value.id);
   switch (method) {
+    case 'server.reload_config': return { method, params: {} };
     case 'integration.list': return { method, params: {} };
     case 'integration.install':
     case 'integration.uninstall':

@@ -1,6 +1,6 @@
 // Browser-owned bindings use the native keys syntax and action names.
 export const shortcutDefaults = {
-  help: ['prefix+?'], settings: ['prefix+s'], command_palette: ['ctrl+k', 'super+k'], detach: ['prefix+q'],
+  help: ['prefix+?'], settings: ['prefix+s'], command_palette: ['ctrl+k', 'super+k'], detach: ['prefix+q'], reload_config: ['prefix+shift+r'],
   new_workspace: ['prefix+shift+n'], new_worktree: ['prefix+shift+g'], open_worktree: [], remove_worktree: [],
   rename_workspace: ['prefix+shift+w'], close_workspace: ['prefix+shift+d'], workspace_picker: ['prefix+w'], goto: ['prefix+g'],
   previous_workspace: [], next_workspace: [], previous_agent: [], next_agent: [], focus_agent: [],

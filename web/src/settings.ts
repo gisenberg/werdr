@@ -81,11 +81,13 @@ export class Settings {
       throw error;
     }
   }
-  async refresh() {
+  async refresh(current = () => true) {
     try { await this.navigationSave; } catch {}
-    if (element<HTMLDialogElement>('settings-dialog').open) return;
+    if (!current() || element<HTMLDialogElement>('settings-dialog').open) return false;
     const latest: SettingsState = await this.api('/api/settings');
+    if (!current() || element<HTMLDialogElement>('settings-dialog').open) return false;
     if (latest.revision >= this.state.revision) { this.state = latest; this.apply(this.state.preferences); }
+    return true;
   }
   async open() {
     try { await this.refresh(); this.fill(this.state.preferences); element('settings-error').textContent = ''; element<HTMLDialogElement>('settings-dialog').showModal(); }
