@@ -17,6 +17,26 @@ aside { width: var(--sidebar-width, 248px); flex-shrink: 0; border-right: 1px so
 .section button { padding: 3px 7px; }
 aside nav { display: flex; flex-direction: column; }
 aside nav button { border: 0; border-bottom: 1px solid var(--herdr-surface-dim, #25302c); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agents .agent-entry { line-height: 1.4; padding: 0 1ch; border-bottom: 0; margin-bottom: var(--agent-row-gap, 0lh); }
+#agents .agent-entry:last-child { margin-bottom: 0; }
+#agents .agent-entry[data-online=true]::after { display: none; }
+.agent-line { display: flex; min-width: 0; overflow: hidden; white-space: pre; }
+.agent-line + .agent-line { padding-left: 2ch; }
+.agent-token { min-width: 0; max-width: max-content; flex: none; overflow: hidden; text-overflow: ellipsis; color: var(--herdr-overlay0); opacity: .7; }
+.agent-token:empty { min-width: 0; }
+.agent-token[data-token=workspace] { color: var(--herdr-subtext0); font-weight: 700; opacity: 1; }
+.active .agent-token[data-token=workspace] { color: var(--herdr-text); }
+.agent-token[data-token=state_icon] { flex: none; opacity: 1; }
+.agent-token[data-token=state_icon], .agent-token[data-token=state_text] { color: var(--agent-status-color, var(--herdr-overlay0)); }
+.active .agent-token[data-token=state_text] { opacity: 1; }
+.agent-entry[data-badge=BLOCKED] { --agent-status-color: var(--herdr-red); }
+.agent-entry[data-badge=WORKING] { --agent-status-color: var(--herdr-yellow); }
+.agent-entry[data-badge=DONE], .agent-entry[data-badge=IDLE] { --agent-status-color: var(--herdr-green); }
+.agent-token[data-dim=true] { opacity: .7; }
+.agent-token[data-dim=false] { opacity: 1; }
+.agent-separator { flex: none; color: var(--herdr-overlay0); opacity: .7; }
+#settings-agent-rows { grid-column: 1 / -1; }
+#settings-agent-row-config { width: 100%; resize: vertical; font: inherit; color: var(--herdr-text); background: var(--herdr-panel-bg); border: 1px solid var(--herdr-surface1); padding: 8px; }
 .workspace-row { display: flex; flex: none; min-width: 0; }
 .workspace-row > button[data-id] { flex: 1; min-width: 0; }
 aside nav .workspace-group-toggle { flex: none; width: 30px; padding: 0; color: var(--herdr-accent); }

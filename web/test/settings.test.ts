@@ -28,7 +28,7 @@ test('settings serialize concurrent edits, persist privately, and reject future/
     state.preferences.customColors.accent = '#ffffff'; assert.equal(store.read().preferences.customColors.accent, undefined);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     const valid = await readFile(path, 'utf8');
-    await writeFile(path, JSON.stringify({ version: 7, revision: 1, preferences: defaults })); await assert.rejects(settingsStore(path), /unsupported/);
+    await writeFile(path, JSON.stringify({ version: 8, revision: 1, preferences: defaults })); await assert.rejects(settingsStore(path), /unsupported/);
     await writeFile(path, 'null'); await assert.rejects(settingsStore(path), /unsupported/);
     await writeFile(path, valid); await assert.rejects(store.update(0, defaults), /another browser/);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -42,7 +42,7 @@ test('version-one settings migrate once without losing revision or preferences',
     const store = await settingsStore(path);
     assert.equal(store.read().revision, 7);
     assert.deepEqual(store.read().preferences, { ...previous, sidebarSectionPercent: 50 });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 6);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 7);
     await store.update(7, { ...store.read().preferences, sidebarSectionPercent: 65 });
     assert.equal((await settingsStore(path)).read().preferences.sidebarSectionPercent, 65);
     await writeFile(path, JSON.stringify({ version: 1, revision: 7, preferences: null }));
@@ -57,7 +57,7 @@ test('version-two sidebar settings acquire native pane chrome defaults', async (
     await writeFile(path, JSON.stringify({ version: 2, revision: 11, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 11, preferences: { ...previous, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false, tabBarPosition: 'top' } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 6);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 7);
     await store.update(11, { ...store.read().preferences, paneOuterBorders: false, tabBarPosition: 'bottom' });
     assert.deepEqual((await settingsStore(path)).read(), store.read());
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -70,7 +70,7 @@ test('version-three chrome settings migrate scrollbar defaults and preserve save
     await writeFile(path, JSON.stringify({ version: 3, revision: 12, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 12, preferences: { ...previous, paneScrollbars: true } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 6);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 7);
     await store.update(12, { ...store.read().preferences, paneScrollbars: false });
     assert.equal((await settingsStore(path)).read().preferences.paneScrollbars, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -84,7 +84,7 @@ test('version-four settings acquire native copy policy and preserve explicit ret
     await writeFile(path, JSON.stringify({ version: 4, revision: 19, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path);
     assert.deepEqual(store.read(), { revision: 19, preferences: { ...previous, copyOnSelect: true } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 6);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 7);
     await store.update(19, { ...store.read().preferences, copyOnSelect: false });
     assert.equal((await settingsStore(path)).read().preferences.copyOnSelect, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -102,9 +102,28 @@ test('version-five settings migrate bounded independent group state without rese
     assert.deepEqual((await settingsStore(path)).read().preferences.collapsedWorkspaceGroups, [key]);
     const snapshot = store.read(); snapshot.preferences.collapsedWorkspaceGroups.length = 0;
     assert.deepEqual(store.read().preferences.collapsedWorkspaceGroups, [key]);
-    const migrated = JSON.parse(await readFile(path, 'utf8')); assert.equal(migrated.version, 6);
-    const future = JSON.stringify({ ...migrated, version: 7 }); await writeFile(path, future);
+    const migrated = JSON.parse(await readFile(path, 'utf8')); assert.equal(migrated.version, 7);
+    const future = JSON.stringify({ ...migrated, version: 8 }); await writeFile(path, future);
     await assert.rejects(settingsStore(path)); assert.equal(await readFile(path, 'utf8'), future);
   } finally { await rm(directory, { recursive: true, force: true }); }
   for (const collapsedWorkspaceGroups of [null, {}, [''], [42], ['same', 'same'], ['a\n'], ['x'.repeat(8193)], Array.from({ length: 257 }, (_, index) => String(index)), Array.from({ length: 5 }, (_, index) => String(index) + '界'.repeat(3000))]) assert.throws(() => validatePreferences({ collapsedWorkspaceGroups }));
+});
+
+test('version-six settings add native agent row defaults and retain nested rules across private saves and migrations', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-settings-v6-')), path = join(directory, 'settings.json');
+  try {
+    const { agentRows, ...previous } = { ...defaults, theme: 'nord', agentSort: 'native', collapsedWorkspaceGroups: ['group'] };
+    await writeFile(path, JSON.stringify({ version: 6, revision: 23, preferences: previous }), { mode: 0o600 });
+    const store = await settingsStore(path);
+    assert.deepEqual(store.read(), { revision: 23, preferences: { ...previous, agentRows } });
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 7);
+    const layout = { rows: [['state_icon', '$load']], rows_by_agent: { claude: [[{ token: '$load', rules: [{ gt: 80, fg: '#f44', bold: false }] }]] }, row_gap: 2 };
+    await store.update(23, { ...store.read().preferences, agentRows: layout });
+    layout.rows_by_agent.claude[0][0].rules[0].fg = '#000';
+    const expected = store.read(); assert.equal((expected.preferences.agentRows.rows_by_agent.claude[0][0] as any).rules[0].fg, '#f44');
+    expected.preferences.agentRows.rows.length = 0;
+    assert.deepEqual((await settingsStore(path)).read(), store.read());
+    const future = JSON.stringify({ version: 8, ...store.read() }); await writeFile(path, future);
+    await assert.rejects(settingsStore(path)); assert.equal(await readFile(path, 'utf8'), future);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

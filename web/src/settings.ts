@@ -1,5 +1,6 @@
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
+import { agentRowTokens, canonicalAgents, defaultAgentRows, detailedAgentRows } from '../shared/agent-rows';
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const settingsMarkup = `<dialog id="settings-dialog"><form id="settings-form"><h1>SETTINGS</h1><p>Appearance and behavior shared by your browsers. Changes preview until you save.</p><div id="settings-fields"></div><details><summary>CUSTOM THEME COLORS</summary><div id="settings-colors"></div></details><fieldset><legend>THIS DEVICE</legend><label><input id="settings-device-font" type="checkbox"> Override terminal font size on this device</label><label>DEVICE FONT SIZE<input id="settings-device-size" type="number" min="10" max="32" value="14"></label></fieldset><fieldset><legend>NATIVE HOST</legend><button id="settings-integrations" type="button">MANAGE HOST INTEGRATIONS</button><button id="settings-plugins" type="button">MANAGE HOST PLUGINS</button></fieldset><p id="settings-error" role="alert"></p><div class="settings-actions"><button type="submit">SAVE SETTINGS</button><button id="settings-cancel" type="button">CANCEL</button><button id="settings-reset" type="button">PREVIEW DEFAULTS</button></div></form></dialog>`;
 type Control = { key: keyof Preferences; label: string; choices?: readonly string[]; min?: number; max?: number };
@@ -107,6 +108,20 @@ export class Settings {
       parent.append(group);
     }
     const colors = element('settings-colors'); colors.replaceChildren();
+    const rows = document.createElement('details'); rows.id = 'settings-agent-rows';
+    const summary = document.createElement('summary'); summary.textContent = 'AGENT ROW LAYOUT'; rows.append(summary);
+    const hint = document.createElement('p'); hint.textContent = 'Arrange native fields into rows. Use $name for custom metadata. Missing fields disappear; an empty layout keeps the status indicator.'; rows.append(hint);
+    const presets = document.createElement('div'); presets.className = 'inline-actions';
+    for (const [label, config] of [['NATIVE DEFAULT', defaultAgentRows], ['DETAIL ROWS', detailedAgentRows]] as const) {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+      button.onclick = () => { element<HTMLTextAreaElement>('settings-agent-row-config').value = JSON.stringify(config, null, 2); this.preview(); }; presets.append(button);
+    }
+    rows.append(presets);
+    const rowLabel = document.createElement('label'); rowLabel.textContent = 'ROW CONFIGURATION (JSON)'; rowLabel.htmlFor = 'settings-agent-row-config';
+    const editor = document.createElement('textarea'); editor.id = rowLabel.htmlFor; editor.rows = 12; editor.spellcheck = false; editor.maxLength = 65536; editor.value = JSON.stringify(preferences.agentRows, null, 2); rows.append(rowLabel, editor);
+    const help = document.createElement('p'); help.textContent = `Fields: ${agentRowTokens.join(', ')}. Set row_gap to the number of blank lines between agents. rows_by_agent accepts layouts for: ${canonicalAgents.join(', ')}.`; rows.append(help);
+    const rules = document.createElement('p'); rules.textContent = 'A styled field uses {"token":"$load","fg":"#abc","bold":true,"rules":[{"gt":80,"fg":"#f44"}]}. Rules use equals, contains, starts_with, gt, or lt. Text rules may set ignore_case. The first matching rule wins; bold and dim accept true or false.'; rows.append(rules);
+    parent.append(rows);
     for (const key of Object.keys(palette(defaults, false))) {
       const label = document.createElement('label'); label.textContent = key.replaceAll('_', ' ').toUpperCase();
       const input = document.createElement('input'); input.dataset.color = key; input.value = preferences.customColors[key] || ''; input.placeholder = 'Theme default'; input.maxLength = 7; label.append(input); colors.append(label);
@@ -116,6 +131,8 @@ export class Settings {
   }
   private read() {
     const value: Record<string, unknown> = { ...this.state.preferences, customColors: {} };
+    try { value.agentRows = JSON.parse(element<HTMLTextAreaElement>('settings-agent-row-config').value); }
+    catch { throw new Error('Agent rows: enter valid JSON.'); }
     for (const input of element('settings-fields').querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-setting]')) value[input.dataset.setting!] = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input instanceof HTMLInputElement && input.type === 'number' ? input.valueAsNumber : input.value;
     for (const input of element('settings-colors').querySelectorAll<HTMLInputElement>('[data-color]')) if (input.value.trim()) (value.customColors as Record<string, string>)[input.dataset.color!] = input.value.trim();
     return validatePreferences(value);
@@ -134,6 +151,7 @@ export class Settings {
     const rgb = colors.panel_bg.slice(1).match(/../g)!.map(value => parseInt(value, 16));
     root.style.colorScheme = rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 > 128 ? 'light' : 'dark';
     root.style.setProperty('--sidebar-width', `${preferences.sidebarWidth}px`); root.style.setProperty('--wmux-mono-font', fontFamilies[preferences.font]);
+    root.style.setProperty('--agent-row-gap', `${preferences.agentRows.row_gap}lh`);
     root.dataset.tabBarPosition = preferences.tabBarPosition;
     root.dataset.density = preferences.compact ? 'compact' : 'comfortable'; root.dataset.indicators = preferences.indicators; root.dataset.toastPosition = preferences.toastPosition;
     this.changed(this.preferences, colors);
