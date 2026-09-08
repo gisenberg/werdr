@@ -1036,7 +1036,11 @@ fn agent_start_targets_existing_pane_over_socket() {
         &serde_json::json!({
             "id": "agent_workspace",
             "method": "workspace.create",
-            "params": { "cwd": base.display().to_string(), "focus": false }
+            "params": {
+                "cwd": base.display().to_string(),
+                "focus": false,
+                "env": { "PS1": "HERDR_AGENT_START_READY> " }
+            }
         })
         .to_string(),
     );
@@ -1048,6 +1052,24 @@ fn agent_start_targets_existing_pane_over_socket() {
         .as_str()
         .unwrap()
         .to_string();
+
+    // Workspace creation can return before the child has exec'd its shell.
+    // Wait for that shell's prompt before testing agent.start's idle-shell path.
+    let ready = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "agent_shell_ready",
+            "method": "pane.wait_for_output",
+            "params": {
+                "pane_id": pane_id,
+                "source": "visible",
+                "match": { "type": "substring", "value": "HERDR_AGENT_START_READY>" },
+                "timeout_ms": 5_000
+            }
+        })
+        .to_string(),
+    );
+    assert_eq!(ready["result"]["type"], "output_matched", "{ready}");
 
     let started = send_request(
         &socket_path,
@@ -1064,7 +1086,7 @@ fn agent_start_targets_existing_pane_over_socket() {
         })
         .to_string(),
     );
-    assert_eq!(started["result"]["type"], "agent_started");
+    assert_eq!(started["result"]["type"], "agent_started", "{started}");
     assert_eq!(started["result"]["agent"]["name"], "main");
     assert_eq!(started["result"]["agent"]["pane_id"], pane_id);
     assert_eq!(started["result"]["agent"]["terminal_id"], terminal_id);
