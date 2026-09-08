@@ -14,6 +14,7 @@ const validAgentView = (view: any): boolean => view && Array.isArray(view.pane_i
 interface Host {
   view: HostView; epoch: number; api?: NativeEndpoint; timer?: ReturnType<typeof setTimeout>; health?: ReturnType<typeof setInterval>;
   refreshTimer?: ReturnType<typeof setTimeout>; reading: boolean; dirty: boolean; attempts: number; eventSequence: number;
+  pendingNotices: { sequence: number; notice: Notice }[];
   watchKey?: string; stopWatch?: () => void; watching: boolean; baseline: boolean; agentStates: Map<string, Agent>; fingerprint?: string;
 }
 type NativeRequest = (method: string, params?: object, invalidate?: boolean) => Promise<any>;
@@ -53,7 +54,7 @@ export class Fleet extends EventEmitter {
       for (const machine of machines) {
         let host = this.hosts.get(machine.id);
         if (!host) {
-          host = { view: { machine, connection: machine.enabled ? 'connecting' : 'disabled' }, epoch: 0, reading: false, dirty: false, attempts: 0, eventSequence: 0, watching: false, baseline: false, agentStates: new Map() };
+          host = { view: { machine, connection: machine.enabled ? 'connecting' : 'disabled' }, epoch: 0, reading: false, dirty: false, attempts: 0, eventSequence: 0, pendingNotices: [], watching: false, baseline: false, agentStates: new Map() };
           this.hosts.set(machine.id, host); changed = true;
           if (machine.enabled) this.schedule(host, 0);
         } else if (identity(host.view.machine) !== identity(machine)) {
@@ -67,8 +68,9 @@ export class Fleet extends EventEmitter {
   }
   private retire(host: Host) {
     host.epoch++; clearTimeout(host.timer); clearTimeout(host.refreshTimer); clearInterval(host.health);
+    host.refreshTimer = undefined;
     host.stopWatch?.(); host.stopWatch = undefined; host.watchKey = undefined; host.api?.close(); host.api = undefined;
-    host.reading = false; host.watching = false; host.dirty = false;
+    host.reading = false; host.watching = false; host.dirty = false; host.pendingNotices = [];
   }
   private schedule(host: Host, delay: number) {
     if (this.stopped || !host.view.machine.enabled) return;
@@ -113,7 +115,13 @@ export class Fleet extends EventEmitter {
     if (event.event === 'notification.semantic') {
       if (host.api?.capabilities?.semantic_notifications) {
         const notice = semanticNotice(event.data, host.view.machine);
-        if (notice) this.recordNotice(host, notice);
+        if (notice) {
+          // Separate native sockets can deliver a notification before metadata.
+          // Only a snapshot requested after this event can validate its target.
+          host.pendingNotices.push({ sequence: ++host.eventSequence, notice });
+          host.pendingNotices.splice(0, Math.max(0, host.pendingNotices.length - 256));
+          this.invalidate(host, 0);
+        }
       }
       return;
     }
@@ -162,6 +170,9 @@ export class Fleet extends EventEmitter {
       host.fingerprint = fingerprint;
       host.view = { ...host.view, snapshot, connection: 'online', detail: undefined, lastSeen: Date.now(), retryAt: undefined };
       if (changed) this.publishHost(host);
+      const ready = host.pendingNotices.filter(item => item.sequence <= sequence);
+      host.pendingNotices = host.pendingNotices.filter(item => item.sequence > sequence);
+      for (const { notice } of ready) this.recordNotice(host, notice);
       if (host.baseline) await this.watchAgents(host);
     } catch (error) { if (host.epoch === epoch) throw error; } finally {
       if (host.epoch === epoch) {

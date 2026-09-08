@@ -50,6 +50,58 @@ test('semantic notifications exclusively use the advertised stream and retain na
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test('semantic completion waits for metadata requested after the event', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-semantic-order-'));
+  const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: true };
+  endpoint.status('blocked');
+  const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => endpoint);
+  let release: (() => void) | undefined;
+  try {
+    await fleet.start(); await until(() => endpoint.listeners.length === 2 && fleet.state().hosts[0]?.snapshot?.agents[0].agent_status === 'blocked');
+    // Metadata and notification subscriptions use independent native sockets.
+    const request = endpoint.request.bind(endpoint);
+    let captured = false;
+    endpoint.request = async method => {
+      const result = await request(method);
+      if (!captured) { captured = true; await new Promise<void>(resolve => { release = resolve; }); }
+      return result;
+    };
+    fleet.retry('one'); await until(() => !!release);
+    endpoint.snapshot.agents[0].agent_status = 'done';
+    const observed: string[] = [];
+    fleet.on('event', event => {
+      if (event.type === 'fleet.notices' && event.added) observed.push(fleet.state().hosts[0].snapshot!.agents[0].agent_status);
+    });
+    for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'notification.semantic')) listener.receive({ event: 'notification.semantic', data: { kind: 'finished', title: 'Finished', pane_id: 'p:1', terminal_id: 'terminal:1', workspace_id: 'w:1', tab_id: 't:1' } });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.deepEqual(observed, [], 'completion must not be validated against pre-event blocked metadata');
+    assert.ok(release); release();
+    await until(() => observed.length === 1);
+    assert.deepEqual(observed, ['done']);
+  } finally { release?.(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('retiring an endpoint discards its queued semantic delivery and refreshes the replacement', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-semantic-retire-'));
+  let catalog: Machine[] = [{ id: 'one', label: 'One', enabled: true }];
+  const endpoints: Endpoint[] = [];
+  const fleet = new Fleet(async () => catalog, join(directory, 'notices.json'), async () => {
+    const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: true }; endpoints.push(endpoint); return endpoint;
+  });
+  const emit = (endpoint: Endpoint, title: string) => {
+    for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'notification.semantic')) listener.receive({ event: 'notification.semantic', data: { kind: 'custom', title } });
+  };
+  try {
+    await fleet.start(); await until(() => endpoints[0]?.listeners.length === 2 && fleet.state().hosts[0]?.connection === 'online');
+    emit(endpoints[0], 'Retired');
+    catalog = [{ ...catalog[0], session: 'replacement' }]; await fleet.reloadCatalog();
+    await until(() => endpoints[1]?.listeners.length === 2 && fleet.state().hosts[0]?.connection === 'online');
+    emit(endpoints[1], 'Current');
+    await until(() => fleet.state().notices.length === 1);
+    assert.deepEqual(fleet.state().notices.map(notice => notice.title), ['Current']);
+  } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('host failures, colliding pane IDs, reconnects and notification persistence remain independent', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-test-')), path = join(directory, 'notices.json');
   let catalog: Machine[] = [{ id: 'one', label: 'One', enabled: true }, { id: 'two', label: 'Two', enabled: true }, { id: 'down', label: 'Down', enabled: true }];
