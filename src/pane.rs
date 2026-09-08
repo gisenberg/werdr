@@ -3436,8 +3436,10 @@ mod tests {
         let cwd = private.join("cwd");
         std::fs::create_dir_all(&cwd).expect("create process cwd");
 
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "sleep 30"])
+        // Own the process directly so kill/wait cannot leave a shell grandchild
+        // holding nextest's output pipe open after this test completes.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
             .current_dir(&cwd)
             .spawn()
             .expect("spawn process in cwd");
