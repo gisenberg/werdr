@@ -348,6 +348,18 @@
         "EventData": {
           "oneOf": [
             {
+              "properties": {
+                "type": {
+                  "const": "command_manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
               "description": "Ephemeral runtime notification; presentation remains client-local.",
               "properties": {
                 "agent": {
@@ -1093,6 +1105,7 @@
         },
         "EventKind": {
           "enum": [
+            "command.manifest_changed",
             "notification.semantic",
             "workspace_created",
             "workspace_updated",
@@ -2156,7 +2169,7 @@
         "CommandInvokeParams": {
           "properties": {
             "command_id": {
-              "description": "Opaque endpoint-issued command identifier from the client-shell projection.",
+              "description": "Opaque endpoint-issued command identifier from command.list.",
               "type": "string"
             },
             "pane_id": {
@@ -4412,6 +4425,18 @@
             {
               "properties": {
                 "type": {
+                  "const": "command.manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "notification.semantic",
                   "type": "string"
                 }
@@ -5352,6 +5377,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ReleaseNotesDismissParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "command.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
             }
           },
           "required": [
@@ -7624,6 +7665,45 @@
           ],
           "type": "string"
         },
+        "CommandAction": {
+          "enum": [
+            "shell",
+            "pane",
+            "popup",
+            "plugin_action",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "CommandInfo": {
+          "description": "Configuration-backed command metadata. Executable text stays on the owning endpoint.",
+          "properties": {
+            "action": {
+              "$ref": "#/schemas/success_response/$defs/CommandAction"
+            },
+            "binding_labels": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command_id",
+            "binding_labels",
+            "action"
+          ],
+          "type": "object"
+        },
         "ConfigReloadStatus": {
           "enum": [
             "applied",
@@ -7634,6 +7714,18 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "command_manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "description": "Ephemeral runtime notification; presentation remains client-local.",
               "properties": {
@@ -8395,6 +8487,7 @@
         },
         "EventKind": {
           "enum": [
+            "command.manifest_changed",
             "notification.semantic",
             "workspace_created",
             "workspace_updated",
@@ -10115,6 +10208,25 @@
             },
             {
               "properties": {
+                "commands": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/CommandInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "command_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "commands"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "snapshot": {
                   "$ref": "#/schemas/success_response/$defs/SessionSnapshot"
                 },
@@ -11450,6 +11562,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "command_catalog": {
+              "default": false,
+              "description": "Supports command.list and command.manifest_changed subscriptions.",
+              "type": "boolean"
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"

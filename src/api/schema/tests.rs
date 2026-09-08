@@ -723,6 +723,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                command_catalog: true,
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,
@@ -1519,5 +1520,29 @@ fn workspace_sidebar_facts_are_optional_for_older_endpoints() {
     assert_eq!(
         serde_json::from_value::<WorkspaceInfo>(json).unwrap(),
         workspace
+    );
+}
+
+#[test]
+fn command_catalog_contract_is_optional_and_forward_compatible() {
+    let request: Request = serde_json::from_value(
+        serde_json::json!({"id":"catalog","method":"command.list","params":{}}),
+    )
+    .unwrap();
+    assert!(matches!(request.method, Method::CommandList(_)));
+    let command: CommandInfo = serde_json::from_value(serde_json::json!({"command_id":"opaque","binding_labels":["prefix+z"],"action":"future_action"})).unwrap();
+    assert_eq!(command.action, CommandAction::Unknown);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.command_catalog);
+    let subscription: Subscription =
+        serde_json::from_value(serde_json::json!({"type":"command.manifest_changed"})).unwrap();
+    assert!(matches!(
+        subscription,
+        Subscription::CommandManifestChanged {}
+    ));
+    assert_eq!(
+        EventKind::CommandManifestChanged.dot_name(),
+        "command.manifest_changed"
     );
 }

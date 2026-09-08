@@ -198,6 +198,26 @@ The version-fourteen migration matched its rehearsal exactly, and all existing p
 The native candidate remains staged as a client and isolated test runtime; existing owning runtimes continue to supply only their available fields.
 Their Windows phone resize artifacts also remain until the separately verified native repair can be adopted without losing sessions.
 
+## Configured command bindings
+
+The native reference is `src/app/custom_commands.rs` and `src/input/keybindings.rs`.
+Configured shell, pane, popup, and plugin-action commands belong to the owning runtime.
+Browser preferences must not copy or execute their command text.
+The candidate exposes `command.list` and `command.manifest_changed` under the optional `command_catalog` capability.
+The catalog contains ordered opaque IDs, binding labels, action kinds, and descriptions using API-owned types; published client-shell codecs and `command.invoke` retain their existing shapes.
+Every registry rotation emits an invalidation, including a failed configuration reload that retains the prior definitions but issues fresh IDs.
+The gateway subscribes before reading the catalog, discards superseded reads and responses from retired endpoints, and retries optional failures independently without marking compatible hosts offline.
+Ordinary pane metadata never triggers a catalog read.
+The pure shortcut resolver follows native precedence using effective browser bindings: ordinary builtins, custom commands in manifest order, then indexed builtins.
+It retains Copy and Navigate scope, composition bypass, held-key suppression, and cancellation when the catalog changes.
+Native tests verify secret-free ordered metadata, unchanged focus, empty-fleet reload invalidation, unknown future actions, and existing stale-ID rejection.
+Gateway tests cover concurrent reload, endpoint replacement, unsupported servers, failed subscriptions and reads, retry recovery, late responses, disposal, and host isolation.
+The foundation passed full native checks with 3,285 tests and two platform skips, Windows cross-target lint and test compilation, and 167 browser package tests with typechecking and build.
+This work is not deployed, and browser command dispatch is still incomplete.
+The existing invoke reply does not identify a command-created pane atomically; a later global-focus read can observe another client's action and is not sufficient evidence of the result.
+Popup commands additionally require their singleton terminal's metadata, rendering, input, ownership, and close path; plugin actions may open these popups too.
+Complete browser dispatch must preserve scoped workspace/tab/pane identities and selected-text coordinates with their authoritative content revision, report stale IDs without automatic retry or label-based remapping, and verify native command outcomes on desktop and phone.
+
 ## Native runtime rollout gate
 
 Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.

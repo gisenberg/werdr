@@ -66,6 +66,7 @@ pub(crate) fn start_server_with_stop_control(
 
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
+        command_catalog: true,
         semantic_notifications: true,
         workspace_git_status: true,
         live_handoff: crate::platform::capabilities().live_handoff,
@@ -396,6 +397,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::NotificationShow(_) => "notification.show",
         Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
         Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
+        Method::CommandList(_) => "command.list",
         Method::CommandInvoke(_) => "command.invoke",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
@@ -1146,6 +1148,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                command_catalog: true,
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,

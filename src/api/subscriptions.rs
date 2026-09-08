@@ -167,6 +167,9 @@ impl ActiveSubscription {
             Subscription::PaneAgentDetected {} => {
                 Ok(event_subscription(EventKind::PaneAgentDetected))
             }
+            Subscription::CommandManifestChanged {} => {
+                Ok(event_subscription(EventKind::CommandManifestChanged))
+            }
             Subscription::AgentViewChanged {} => {
                 Ok(event_subscription(EventKind::AgentViewChanged))
             }

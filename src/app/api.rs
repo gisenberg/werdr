@@ -1001,6 +1001,14 @@ impl App {
                 self.dismiss_product_announcement();
                 return responses::encode_success(request.id, ResponseResult::Ok {});
             }
+            Method::CommandList(_) => {
+                return responses::encode_success(
+                    request.id,
+                    ResponseResult::CommandList {
+                        commands: self.command_manifest(),
+                    },
+                );
+            }
             Method::CommandInvoke(params) => {
                 return self.handle_command_invoke(request.id, params);
             }

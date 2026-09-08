@@ -766,6 +766,11 @@ impl App {
         };
         self.endpoint_commands =
             custom_commands::EndpointCommandRegistry::new(&self.state.keybinds.custom_commands);
+        // Even a failed reload rotates opaque IDs, so every catalog reader must refresh.
+        self.emit_event(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::CommandManifestChanged,
+            data: crate::api::schema::EventData::CommandManifestChanged {},
+        });
         self.sync_toast_deadline(previous_toast);
         report
     }
@@ -1659,6 +1664,53 @@ mod tests {
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         restore_xdg_state_home(original_xdg_state_home);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn command_catalog_reload_event_tracks_rotated_ids_even_without_panes() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-command-catalog");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[[keys.command]]\nkey = \"prefix+f12\"\ncommand = \"private-command\"\n",
+        )
+        .unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut app = test_app();
+        assert!(app.state.workspaces.is_empty());
+        let sequence = app.event_hub.current_sequence();
+        assert_eq!(
+            app.reload_config().status,
+            crate::config::ConfigReloadStatus::Applied
+        );
+        let first = app.command_manifest();
+        assert_eq!(first.len(), 1);
+        std::fs::write(&path, "[invalid TOML").unwrap();
+        assert_eq!(
+            app.reload_config().status,
+            crate::config::ConfigReloadStatus::Failed
+        );
+        let second = app.command_manifest();
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0].command_id, second[0].command_id);
+        let events = app.event_hub.events_after(sequence);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(_, event)| matches!(
+                    event.event,
+                    crate::api::schema::EventKind::CommandManifestChanged
+                ))
+                .count(),
+            2
+        );
+        assert!(!serde_json::to_string(&events)
+            .unwrap()
+            .contains("private-command"));
+        assert!(app.state.workspaces.is_empty());
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

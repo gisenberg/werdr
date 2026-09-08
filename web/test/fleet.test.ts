@@ -13,7 +13,7 @@ async function until(check: () => boolean) {
 }
 class Endpoint implements NativeEndpoint {
   version = 'fixture'; closed = false;
-  capabilities?: { semantic_notifications?: boolean; workspace_git_status?: boolean };
+  capabilities?: { command_catalog?: boolean; semantic_notifications?: boolean; workspace_git_status?: boolean };
   listeners: { subscriptions: Subscription[]; receive(event: NativeEvent): void; fail(error: Error): void }[] = [];
   snapshot = { ...emptySnapshot(), version: 'fixture', workspaces: [{ workspace_id: 'w:1', label: 'Workspace', agent_status: 'working' as AgentStatus }], tabs: [{ workspace_id: 'w:1', tab_id: 't:1', label: 'Tab' }], panes: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus }], agents: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus, agent: 'Claude', state_change_seq: 1 }] };
   async request(method: string) { assert.equal(method, 'session.snapshot'); return { snapshot: structuredClone(this.snapshot) }; }
@@ -304,5 +304,27 @@ test('Git refresh interest is requested only from explicitly capable endpoints',
     const subscription = (endpoint: Endpoint) => endpoint.listeners.flatMap(listener => listener.subscriptions).find(item => item.type === 'workspace.updated');
     assert.deepEqual(subscription(old), { type: 'workspace.updated' });
     assert.deepEqual(subscription(current), { type: 'workspace.updated', include_git_status: true });
+  } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('optional command catalogs refresh independently of pane metadata and keep old endpoints online', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-command-fleet-'));
+  const old = new Endpoint(), current = new Endpoint(); current.capabilities = { command_catalog: true };
+  let reads = 0;
+  let manifest: unknown = [{ command_id: 'first', action: 'shell', binding_labels: ['prefix+f12'] }];
+  const original = current.request.bind(current);
+  current.request = async method => method === 'command.list' ? (reads++, { commands: manifest }) as any : original(method);
+  const fleet = new Fleet(async () => [{ id: 'old', label: 'Old', enabled: true }, { id: 'current', label: 'Current', enabled: true }], join(directory, 'notices.json'), async machine => machine.id === 'old' ? old : current);
+  try {
+    await fleet.start(); await until(() => fleet.state().hosts.every(host => host.connection === 'online') && fleet.state().hosts[1].commands?.status === 'ready');
+    assert.equal(fleet.state().hosts[0].commands, undefined);
+    assert(!old.listeners.some(item => item.subscriptions.some(spec => spec.type === 'command.manifest_changed')));
+    const count = reads; current.status('blocked'); await until(() => fleet.state().hosts[1].snapshot?.agents[0].agent_status === 'blocked'); assert.equal(reads, count);
+    manifest = [{ command_id: 'second', action: 'pane', binding_labels: ['prefix+f12'] }];
+    const emit = () => { for (const item of current.listeners) if (item.subscriptions.some(spec => spec.type === 'command.manifest_changed')) item.receive({ event: 'command.manifest_changed', data: {} }); };
+    emit(); await until(() => fleet.state().hosts[1].commands?.commands[0]?.command_id === 'second');
+    manifest = 'invalid'; emit(); await until(() => fleet.state().hosts[1].commands?.status === 'unavailable');
+    assert(fleet.state().hosts.every(host => host.connection === 'online'));
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });

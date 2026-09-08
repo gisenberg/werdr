@@ -48,6 +48,9 @@ pub enum ResponseResult {
         #[serde(default)]
         capabilities: Option<ServerCapabilities>,
     },
+    CommandList {
+        commands: Vec<super::commands::CommandInfo>,
+    },
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,
     },

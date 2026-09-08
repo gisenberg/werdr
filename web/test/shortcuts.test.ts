@@ -171,3 +171,43 @@ test('Navigate retains the browser palette and reset ends held movement leases e
     assert.deepEqual(mode.down({ ...arrow, repeat: true }), { consume: true }); mode.up(arrow.code);
   }
 });
+
+
+test('custom native IDs use effective builtin precedence, manifest order, and indexed fallback', () => {
+  const mode = new ShortcutMode(defaultShortcuts);
+  const commands = [
+    { command_id: 'custom_tab', action: 'shell' as const, binding_labels: ['prefix+1', 'prefix+c'] },
+    { command_id: 'duplicate', action: 'shell' as const, binding_labels: ['prefix+1'] },
+  ];
+  mode.updateCommands(commands);
+  prefix(mode); assert.equal(press(mode, 'c').action, 'new_tab');
+  prefix(mode); assert.equal(press(mode, '1').command, 'custom_tab');
+  prefix(mode); assert.equal(press(mode, '2').action, 'switch_tab');
+  mode.update(validateShortcuts({ ...defaultShortcuts, bindings: { new_tab: ['prefix+f11'] } }));
+  prefix(mode); assert.equal(press(mode, 'c').command, 'custom_tab');
+  mode.updateCommands([]); prefix(mode); assert.equal(press(mode, '1').action, 'switch_tab');
+});
+
+test('custom commands respect copy and Navigate scopes, composition, repeats and catalog replacement', () => {
+  const mode = new ShortcutMode(defaultShortcuts);
+  mode.updateCommands([{ command_id: 'native', action: 'shell', binding_labels: ['prefix+f12', 'alt+f12', 'not-a-browser-key'] }]);
+  assert.equal(mode.down(key('F12', { altKey: true }), true).consume, false);
+  prefix(mode); const event = key('F12'); assert.equal(mode.down(event, true).command, 'native');
+  assert.deepEqual(mode.down({ ...event, repeat: true }), { consume: true }); mode.up(event.code);
+  mode.mode = 'navigate'; assert.equal(press(mode, 'F12').command, 'native'); assert.equal(mode.mode, 'terminal');
+  prefix(mode); mode.updateCommands([{ command_id: 'replacement', action: 'shell', binding_labels: ['prefix+f12'] }]);
+  assert.equal(press(mode, 'F12').consume, false);
+  prefix(mode); assert.equal(mode.down(key('F12', { isComposing: true })).consume, false);
+});
+
+
+test('effective browser prefix remains reachable when endpoint custom commands use that chord', () => {
+  const mode = new ShortcutMode(defaultShortcuts);
+  mode.updateCommands([{ command_id: 'native', action: 'shell', binding_labels: ['ctrl+b', 'ctrl+a', 'prefix+ctrl+a'] }]);
+  assert.equal(prefix(mode).command, undefined); assert.equal(mode.mode, 'prefix');
+  assert.equal(press(mode, 'v').action, 'split_vertical');
+  mode.update(validateShortcuts({ ...defaultShortcuts, prefix: 'ctrl+a' }));
+  assert.equal(press(mode, 'a', { ctrlKey: true }).command, undefined); assert.equal(mode.mode, 'prefix');
+  assert.equal(press(mode, 'a', { ctrlKey: true }).consume, false);
+  assert.equal(press(mode, 'b', { ctrlKey: true }).command, 'native');
+});

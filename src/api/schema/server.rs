@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Supports command.list and command.manifest_changed subscriptions.
+    #[serde(default)]
+    pub command_catalog: bool,
     /// Supports include_git_status on workspace.updated subscriptions.
     #[serde(default)]
     pub workspace_git_status: bool,

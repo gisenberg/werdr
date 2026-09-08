@@ -1,12 +1,27 @@
-import { compileShortcuts, matchesChord, type ShortcutKey, type Shortcuts, type ShortcutAction, type Binding } from '../shared/shortcuts';
-export type ShortcutResult = { consume: boolean; forward?: boolean; action?: ShortcutAction; index?: number; navigate?: 'confirm' };
+import type { NativeCommand } from '../shared/commands';
+import { parseChord, type Chord, compileShortcuts, matchesChord, type ShortcutKey, type Shortcuts, type ShortcutAction, type Binding } from '../shared/shortcuts';
+export type ShortcutResult = { consume: boolean; forward?: boolean; action?: ShortcutAction; command?: string; index?: number; navigate?: 'confirm' };
 /** Pure client input mode. No terminal bytes or server operations originate here. */
 export class ShortcutMode {
   mode: 'terminal' | 'prefix' | 'resize' | 'navigate' = 'terminal';
   private compiled: ReturnType<typeof compileShortcuts>;
+  private commands: { chord: Chord; id: string }[] = [];
   private held = new Map<string, Binding | undefined>();
   constructor(value: Shortcuts) { this.compiled = compileShortcuts(value); }
   update(value: Shortcuts) { this.compiled = compileShortcuts(value); this.reset(); }
+  updateCommands(commands: readonly NativeCommand[]) {
+    this.commands = commands.flatMap(command => command.binding_labels.flatMap(label => {
+      try { return [{ chord: parseChord(label), id: command.command_id }]; } catch { return []; }
+    }));
+    this.reset();
+  }
+  private resolve(event: ShortcutKey, eligible: (binding: Binding) => boolean, customEligible: (chord: Chord) => boolean) {
+    const ordinary = this.compiled.bindings.find(binding => binding.index === undefined && eligible(binding) && matchesChord(binding.chord, event));
+    if (ordinary) return { binding: ordinary };
+    // Endpoint and browser prefixes can differ; reserve the effective browser prefix.
+    const custom = !matchesChord(this.compiled.prefix, event) && this.commands.find(command => customEligible(command.chord) && matchesChord(command.chord, event));
+    return custom ? { command: custom.id } : { binding: this.compiled.bindings.find(binding => binding.index !== undefined && eligible(binding) && matchesChord(binding.chord, event)) };
+  }
   reset() { this.mode = 'terminal'; for (const code of this.held.keys()) this.held.set(code, undefined); }
   blur() { this.reset(); this.held.clear(); }
   owns(code: string) { return this.held.has(code); }
@@ -33,7 +48,8 @@ export class ShortcutMode {
       if (plain && ['ArrowLeft', 'ArrowRight'].includes(event.key)) return consume({ chord: this.compiled.prefix, action: event.key === 'ArrowLeft' ? 'navigate_pane_left' : 'navigate_pane_right' });
       const pane = this.compiled.navigate.find(binding => binding.action.startsWith('navigate_pane_') && matchesChord(binding.chord, event));
       if (pane) return consume(pane);
-      const binding = this.compiled.bindings.find(binding => (binding.chord.prefix || binding.action === 'command_palette') && !binding.action.startsWith('focus_pane_') && matchesChord(binding.chord, event));
+      const { binding, command } = this.resolve(event, binding => (binding.chord.prefix || binding.action === 'command_palette') && !binding.action.startsWith('focus_pane_'), chord => chord.prefix);
+      if (command) { this.reset(); consume(); return { consume: true, command }; }
       if (binding) { this.mode = binding.index !== undefined ? 'navigate' : binding.action === 'resize_mode' ? 'resize' : binding.action === 'workspace_picker' ? 'navigate' : 'terminal'; return consume(binding); }
       return consume();
     }
@@ -49,7 +65,8 @@ export class ShortcutMode {
       if (matchesChord(this.compiled.prefix, event)) { if (copy) { consume(); return { consume: true, forward: true }; } return { consume: false }; }
       if (event.key === 'Escape') return consume();
     }
-    const binding = this.compiled.bindings.find(binding => binding.chord.prefix === wasPrefix && (!copy || wasPrefix || binding.action === 'command_palette') && matchesChord(binding.chord, event));
+    const { binding, command } = this.resolve(event, binding => binding.chord.prefix === wasPrefix && (!copy || wasPrefix || binding.action === 'command_palette'), chord => chord.prefix === wasPrefix && (!copy || wasPrefix));
+    if (command) { if (event.repeat) return { consume: true }; consume(); return { consume: true, command }; }
     if (binding) { if (event.repeat) return { consume: true }; if (binding.action === 'resize_mode') this.mode = 'resize'; return consume(binding); }
     if (wasPrefix) return consume();
     if (matchesChord(this.compiled.prefix, event)) { if (!event.repeat) this.mode = 'prefix'; return consume(); }

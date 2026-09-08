@@ -63,6 +63,8 @@ pub enum Method {
     ProductAnnouncementDismiss(ProductAnnouncementDismissParams),
     #[serde(rename = "release_notes.dismiss")]
     ReleaseNotesDismiss(ReleaseNotesDismissParams),
+    #[serde(rename = "command.list")]
+    CommandList(EmptyParams),
     #[serde(rename = "command.invoke")]
     CommandInvoke(CommandInvokeParams),
     #[serde(rename = "client.window_title.set")]

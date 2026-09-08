@@ -52,6 +52,25 @@ impl App {
         self.client_shell_keybindings_profile.as_deref()
     }
 
+    pub(crate) fn command_manifest(&self) -> Vec<crate::api::schema::CommandInfo> {
+        use crate::api::schema::{CommandAction, CommandInfo};
+        self.endpoint_commands
+            .entries
+            .iter()
+            .map(|entry| CommandInfo {
+                command_id: entry.id.clone(),
+                binding_labels: entry.binding.bindings.labels(),
+                action: match entry.binding.action {
+                    crate::config::CustomCommandAction::Shell => CommandAction::Shell,
+                    crate::config::CustomCommandAction::Pane => CommandAction::Pane,
+                    crate::config::CustomCommandAction::Popup => CommandAction::Popup,
+                    crate::config::CustomCommandAction::PluginAction => CommandAction::PluginAction,
+                },
+                description: entry.binding.description.clone(),
+            })
+            .collect()
+    }
+
     pub(crate) fn client_shell_command_manifest(&self) -> Vec<crate::protocol::ClientShellCommand> {
         self.endpoint_commands
             .entries
@@ -612,6 +631,58 @@ mod tests {
                 .map(|binding| binding.command),
             Some("secret-command --token hidden".into())
         );
+    }
+
+    #[test]
+    fn public_command_catalog_preserves_registry_order_without_executables_or_focus() {
+        use crate::api::schema::{
+            CommandAction, EmptyParams, Method, Request, ResponseResult, SuccessResponse,
+        };
+        let mut app = test_app();
+        let actions = [
+            crate::config::CustomCommandAction::Shell,
+            crate::config::CustomCommandAction::Pane,
+            crate::config::CustomCommandAction::Popup,
+            crate::config::CustomCommandAction::PluginAction,
+        ];
+        app.endpoint_commands = super::EndpointCommandRegistry::new(&actions.map(binding));
+        let before = app.session_snapshot();
+        let request = Request {
+            id: "catalog".into(),
+            method: Method::CommandList(EmptyParams::default()),
+        };
+        assert!(!crate::api::request_changes_ui(&request));
+        let encoded = app.handle_api_request(request);
+        assert!(!encoded.contains("secret-command"));
+        assert!(!encoded.contains("hidden"));
+        let response: SuccessResponse = serde_json::from_str(&encoded).unwrap();
+        let ResponseResult::CommandList { commands } = response.result else {
+            panic!("expected command catalog")
+        };
+        let projected = app.client_shell_command_manifest();
+        assert_eq!(
+            commands
+                .iter()
+                .map(|c| c.command_id.as_str())
+                .collect::<Vec<_>>(),
+            projected
+                .iter()
+                .map(|c| c.command_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            commands.iter().map(|c| c.action).collect::<Vec<_>>(),
+            [
+                CommandAction::Shell,
+                CommandAction::Pane,
+                CommandAction::Popup,
+                CommandAction::PluginAction
+            ]
+        );
+        assert!(commands.iter().all(|c| c.binding_labels == ["prefix+z"]
+            && c.description.as_deref() == Some("safe description")));
+        assert_eq!(app.session_snapshot(), before);
+        assert_eq!(app.command_manifest(), commands);
     }
 
     #[test]
