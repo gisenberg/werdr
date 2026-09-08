@@ -9,7 +9,7 @@ import { NdjsonDecoder } from './ndjson.ts';
 import { command, environment, isWindows, type Machine } from './herdr.ts';
 
 export type NativeEvent = { event: string; data: any };
-export interface Subscription { type: string; pane_id?: string }
+export interface Subscription { type: string; pane_id?: string; include_git_status?: boolean }
 interface Channel { receive(value: any): void; closed(error: Error): void; close(): void }
 interface Transport { open(id: string, request: object, channel: Omit<Channel, 'close'>): () => void; close(): void }
 export class NativeApiError extends Error {
@@ -17,7 +17,7 @@ export class NativeApiError extends Error {
 }
 export interface NativeEndpoint {
   version: string;
-  capabilities?: { semantic_notifications?: boolean };
+  capabilities?: { semantic_notifications?: boolean; workspace_git_status?: boolean };
   request(method: string, params?: object): Promise<any>;
   subscribe(subscriptions: Subscription[], receive: (event: NativeEvent) => void, closed: (error: Error) => void): Promise<() => void>;
   close(): void;
@@ -125,7 +125,7 @@ export async function nativeEndpoint(machine: Machine): Promise<NativeEndpoint> 
   }
   return {
     version: status.server.version || '',
-    capabilities: { semantic_notifications: status.server.capabilities?.semantic_notifications === true },
+    capabilities: { workspace_git_status: status.server.capabilities?.workspace_git_status === true, semantic_notifications: status.server.capabilities?.semantic_notifications === true },
     request(method, params = {}) {
       return new Promise((resolve, reject) => {
         let close = () => {};

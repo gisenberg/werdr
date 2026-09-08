@@ -21,7 +21,12 @@ pub enum Subscription {
     #[serde(rename = "workspace.created")]
     WorkspaceCreated {},
     #[serde(rename = "workspace.updated")]
-    WorkspaceUpdated {},
+    WorkspaceUpdated {
+        /// Requires the workspace_git_status capability; holds Git refresh interest
+        /// until this subscription disconnects, independently of native UI settings.
+        #[serde(default, skip_serializing_if = "super::is_false")]
+        include_git_status: bool,
+    },
     #[serde(rename = "workspace.metadata_updated")]
     WorkspaceMetadataUpdated {},
     #[serde(rename = "workspace.renamed")]

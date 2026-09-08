@@ -724,6 +724,7 @@ fn success_response_round_trips() {
             protocol: 6,
             capabilities: Some(ServerCapabilities {
                 semantic_notifications: true,
+                workspace_git_status: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
@@ -1481,6 +1482,7 @@ fn semantic_notification_json_subscription_and_optional_capability() {
     let capabilities: ServerCapabilities =
         serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
     assert!(!capabilities.semantic_notifications);
+    assert!(!capabilities.workspace_git_status);
     assert_eq!(
         serde_json::from_value::<SemanticNotificationKind>(serde_json::json!("future_kind"))
             .unwrap(),

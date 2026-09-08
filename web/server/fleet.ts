@@ -95,7 +95,8 @@ export class Fleet extends EventEmitter {
       const api = await this.connect(host.view.machine);
       if (this.stopped || host.epoch !== epoch) { api.close(); return; }
       host.api = api;
-      const subscriptions = api.capabilities?.semantic_notifications ? [...lifecycle, { type: 'notification.semantic' }] : lifecycle;
+      const metadata = lifecycle.map(subscription => subscription.type === 'workspace.updated' && api.capabilities?.workspace_git_status ? { ...subscription, include_git_status: true } : subscription);
+      const subscriptions = api.capabilities?.semantic_notifications ? [...metadata, { type: 'notification.semantic' }] : metadata;
       await api.subscribe(subscriptions, event => { if (host.epoch === epoch) this.event(host, event); }, error => { if (host.epoch === epoch) this.fail(host, error); });
       if (host.epoch !== epoch) return;
       host.view = { ...host.view, version: api.version };

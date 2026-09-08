@@ -1,6 +1,7 @@
 #[derive(Clone, Default)]
 pub struct EventHub {
     inner: std::sync::Arc<std::sync::Mutex<EventHubState>>,
+    workspace_git_interests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -115,6 +116,29 @@ impl EventHub {
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
             });
         delivered
+    }
+}
+
+/// Keeps periodic Git metadata refresh active only for this subscription's lifetime.
+pub(crate) struct WorkspaceGitInterest(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for WorkspaceGitInterest {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl EventHub {
+    pub(crate) fn workspace_git_interest(&self) -> WorkspaceGitInterest {
+        self.workspace_git_interests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        WorkspaceGitInterest(self.workspace_git_interests.clone())
+    }
+
+    pub(crate) fn has_workspace_git_interest(&self) -> bool {
+        self.workspace_git_interests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
     }
 }
 

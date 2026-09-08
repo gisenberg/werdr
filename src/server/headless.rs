@@ -608,7 +608,7 @@ impl HeadlessServer {
                 .next_headless_loop_deadline_with_git_refresh(
                     now,
                     needs_render,
-                    self.has_app_client(),
+                    self.has_app_client() || self.app.event_hub.has_workspace_git_interest(),
                 )
                 .map(|deadline| deadline.min(now + CLIENT_ACCEPT_POLL_INTERVAL))
                 .or(Some(now + CLIENT_ACCEPT_POLL_INTERVAL));
@@ -3348,7 +3348,7 @@ impl HeadlessServer {
             }
         }
 
-        if self.has_app_client() {
+        if self.has_app_client() || self.app.event_hub.has_workspace_git_interest() {
             self.app.start_git_status_refresh_if_due(now);
         }
 

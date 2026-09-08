@@ -13,7 +13,7 @@ async function until(check: () => boolean) {
 }
 class Endpoint implements NativeEndpoint {
   version = 'fixture'; closed = false;
-  capabilities?: { semantic_notifications?: boolean };
+  capabilities?: { semantic_notifications?: boolean; workspace_git_status?: boolean };
   listeners: { subscriptions: Subscription[]; receive(event: NativeEvent): void; fail(error: Error): void }[] = [];
   snapshot = { ...emptySnapshot(), version: 'fixture', workspaces: [{ workspace_id: 'w:1', label: 'Workspace', agent_status: 'working' as AgentStatus }], tabs: [{ workspace_id: 'w:1', tab_id: 't:1', label: 'Tab' }], panes: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus }], agents: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus, agent: 'Claude', state_change_seq: 1 }] };
   async request(method: string) { assert.equal(method, 'session.snapshot'); return { snapshot: structuredClone(this.snapshot) }; }
@@ -278,5 +278,17 @@ test('native view subscriptions are capability gated and refresh after definitio
     await until(() => fleet.state().hosts[0].snapshot?.agent_view?.definition?.label === 'Focus');
     assert.deepEqual(fleet.state().hosts[0].snapshot!.agent_view!.pane_ids, []);
     assert.equal(fleet.state().notices.length, 0);
+  } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('Git refresh interest is requested only from explicitly capable endpoints', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-workspace-git-'));
+  const old = new Endpoint(), current = new Endpoint(); current.capabilities = { workspace_git_status: true };
+  const fleet = new Fleet(async () => [{ id: 'old', label: 'Old', enabled: true }, { id: 'current', label: 'Current', enabled: true }], join(directory, 'notices.json'), async machine => machine.id === 'old' ? old : current);
+  try {
+    await fleet.start(); await until(() => old.listeners.length === 2 && current.listeners.length === 2);
+    const subscription = (endpoint: Endpoint) => endpoint.listeners.flatMap(listener => listener.subscriptions).find(item => item.type === 'workspace.updated');
+    assert.deepEqual(subscription(old), { type: 'workspace.updated' });
+    assert.deepEqual(subscription(current), { type: 'workspace.updated', include_git_status: true });
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });

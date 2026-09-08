@@ -278,6 +278,7 @@ struct ServerStatusJson {
 #[derive(Serialize)]
 struct ServerCapabilitiesJson {
     semantic_notifications: bool,
+    workspace_git_status: bool,
     live_handoff: bool,
     detached_server_daemon: bool,
     endpoint_protocol_generation: Option<u32>,
@@ -322,6 +323,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                 .as_ref()
                 .map(|capabilities| ServerCapabilitiesJson {
                     semantic_notifications: capabilities.semantic_notifications,
+                    workspace_git_status: capabilities.workspace_git_status,
                     live_handoff: capabilities.live_handoff,
                     detached_server_daemon: capabilities.detached_server_daemon,
                     endpoint_protocol_generation: capabilities.endpoint_protocol_generation,
@@ -414,6 +416,7 @@ mod tests {
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
             capabilities: Some(crate::api::schema::ServerCapabilities {
                 semantic_notifications: true,
+                workspace_git_status: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,

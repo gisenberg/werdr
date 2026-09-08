@@ -181,7 +181,10 @@ Unknown Git metadata stays absent, while known zero ahead/behind counts remain d
 Schema compatibility tests cover older endpoints without these fields, and native projection tests preserve manual labels while exposing branch and count changes.
 Shared browser validation now supports native workspace tokens, `$custom` metadata, row gaps, styles, and first-match rules without changing existing agent rows.
 The workspace row renderer and settings editor remain outstanding.
-Browser Git-refresh interest must be independent of the native sidebar layout before the row feature is complete; the current native refresh demand still follows its configured sidebar tokens.
+The candidate advertises `workspace_git_status`; capable clients request `include_git_status` on their existing `workspace.updated` subscription to keep the shared background Git refresh active independently of native sidebar settings.
+Connection-scoped interest is released on disconnect, and changed cached Git facts publish workspace updates without terminal attachment or per-request Git commands.
+Older endpoints receive the original subscription shape and continue to omit unknown Git facts.
+Native checks cover shared interest lifetime, headless refresh without terminal clients, unchanged-refresh event suppression, and changed workspace updates; gateway tests cover capability negotiation.
 
 ## Native runtime rollout gate
 

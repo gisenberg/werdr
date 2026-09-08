@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Supports include_git_status on workspace.updated subscriptions.
+    #[serde(default)]
+    pub workspace_git_status: bool,
     /// Supports opt-in ephemeral semantic notification subscriptions.
     #[serde(default)]
     pub semantic_notifications: bool,

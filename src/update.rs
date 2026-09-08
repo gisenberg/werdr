@@ -2848,6 +2848,7 @@ mod tests {
             protocol: Some(2),
             capabilities: Some(crate::api::schema::ServerCapabilities {
                 semantic_notifications: true,
+                workspace_git_status: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
@@ -2924,6 +2925,7 @@ mod tests {
                 protocol: Some(76),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     semantic_notifications: true,
+                    workspace_git_status: true,
                     live_handoff: true,
                     detached_server_daemon: true,
                     endpoint_protocol_generation: Some(
@@ -3184,6 +3186,7 @@ mod tests {
                 protocol: Some(76),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     semantic_notifications: true,
+                    workspace_git_status: true,
                     live_handoff: true,
                     detached_server_daemon: true,
                     endpoint_protocol_generation: Some(

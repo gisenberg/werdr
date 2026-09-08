@@ -67,6 +67,7 @@ pub(crate) fn start_server_with_stop_control(
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
         semantic_notifications: true,
+        workspace_git_status: true,
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
@@ -1146,6 +1147,7 @@ mod tests {
             &tx,
             Some(ServerCapabilities {
                 semantic_notifications: true,
+                workspace_git_status: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(

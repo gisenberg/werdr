@@ -65,9 +65,35 @@ impl App {
         } else {
             self.last_git_remote_status_refresh = Instant::now();
         }
+        // Compare cached workspace facts without filesystem reads or terminal snapshots.
+        let facts = |workspace: &crate::workspace::Workspace| {
+            (
+                workspace
+                    .custom_name
+                    .as_ref()
+                    .unwrap_or(&workspace.cached_auto_label)
+                    .clone(),
+                workspace.branch(),
+                workspace.git_ahead_behind(),
+                workspace.worktree_space.clone(),
+            )
+        };
+        let before: Vec<_> = self.state.workspaces.iter().map(facts).collect();
         let changed = self
             .state
             .apply_workspace_git_statuses(&self.terminal_runtimes, results);
+        if changed {
+            for (index, previous) in before.into_iter().enumerate() {
+                if previous != facts(&self.state.workspaces[index]) {
+                    self.event_hub.push(crate::api::schema::EventEnvelope {
+                        event: crate::api::schema::EventKind::WorkspaceUpdated,
+                        data: crate::api::schema::EventData::WorkspaceUpdated {
+                            workspace: self.workspace_info(index),
+                        },
+                    });
+                }
+            }
+        }
         if changed {
             self.render_dirty.request_generic();
             self.render_notify.notify_one();

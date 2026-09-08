@@ -3553,6 +3553,12 @@ fn unchanged_git_refresh_does_not_request_headless_render() {
 
     assert!(!changed);
     assert!(!server.app.git_refresh_in_flight);
+    assert!(!server
+        .app
+        .event_hub
+        .events_after(0)
+        .iter()
+        .any(|(_, event)| event.event == crate::api::schema::EventKind::WorkspaceUpdated));
 }
 
 #[test]
@@ -3578,6 +3584,19 @@ fn changed_git_refresh_requests_headless_render() {
     });
 
     assert!(changed);
+    let updates: Vec<_> = server
+        .app
+        .event_hub
+        .events_after(0)
+        .into_iter()
+        .filter(|(_, event)| event.event == crate::api::schema::EventKind::WorkspaceUpdated)
+        .collect();
+    assert_eq!(updates.len(), 1);
+    let crate::api::schema::EventData::WorkspaceUpdated { workspace } = &updates[0].1.data else {
+        panic!("workspace update payload expected")
+    };
+    assert_eq!(workspace.branch.as_deref(), Some("changed"));
+    assert_eq!(workspace.workspace_id, server.app.public_workspace_id(0));
 }
 
 #[tokio::test]
@@ -6462,4 +6481,24 @@ fn semantic_notification_report_agent_idle_projects_unseen_done() {
     );
     assert!(subscription.poll().is_none());
     assert!(server.clients.is_empty());
+}
+
+#[test]
+fn workspace_git_interest_refreshes_without_an_attached_application_client() {
+    let mut server = test_headless_server();
+    server.app.state.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
+    server
+        .app
+        .state
+        .workspaces
+        .push(crate::workspace::Workspace::test_new("metadata-only"));
+    assert!(!server.has_app_client());
+    server.handle_scheduled_tasks_headless(Instant::now(), false);
+    assert!(!server.app.git_refresh_in_flight);
+    let interest = server.app.event_hub.workspace_git_interest();
+    server.handle_scheduled_tasks_headless(Instant::now(), false);
+    assert!(server.app.git_refresh_in_flight);
+    assert!(!server.has_app_client());
+    assert!(server.clients.is_empty());
+    drop(interest);
 }

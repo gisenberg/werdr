@@ -4435,6 +4435,10 @@
             },
             {
               "properties": {
+                "include_git_status": {
+                  "description": "Requires the workspace_git_status capability; holds Git refresh interest\nuntil this subscription disconnects, independently of native UI settings.",
+                  "type": "boolean"
+                },
                 "type": {
                   "const": "workspace.updated",
                   "type": "string"
@@ -11480,6 +11484,11 @@
             "surface_interest": {
               "default": false,
               "description": "Whether this server supports explicit client-shell surface interest.",
+              "type": "boolean"
+            },
+            "workspace_git_status": {
+              "default": false,
+              "description": "Supports include_git_status on workspace.updated subscriptions.",
               "type": "boolean"
             }
           },

@@ -92,6 +92,7 @@ impl PanePresentationSnapshot {
 }
 
 pub(super) struct ActiveEventSubscription {
+    _git_interest: Option<crate::api::event_hub::WorkspaceGitInterest>,
     event_kind: crate::api::schema::EventKind,
     last_sequence: u64,
 }
@@ -115,6 +116,7 @@ impl ActiveSubscription {
     ) -> Result<Self, ErrorResponse> {
         let event_subscription = |event_kind| {
             Self::Event(ActiveEventSubscription {
+                _git_interest: None,
                 event_kind,
                 last_sequence: event_start_sequence,
             })
@@ -127,8 +129,12 @@ impl ActiveSubscription {
             Subscription::WorkspaceCreated {} => {
                 Ok(event_subscription(EventKind::WorkspaceCreated))
             }
-            Subscription::WorkspaceUpdated {} => {
-                Ok(event_subscription(EventKind::WorkspaceUpdated))
+            Subscription::WorkspaceUpdated { include_git_status } => {
+                Ok(Self::Event(ActiveEventSubscription {
+                    _git_interest: include_git_status.then(|| event_hub.workspace_git_interest()),
+                    event_kind: EventKind::WorkspaceUpdated,
+                    last_sequence: event_start_sequence,
+                }))
             }
             Subscription::WorkspaceMetadataUpdated {} => {
                 Ok(event_subscription(EventKind::WorkspaceMetadataUpdated))
@@ -881,5 +887,49 @@ mod tests {
         };
         assert_eq!(data.title.as_deref(), Some("short lived"));
         assert!(subscription.initial_event.is_none());
+    }
+}
+
+#[cfg(test)]
+mod git_interest_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_git_interest_is_opt_in_shared_and_released_with_the_subscription() {
+        let hub = EventHub::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let subscribe = |include_git_status| {
+            ActiveSubscription::new(
+                Subscription::WorkspaceUpdated { include_git_status },
+                "git",
+                0,
+                &tx,
+                &hub,
+                0,
+            )
+            .unwrap()
+        };
+        let ordinary = subscribe(false);
+        assert!(!hub.has_workspace_git_interest());
+        let first = subscribe(true);
+        let second = subscribe(true);
+        assert!(hub.clone().has_workspace_git_interest());
+        drop(first);
+        assert!(hub.has_workspace_git_interest());
+        drop(second);
+        assert!(!hub.has_workspace_git_interest());
+        drop(ordinary);
+        assert!(!hub.has_workspace_git_interest());
+        let legacy: Subscription = serde_json::from_str(r#"{"type":"workspace.updated"}"#).unwrap();
+        assert_eq!(
+            legacy,
+            Subscription::WorkspaceUpdated {
+                include_git_status: false
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            r#"{"type":"workspace.updated"}"#
+        );
     }
 }

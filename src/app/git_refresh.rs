@@ -100,7 +100,11 @@ impl App {
     }
 
     fn git_refresh_demand(&self) -> GitStatusRefreshDemand {
-        let mut demand = GitStatusRefreshDemand::default();
+        let mut demand = if self.event_hub.has_workspace_git_interest() {
+            GitStatusRefreshDemand::ALL
+        } else {
+            GitStatusRefreshDemand::default()
+        };
         for token in self.state.sidebar_spaces.rows.iter().flatten() {
             match token.parts().0 {
                 crate::config::SpaceSidebarToken::Branch => demand.branch = true,
@@ -373,6 +377,23 @@ mod tests {
         app.start_git_status_refresh_if_due(now);
         assert!(app.git_refresh_in_flight);
         assert!(!app.git_identity_refresh_requested);
+    }
+
+    #[test]
+    fn api_git_interest_requests_both_fields_without_changing_native_sidebar_settings() {
+        let mut config = crate::config::Config::default();
+        config.ui.sidebar.spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
+        let mut app = test_app(&config);
+        app.state.workspaces.push(Workspace::test_new("test"));
+        let rows = app.state.sidebar_spaces.clone();
+        assert!(app.git_refresh_demand().is_empty());
+        let interest = app.event_hub.workspace_git_interest();
+        assert_eq!(app.git_refresh_demand(), GitStatusRefreshDemand::ALL);
+        assert!(app.git_refresh_deadline().is_some());
+        assert_eq!(app.state.sidebar_spaces, rows);
+        drop(interest);
+        assert!(app.git_refresh_demand().is_empty());
+        assert_eq!(app.git_refresh_deadline(), None);
     }
 
     #[test]
