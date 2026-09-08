@@ -115,3 +115,34 @@ test('group preference saves preserve concurrent settings and recover from confl
     await expect(row(page, child)).toBeVisible(); expect(await terminal!.evaluate(node => node.isConnected)).toBe(true);
   } finally { await runtime.close(); }
 });
+
+test('workspace selection reveals crowded groups while metadata preserves manual scrolling and phones reveal on drawer open', async ({ page }) => {
+  const runtime = await fixture();
+  try {
+    const repo = await repository(runtime.directory); await login(page, runtime);
+    const parent = (await action(page, runtime.url, { action: 'worktree.open', cwd: repo, path: repo, label: 'Reveal parent' })).root_pane.workspace_id;
+    let child = '';
+    for (let index = 0; index < 2; index++) child = (await action(page, runtime.url, { action: 'worktree.create', cwd: repo, path: join(runtime.directory, 'child-' + index), branch: 'child-' + index, label: 'Reveal child ' + index })).root_pane.workspace_id;
+    await action(page, runtime.url, { action: 'workspace.create', label: 'Unrelated workspace' });
+    const latest = await (await page.request.get(runtime.url + '/api/settings')).json();
+    const changed = await page.request.post(runtime.url + '/api/settings', { headers: { Origin: runtime.url }, data: { revision: latest.revision, preferences: { ...latest.preferences, sidebarSectionPercent: 25 } } }); expect(changed.ok()).toBe(true);
+    await page.reload(); await expect(page.locator('#shield')).toBeHidden();
+    const navigate = async (id: string) => { await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('local/' + id + ';'); await expect(page.locator('#command-list button')).toHaveCount(1); await page.keyboard.press('Enter'); await expect(page.locator('#shield')).toBeHidden(); };
+    const visible = (id: string, scroller = 'workspaces') => row(page, id).evaluate((node, scroller) => {
+      const rect = node.getBoundingClientRect(), parent = document.getElementById(scroller)!, viewport = parent.getBoundingClientRect();
+      return rect.top >= viewport.top + parent.clientTop - 1 && rect.bottom <= viewport.top + parent.clientTop + parent.clientHeight + 1;
+    }, scroller);
+    await navigate(child); await expect.poll(() => visible(child)).toBe(true);
+    const retained = await page.locator('.pane-active textarea').elementHandle();
+    await page.locator('#workspaces').evaluate(node => { node.scrollTop = 0; }); expect(await visible(child)).toBe(false);
+    await action(page, runtime.url, { action: 'workspace.rename', id: parent, label: 'Metadata refresh' }); await expect(row(page, parent)).toContainText('Metadata refresh');
+    expect(await page.locator('#workspaces').evaluate(node => node.scrollTop)).toBe(0); expect(await retained!.evaluate(node => node.isConnected)).toBe(true);
+    await navigate(parent); await expect.poll(() => visible(parent)).toBe(true); await navigate(child); await expect.poll(() => visible(child)).toBe(true);
+    await page.reload(); await expect(page.locator('#shield')).toBeHidden(); await expect.poll(() => visible(child)).toBe(true);
+    await page.screenshot({ path: 'test-results/workspace-groups-reveal-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 440 }); await page.locator('#host-toggle').click(); await expect.poll(() => visible(child, 'rail')).toBe(true);
+    await page.locator('#rail').evaluate(node => { node.scrollTop = 0; }); await page.locator('#host-toggle').click(); await page.locator('#host-toggle').click(); await expect.poll(() => visible(child, 'rail')).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: 'test-results/workspace-groups-reveal-mobile.png' });
+  } finally { await runtime.close(); }
+});

@@ -55,6 +55,7 @@ function rememberSelection() {
 let authenticated = false, refreshing = false, refreshAgain = false;
 let interactionRevision = 0;
 const pendingGroups = new Set<string>();
+let revealedWorkspace: string | undefined;
 let closingFocus: { machine: string; workspace: string; tab: string } | undefined;
 for (const type of ['pointerdown', 'keydown', 'paste', 'focusin']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
 let gatewayOnline = false;
@@ -143,6 +144,7 @@ function renderFleetNavigation() {
     const workspace = entry.workspace;
     return { id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace' as const, machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, prefix: entry.indented ? entry.lastChild ? '└─ ' : '├─ ' : '', group: entry.group, badge: host.connection === 'online' ? entry.status.toUpperCase() : host.connection.toUpperCase(), active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, title: `${host.machine.label} / ${workspace.label || workspace.workspace_id}${workspace.worktree ? '\n' + workspace.worktree.checkout_path : ''}${entry.group ? '\n' + entry.group.members.length + ' workspaces in group' : ''}`, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') };
   })));
+  revealWorkspaceSelection();
   const filter = element<HTMLSelectElement>('agent-filter').value;
   const rank = (status: string) => status === 'blocked' ? 0 : status === 'working' ? 1 : 2;
   const agents = fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).map(agent => ({ host, agent })))
@@ -174,6 +176,20 @@ async function toggleWorkspaceGroup(key: string, collapsed: boolean) {
   catch (error) { failure = (error as Error).message; }
   finally { pendingGroups.delete(key); renderFleetNavigation(); }
   if (failure) status(`[ERROR] ${failure}`);
+}
+function revealWorkspaceSelection(force = false) {
+  const nav = element('workspaces'), selected = nav.querySelector<HTMLButtonElement>('button[data-id].active');
+  const mobile = innerWidth <= 700, scroller = mobile ? element('rail') : nav;
+  if (!selected) { revealedWorkspace = undefined; return; }
+  const identity = JSON.stringify([machineId, workspaceId, element<HTMLInputElement>('fleet-search').value, mobile]);
+  // Metadata refreshes must preserve deliberate scrolling away from the active row.
+  if (!force && revealedWorkspace === identity) return;
+  if (!scroller.clientHeight) { revealedWorkspace = undefined; return; }
+  revealedWorkspace = identity;
+  const viewport = scroller.getBoundingClientRect(), row = selected.getBoundingClientRect();
+  const top = viewport.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+  if (row.top < top) scroller.scrollTop += row.top - top;
+  else if (row.bottom > bottom) scroller.scrollTop += row.bottom - bottom;
 }
 function navigation(id: string, items: NavigationItem[]) {
   const parent = element(id);
@@ -494,11 +510,12 @@ async function start() {
   else boot.requireAuthentication();
 }
 function closeRail() { app.classList.remove('hosts-open'); element('host-toggle').setAttribute('aria-expanded', 'false'); }
-element('host-toggle').onclick = () => { const open = app.classList.toggle('hosts-open'); element('host-toggle').setAttribute('aria-expanded', String(open)); };
+element('host-toggle').onclick = () => { const open = app.classList.toggle('hosts-open'); element('host-toggle').setAttribute('aria-expanded', String(open)); if (open) revealWorkspaceSelection(true); };
 function viewport() {
   const height = visualViewport?.height || innerHeight;
   document.documentElement.style.setProperty('--viewport', `${height}px`);
   app.classList.toggle('keyboard-open', innerWidth <= 700 && height < innerHeight * .75);
+  revealWorkspaceSelection(true);
 }
 visualViewport?.addEventListener('resize', viewport); viewport();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh(); });

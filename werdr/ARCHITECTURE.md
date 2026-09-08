@@ -78,6 +78,7 @@ Host identity is pinned across in-flight operations, and disabling/removing a ho
 Workspace grouping consumes native `WorkspaceInfo.worktree` repository membership, without inferring groups from display labels or checkout paths.
 Groups keep the native parent-first ordering, retain the selected child when collapsed, and aggregate collapsed status using native attention priority.
 Search can reveal matching hidden children without changing the saved collapse preference.
+Selecting a workspace reveals its row within the desktop workspace section or phone drawer, while ordinary metadata updates preserve manual scrolling.
 Collapse state is browser chrome stored in version-six preferences, keyed by machine ID, SSH target, named session, and repository key.
 Navigation saves preserve other preferences through revision checks and recover the authoritative state after a conflict.
 Contextual worktree actions retain the clicked workspace and host even when another pane is active.

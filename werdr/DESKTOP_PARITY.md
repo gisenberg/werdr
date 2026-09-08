@@ -43,6 +43,7 @@ Dark and light pixel assertions check the painted selection background, while na
 The image-capable companion uses the existing native clipboard message and is tested against the pinned old runtime; it does not require a native runtime replacement.
 `web/test/workspace-groups.spec.ts` verifies native repository groups, active-child retention, keyboard and pointer collapse/expand, search, gateway restart, concurrent settings, scoped worktree creation/opening/deletion, dirty-checkout protection, explicit group closure, retained unrelated terminals, and desktop/phone geometry.
 Group closure preserves checkouts; deletion remains a separate native action.
+The crowded-rail test also verifies that selection and drawer opening reveal the active worktree, while metadata refreshes preserve manual scrolling and terminal identity.
 Unit cases cover native status priority, missing parents, native ordering, duplicate labels, and host/target/session isolation.
 Plugin selection context is read from the same revision-checked native range before actions become available.
 `web/test/plugin-install.spec.ts` exercises real native Git checkouts, declined previews without build execution, explicit installation, action execution, failed replacement, managed uninstall with preserved user configuration, browser reload, session revocation, gateway restart, and independent-browser isolation.
