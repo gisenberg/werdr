@@ -46,3 +46,21 @@ Native rollout and live verification for these new scrollbars remain outstanding
 Test native capability failures and remote isolation rather than masking unsupported operations as success.
 Run the package check and relevant browser tests during editing, then the full archive deployment checks and live verification before completion.
 Keep this matrix incomplete until each row has direct evidence.
+
+## Native runtime rollout gate
+
+The scrollbar screen-mode metadata requires a new server runtime; updating the terminal companion alone cannot provide it.
+Keep the optional-capability fallback until the owning runtime advertises the field.
+A gateway restart and a native runtime replacement have different process-lifetime consequences.
+
+The current native live handoff is not evidence of a lossless upgrade.
+`src/server/handoff.rs` limits exported history to 8 KiB per pane, and `PaneRuntime::handoff_history_ansi()` omits alternate-screen history.
+The headless lifecycle also omits this history for panes with persisted agent sessions.
+The handoff implementation transfers Unix file descriptors and does not provide a Windows ConPTY transfer path.
+Service supervision must preserve both the imported runtime and existing shell processes when the exporting runtime exits; moving only the new runtime outside a service control group is insufficient.
+
+Do not replace these checks with a pane-count check followed by `server.stop`.
+The existing stop method has no atomic idle condition, so a concurrent native client can create a pane between observation and shutdown.
+An idle-only upgrade needs a separately advertised server operation that rejects new creation while committing shutdown, with compatibility rejection on older runtimes.
+Before adopting a live transfer, verify process identity, workspace/tab/pane identity, complete retained history, primary and alternate screens, pending output, input, and supervisor recovery in an isolated service instance.
+Until those conditions are established on each target platform, native rollout remains outstanding even when isolated feature tests pass.
