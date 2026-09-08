@@ -19,7 +19,10 @@ async function create(page: Page) {
 const action = (page: Page, id: string, data: object) => page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', id, ...data } });
 async function paint(page: Page, id: string, text: string) {
   await runtime.cli('pane', 'send-text', id, `printf '\\033[2J\\033[H${text}\\n'\n`);
-  await expect.poll(() => runtime.cli('pane', 'read', id, '--source', 'visible')).toContain(text.includes('033]8') ? 'CLICK_LINK' : text);
+  // The shell's echoed printf command also contains the label. Wait for the
+  // actual first-row output, because that is where the pointer will click.
+  const label = text.includes('033]8') ? 'CLICK_LINK' : text;
+  await expect.poll(async () => (await runtime.cli('pane', 'read', id, '--source', 'visible')).split('\n')[0].trimEnd()).toBe(label);
   // A native copy-mode acquisition confirms the delivered browser frame matches.
   await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: 'Terminal: copy mode (native scrollback)', exact: true }).click();
   await expect(page.locator('.copy-status')).toContainText(/COPY \d+:/); await page.keyboard.press('q');
