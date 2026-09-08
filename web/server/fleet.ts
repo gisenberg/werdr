@@ -2,7 +2,8 @@ import { PaneScrollWatch } from './pane-scroll-watch.ts';
 import type { ScrollState } from '../shared/scrollbar.ts';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import type { Agent, AgentStatus, FleetEvent, FleetState, HostView, Machine, Notice, Snapshot } from '../shared/fleet.ts';
+import { noticeEndpointKey, type Agent, type FleetEvent, type FleetState, type HostView, type Machine, type Notice, type Snapshot } from '../shared/fleet.ts';
+import { readNotices, semanticNotice } from './notices.ts';
 import { nativeEndpoint, NativeApiError, type NativeEndpoint, type NativeEvent, type Subscription } from './native-api.ts';
 import { readPrivateJson, writePrivateJson } from './private-json.ts';
 
@@ -31,11 +32,9 @@ export class Fleet extends EventEmitter {
   private connecting = 0;
   constructor(private readonly catalog: () => Promise<Machine[]>, private readonly noticePath: string, private readonly connect = nativeEndpoint) { super(); }
   async start() {
-    const stored = await readPrivateJson(this.noticePath) as any;
-    if (stored !== undefined) {
-      if (stored.version !== 1 || !Array.isArray(stored.notices) || stored.notices.length > 256 || stored.notices.some((notice: any) => !notice || typeof notice.id !== 'string' || typeof notice.created !== 'number' || typeof notice.read !== 'boolean' || !['attention', 'finished'].includes(notice.kind) || ['machineId', 'machineLabel', 'paneId', 'workspaceId', 'tabId', 'title', 'body'].some(key => typeof notice[key] !== 'string' || notice[key].length > 1024))) throw new Error('Invalid fleet notification store');
-      this.notices = stored.notices;
-    }
+    const stored = await readPrivateJson(this.noticePath);
+    this.notices = readNotices(stored);
+    if ((stored as { version?: number } | undefined)?.version === 1) await writePrivateJson(this.noticePath, { version: 2, notices: this.notices });
     await this.reloadCatalog();
     this.catalogTimer = setInterval(() => { void this.reloadCatalog().catch(error => this.emit('diagnostic', error)); }, 2000); this.catalogTimer.unref();
   }
@@ -88,13 +87,14 @@ export class Fleet extends EventEmitter {
     if (this.stopped || !host.view.machine.enabled || !this.hosts.has(host.view.machine.id)) return;
     // Bound concurrent SSH handshakes without allowing one failed host to stall others.
     if (this.connecting >= 4) { this.schedule(host, 200); return; }
-    const epoch = ++host.epoch; this.connecting++;
+    const epoch = ++host.epoch; this.connecting++; host.baseline = false;
     host.view = { ...host.view, connection: 'connecting', connectionGeneration: randomBytes(16).toString('hex'), detail: undefined, retryAt: undefined }; this.publishHost(host);
     try {
       const api = await this.connect(host.view.machine);
       if (this.stopped || host.epoch !== epoch) { api.close(); return; }
       host.api = api;
-      await api.subscribe(lifecycle, event => { if (host.epoch === epoch) this.event(host, event); }, error => { if (host.epoch === epoch) this.fail(host, error); });
+      const subscriptions = api.capabilities?.semantic_notifications ? [...lifecycle, { type: 'notification.semantic' }] : lifecycle;
+      await api.subscribe(subscriptions, event => { if (host.epoch === epoch) this.event(host, event); }, error => { if (host.epoch === epoch) this.fail(host, error); });
       if (host.epoch !== epoch) return;
       host.view = { ...host.view, version: api.version };
       await this.refreshHost(host);
@@ -110,6 +110,13 @@ export class Fleet extends EventEmitter {
     finally { this.connecting--; }
   }
   private event(host: Host, event: NativeEvent) {
+    if (event.event === 'notification.semantic') {
+      if (host.api?.capabilities?.semantic_notifications) {
+        const notice = semanticNotice(event.data, host.view.machine);
+        if (notice) this.recordNotice(host, notice);
+      }
+      return;
+    }
     host.eventSequence++;
     if (event.event === 'pane.agent_status_changed') {
       const data = event.data;
@@ -184,19 +191,29 @@ export class Fleet extends EventEmitter {
     } finally { if (host.epoch === epoch) host.watching = false; }
   }
   private transition(host: Host, previous: Agent, next: Agent) {
+    if (host.api?.capabilities?.semantic_notifications) return;
     if (previous.agent_status === next.agent_status || previous.terminal_id !== next.terminal_id) return;
-    const completion = ['idle', 'done'].includes(next.agent_status) && (['working', 'blocked'].includes(previous.agent_status) || (previous.agent_status === 'unknown' && !!previous.agent && previous.agent === next.agent));
+    const previousLabel = previous.display_agent || previous.agent, nextLabel = next.display_agent || next.agent;
+    const completion = next.agent_status === 'done' && (['working', 'blocked'].includes(previous.agent_status) || (previous.agent_status === 'unknown' && !!previousLabel && previousLabel === nextLabel));
     const kind = next.agent_status === 'blocked' ? 'attention' : completion ? 'finished' : undefined;
     if (!kind) return;
     const name = next.name || next.display_agent || next.agent || next.title || next.pane_id;
-    const notice: Notice = { id: randomBytes(16).toString('hex'), machineId: host.view.machine.id, machineLabel: host.view.machine.label, paneId: next.pane_id, workspaceId: next.workspace_id, tabId: next.tab_id, title: kind === 'attention' ? `${name} needs attention` : `${name} finished`, body: `${host.view.machine.label} / ${next.workspace_id} / ${next.pane_id}`, kind, created: Date.now(), read: false };
-    void this.updateNotices(notices => { notices.unshift(notice); notices.splice(256); }, notice).catch(error => this.emit('diagnostic', error));
+    const notice: Notice = { id: randomBytes(16).toString('hex'), machineId: host.view.machine.id, machineLabel: host.view.machine.label, endpointKey: noticeEndpointKey(host.view.machine), terminalId: next.terminal_id, paneId: next.pane_id, workspaceId: next.workspace_id, tabId: next.tab_id, title: kind === 'attention' ? `${name} needs attention` : `${name} finished`, body: `${host.view.machine.label} / ${next.workspace_id} / ${next.pane_id}`, kind, sound: kind === 'attention' ? 'request' : 'done', ...(next.agent ? { agent: next.agent } : {}), created: Date.now(), read: false };
+    this.recordNotice(host, notice);
   }
-  private updateNotices(change: (notices: Notice[]) => void, added?: Notice) {
+  private recordNotice(host: Host, notice: Notice) {
+    const epoch = host.epoch;
+    const current = () => !this.stopped && host.epoch === epoch && this.hosts.get(host.view.machine.id) === host;
+    void this.updateNotices(notices => { notices.unshift(notice); notices.splice(256); }, notice, current).catch(error => this.emit('diagnostic', error));
+  }
+  private updateNotices(change: (notices: Notice[]) => void, added?: Notice, current = () => !this.stopped) {
     const task = this.noticeQueue.then(async () => {
+      if (!current()) return;
       const notices = this.notices.map(notice => ({ ...notice })); change(notices);
-      await writePrivateJson(this.noticePath, { version: 1, notices }); this.notices = notices;
-      this.publish({ type: 'fleet.notices', notices, ...(added ? { added } : {}) });
+      await writePrivateJson(this.noticePath, { version: 2, notices }); this.notices = notices;
+      // History survives a disconnect during disk I/O, but its delayed write
+      // must not become a new alert from a retired endpoint.
+      this.publish({ type: 'fleet.notices', notices, ...(added && current() ? { added } : {}) });
     });
     this.noticeQueue = task.catch(() => {}); return task;
   }

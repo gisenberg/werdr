@@ -97,6 +97,7 @@ pub(super) struct ActiveEventSubscription {
 }
 
 pub(super) enum ActiveSubscription {
+    SemanticNotification(crate::api::event_hub::SemanticNotificationSubscription),
     Event(ActiveEventSubscription),
     OutputMatched(ActiveOutputMatchedSubscription),
     AgentStatusChanged(Box<ActiveAgentStatusChangedSubscription>),
@@ -120,6 +121,9 @@ impl ActiveSubscription {
         };
 
         match subscription {
+            Subscription::NotificationSemantic {} => Ok(Self::SemanticNotification(
+                event_hub.subscribe_semantic_notifications(),
+            )),
             Subscription::WorkspaceCreated {} => {
                 Ok(event_subscription(EventKind::WorkspaceCreated))
             }
@@ -255,6 +259,9 @@ impl ActiveSubscription {
         event_hub: &EventHub,
     ) -> Option<serde_json::Value> {
         match self {
+            Self::SemanticNotification(subscription) => {
+                serde_json::to_value(subscription.poll()?).ok()
+            }
             Self::Event(subscription) => subscription.poll(event_hub),
             Self::OutputMatched(subscription) => {
                 serde_json::to_value(subscription.poll(api_tx)?).ok()

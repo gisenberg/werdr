@@ -5526,7 +5526,12 @@ fn semantic_notifications_broadcast_only_to_client_shells() {
         pane_id: None,
         position: None,
     };
-    assert!(server.send_to_client_shells(ServerMessage::SemanticNotification(event.clone())));
+    let subscription = server.app.event_hub.subscribe_semantic_notifications();
+    assert!(server.send_semantic_notification(event.clone()));
+    let public = serde_json::to_value(subscription.poll().unwrap()).unwrap();
+    assert_eq!(public["data"]["kind"], "custom");
+    assert_eq!(public["data"]["title"], "hello");
+    assert!(subscription.poll().is_none());
     for receiver in [shell_one_control, shell_two_control] {
         assert_eq!(
             read_server_message(
@@ -6290,4 +6295,171 @@ fn no_handle_internal_event_bypass_in_module() {
              handle_internal_event_with_forwarding (bypass risk):\n  {}",
         bypass_lines.join("\n  ")
     );
+}
+
+#[test]
+fn semantic_notification_json_browser_only_lifetime_and_policy() {
+    let mut server = test_headless_server();
+    server.app.state.toast_config.delivery = config::ToastDelivery::Off;
+    let params = api::schema::NotificationShowParams {
+        title: "build: ready".into(),
+        body: Some("details".into()),
+        position: Some(config::ToastHerdrPosition::TopLeft),
+        sound: api::schema::NotificationShowSound::Request,
+    };
+    let response = server.handle_notification_show_api("none".into(), params.clone());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["shown"],
+        false
+    );
+    assert!(server.app.last_api_notification_at.is_none());
+    let subscription = server.app.event_hub.subscribe_semantic_notifications();
+    let response = server.handle_notification_show_api("one".into(), params.clone());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["shown"],
+        true
+    );
+    assert_eq!(
+        serde_json::to_value(subscription.poll().unwrap()).unwrap(),
+        serde_json::json!({
+            "event":"notification.semantic", "data": {
+                "type":"notification_semantic", "kind":"custom", "title":"build: ready",
+                "body":"details", "sound":"request", "agent":null, "workspace_id":null,
+                "tab_id":null,"pane_id":null,"terminal_id":null,"position":"top-left"
+            }
+        })
+    );
+    let response = server.handle_notification_show_api("limited".into(), params.clone());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["reason"],
+        "rate_limited"
+    );
+    assert!(subscription.poll().is_none());
+    drop(subscription);
+    server.app.last_api_notification_at = None;
+    let response = server.handle_notification_show_api("gone".into(), params);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["shown"],
+        false
+    );
+    assert!(server.clients.is_empty());
+    assert!(server.app.last_api_notification_at.is_none());
+}
+
+#[test]
+fn semantic_notification_json_agent_and_update_producers() {
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("active");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .to_string();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    let subscription = server.app.event_hub.subscribe_semantic_notifications();
+    assert!(server.forward_semantic_agent_transition(
+        0,
+        pane_id,
+        crate::detect::AgentState::Working,
+        crate::detect::AgentState::Idle,
+        Some("Claude"),
+        Some("Claude"),
+        Some(crate::detect::Agent::Claude)
+    ));
+    let notification = serde_json::to_value(subscription.poll().unwrap()).unwrap();
+    assert_eq!(notification["data"]["kind"], "finished");
+    assert_eq!(notification["data"]["terminal_id"], terminal_id);
+    assert_eq!(
+        notification["data"]["pane_id"],
+        server.app.public_pane_id(0, pane_id).unwrap()
+    );
+    assert!(!server.forward_semantic_agent_transition(
+        0,
+        pane_id,
+        crate::detect::AgentState::Idle,
+        crate::detect::AgentState::Idle,
+        Some("Claude"),
+        Some("Claude"),
+        Some(crate::detect::Agent::Claude)
+    ));
+    assert!(subscription.poll().is_none());
+    server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
+        version: "9.9.9".into(),
+        install_command: "herdr update".into(),
+    });
+    let notification = serde_json::to_value(subscription.poll().unwrap()).unwrap();
+    assert_eq!(notification["data"]["kind"], "update_installed");
+    assert_eq!(notification["data"]["title"], "Herdr v9.9.9 available");
+    assert!(subscription.poll().is_none());
+}
+
+#[test]
+fn semantic_notification_report_agent_idle_projects_unseen_done() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces = vec![
+        crate::workspace::Workspace::test_new("background"),
+        crate::workspace::Workspace::test_new("active"),
+    ];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(1);
+    let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
+    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
+    let terminal_id = server.app.state.workspaces[0]
+        .terminal_id(pane_id)
+        .unwrap()
+        .to_string();
+    let subscription = server.app.event_hub.subscribe_semantic_notifications();
+    for (seq, state) in [
+        (1, api::schema::PaneAgentState::Working),
+        (2, api::schema::PaneAgentState::Idle),
+    ] {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: format!("report-{seq}"),
+                method: api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
+                    pane_id: public_pane_id.clone(),
+                    source: "custom:pi".into(),
+                    agent: "pi".into(),
+                    state,
+                    message: None,
+                    seq: Some(seq),
+                    agent_session_id: None,
+                    agent_session_path: None,
+                }),
+            },
+            respond_to,
+            response_write_complete: None,
+            stream_active: None,
+        });
+        let response: serde_json::Value =
+            serde_json::from_str(&response_rx.recv_timeout(Duration::from_secs(1)).unwrap())
+                .unwrap();
+        assert_eq!(response["result"]["type"], "ok");
+    }
+    let notification = serde_json::to_value(subscription.poll().unwrap()).unwrap();
+    assert_eq!(notification["data"]["kind"], "finished");
+    assert_eq!(notification["data"]["terminal_id"], terminal_id);
+    assert_eq!(notification["data"]["pane_id"], public_pane_id);
+    let snapshot = server.app.session_snapshot();
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == public_pane_id)
+            .unwrap()
+            .agent_status,
+        api::schema::AgentStatus::Done
+    );
+    assert_eq!(
+        snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == public_pane_id)
+            .unwrap()
+            .agent_status,
+        api::schema::AgentStatus::Done
+    );
+    assert!(subscription.poll().is_none());
+    assert!(server.clients.is_empty());
 }

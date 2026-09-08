@@ -14,7 +14,8 @@ export interface Preferences {
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
   paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
   notificationAttention: boolean; notificationFinished: boolean; notificationSound: boolean;
-  toastSeconds: number; toastPosition: 'top-right' | 'bottom-right'; scrollLines: number;
+  toastSeconds: number; toastPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'; scrollLines: number;
+  toastDelivery: 'off' | 'browser' | 'desktop' | 'both'; toastDelaySeconds: number; toastNativeDuration: boolean;
 }
 export const defaults: Preferences = {
   theme: 'catppuccin', appearance: 'theme', darkTheme: 'catppuccin', lightTheme: 'catppuccin-latte', customColors: {},
@@ -25,7 +26,7 @@ export const defaults: Preferences = {
   shortcuts: defaultShortcuts,
   paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
   notificationAttention: true, notificationFinished: true, notificationSound: false,
-  toastSeconds: 5, toastPosition: 'top-right', scrollLines: 3,
+  toastSeconds: 5, toastPosition: 'bottom-right', toastDelivery: 'off', toastDelaySeconds: 1, toastNativeDuration: true, scrollLines: 3,
 };
 export interface SettingsState { revision: number; preferences: Preferences }
 export class SettingsValidationError extends Error {}
@@ -41,9 +42,9 @@ export function validatePreferences(value: unknown): Preferences {
   catch (error) { throw new SettingsValidationError(`Agent rows: ${(error as Error).message}`); }
   if (!Array.isArray(out.collapsedWorkspaceGroups) || out.collapsedWorkspaceGroups.length > 256 || out.collapsedWorkspaceGroups.some(key => typeof key !== 'string' || !key || key.length > 8192 || /[\x00-\x1f]/.test(key)) || new Set(out.collapsedWorkspaceGroups).size !== out.collapsedWorkspaceGroups.length || new TextEncoder().encode(JSON.stringify(out.collapsedWorkspaceGroups)).length > 32768) fail('collapsedWorkspaceGroups');
   for (const key of ['theme', 'darkTheme', 'lightTheme'] as const) if (typeof out[key] !== 'string' || !themeNames.includes(out[key])) fail(key);
-  for (const [key, values] of Object.entries({ appearance: ['theme', 'dark', 'light', 'system'], font: fonts, indicators: ['text', 'dots', 'symbols'], agentSort: ['priority', 'native'], tabBarPosition: ['top', 'bottom'], toastPosition: ['top-right', 'bottom-right'] })) if (!values.includes(out[key as keyof Preferences] as never)) fail(key);
-  for (const key of ['cursorBlink', 'copyOnSelect', 'compact', 'confirmClose', 'hideSingleTab', 'paneScrollbars', 'paneBorders', 'paneOuterBorders', 'paneGaps', 'showAgentLabelsOnPaneBorders', 'notificationAttention', 'notificationFinished', 'notificationSound'] as const) if (typeof out[key] !== 'boolean') fail(key);
-  for (const [key, min, max] of [['fontSize', 10, 32], ['sidebarWidth', 160, 640], ['sidebarSectionPercent', 10, 90], ['toastSeconds', 0, 60], ['scrollLines', 1, 20]] as const) if (!Number.isInteger(out[key]) || out[key] < min || out[key] > max) fail(key);
+  for (const [key, values] of Object.entries({ appearance: ['theme', 'dark', 'light', 'system'], font: fonts, indicators: ['text', 'dots', 'symbols'], agentSort: ['priority', 'native'], tabBarPosition: ['top', 'bottom'], toastPosition: ['top-left', 'top-right', 'bottom-left', 'bottom-right'], toastDelivery: ['off', 'browser', 'desktop', 'both'] })) if (!values.includes(out[key as keyof Preferences] as never)) fail(key);
+  for (const key of ['cursorBlink', 'copyOnSelect', 'compact', 'confirmClose', 'hideSingleTab', 'paneScrollbars', 'paneBorders', 'paneOuterBorders', 'paneGaps', 'showAgentLabelsOnPaneBorders', 'notificationAttention', 'notificationFinished', 'notificationSound', 'toastNativeDuration'] as const) if (typeof out[key] !== 'boolean') fail(key);
+  for (const [key, min, max] of [['fontSize', 10, 32], ['sidebarWidth', 160, 640], ['sidebarSectionPercent', 10, 90], ['toastSeconds', 0, 60], ['toastDelaySeconds', 0, 60], ['scrollLines', 1, 20]] as const) if (!Number.isInteger(out[key]) || out[key] < min || out[key] > max) fail(key);
   if (!out.customColors || typeof out.customColors !== 'object' || Array.isArray(out.customColors)) fail('customColors');
   const allowedColors = Object.keys(nativeThemes.catppuccin);
   for (const [key, color] of Object.entries(out.customColors)) if (!allowedColors.includes(key) || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) fail(`customColors.${key}`);

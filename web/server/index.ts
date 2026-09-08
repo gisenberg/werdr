@@ -223,7 +223,7 @@ const handler: RequestListener = async (req, res) => {
     }
     const path = resolve(root, 'dist', '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     if (!path.startsWith(resolve(root, 'dist') + sep)) return reply(res, 404, { error: 'Not found' });
-    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.woff2': 'font/woff2' };
+    const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg' };
     let data: Buffer;
     try { data = await readFile(path); } catch { return reply(res, 404, { error: 'Not found' }); }
     res.writeHead(200, { 'content-type': types[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });

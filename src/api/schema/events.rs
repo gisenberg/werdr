@@ -16,6 +16,8 @@ pub struct EventsSubscribeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum Subscription {
+    #[serde(rename = "notification.semantic")]
+    NotificationSemantic {},
     #[serde(rename = "workspace.created")]
     WorkspaceCreated {},
     #[serde(rename = "workspace.updated")]
@@ -194,6 +196,8 @@ pub enum EventMatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    #[serde(rename = "notification.semantic")]
+    NotificationSemantic,
     WorkspaceCreated,
     WorkspaceUpdated,
     WorkspaceMetadataUpdated,
@@ -226,6 +230,7 @@ pub enum EventKind {
 impl EventKind {
     pub fn dot_name(self) -> &'static str {
         match self {
+            EventKind::NotificationSemantic => "notification.semantic",
             EventKind::WorkspaceCreated => "workspace.created",
             EventKind::WorkspaceUpdated => "workspace.updated",
             EventKind::WorkspaceMetadataUpdated => "workspace.metadata_updated",
@@ -259,6 +264,7 @@ impl EventKind {
 
 #[cfg(test)]
 pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
+    EventKind::NotificationSemantic,
     EventKind::WorkspaceCreated,
     EventKind::WorkspaceUpdated,
     EventKind::WorkspaceMetadataUpdated,
@@ -425,6 +431,10 @@ pub struct PaneScrollChangedEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventData {
+    NotificationSemantic {
+        #[serde(flatten)]
+        notification: SemanticNotificationEvent,
+    },
     AgentViewChanged {
         definition: Option<super::agents::AgentViewSetParams>,
     },
@@ -561,4 +571,39 @@ pub enum EventData {
     LayoutUpdated {
         layout: super::panes::PaneLayoutSnapshot,
     },
+}
+
+/// Ephemeral runtime notification; presentation remains client-local.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SemanticNotificationEvent {
+    pub kind: SemanticNotificationKind,
+    pub title: String,
+    pub body: Option<String>,
+    pub sound: Option<SemanticNotificationSound>,
+    pub agent: Option<String>,
+    pub workspace_id: Option<String>,
+    pub tab_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub terminal_id: Option<String>,
+    pub position: Option<crate::config::ToastHerdrPosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticNotificationKind {
+    NeedsAttention,
+    Finished,
+    UpdateInstalled,
+    Custom,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticNotificationSound {
+    Done,
+    Request,
+    #[serde(other)]
+    Unknown,
 }

@@ -723,6 +723,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                semantic_notifications: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
@@ -1458,4 +1459,30 @@ fn legacy_scroll_geometry_does_not_claim_a_screen_mode() {
             current
         );
     }
+}
+
+#[test]
+fn semantic_notification_json_subscription_and_optional_capability() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id":"notifications", "method":"events.subscribe",
+        "params":{"subscriptions":[{"type":"notification.semantic"}]}
+    }))
+    .unwrap();
+    assert!(
+        matches!(request.method, Method::EventsSubscribe(EventsSubscribeParams { subscriptions })
+        if matches!(subscriptions.as_slice(), [Subscription::NotificationSemantic {}]))
+    );
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.semantic_notifications);
+    assert_eq!(
+        serde_json::from_value::<SemanticNotificationKind>(serde_json::json!("future_kind"))
+            .unwrap(),
+        SemanticNotificationKind::Unknown
+    );
+    assert_eq!(
+        serde_json::from_value::<SemanticNotificationSound>(serde_json::json!("future_sound"))
+            .unwrap(),
+        SemanticNotificationSound::Unknown
+    );
 }

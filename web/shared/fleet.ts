@@ -10,7 +10,16 @@ export interface AgentView { definition: { source: string; label?: string } | nu
 export interface Snapshot { agent_view?: AgentView; focused_workspace_id?: string; version: string; protocol: number; workspaces: Workspace[]; tabs: Tab[]; panes: Pane[]; agents: Agent[]; layouts: { tab_id: string; focused_pane_id: string }[] }
 export type ConnectionState = 'connecting' | 'online' | 'offline' | 'disabled' | 'incompatible';
 export interface HostView { machine: Machine; connection: ConnectionState; connectionGeneration?: string; detail?: string; version?: string; lastSeen?: number; retryAt?: number; snapshot?: Snapshot }
-export interface Notice { id: string; machineId: string; machineLabel: string; paneId: string; workspaceId: string; tabId: string; title: string; body: string; kind: 'attention' | 'finished'; created: number; read: boolean }
+export type NoticeKind = 'attention' | 'finished' | 'update' | 'custom';
+export type NoticePosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export interface Notice {
+  id: string; machineId: string; machineLabel: string; paneId: string; workspaceId: string; tabId: string;
+  title: string; body: string; kind: NoticeKind; created: number; read: boolean;
+  endpointKey?: string; terminalId?: string; sound?: 'done' | 'request'; agent?: string; position?: NoticePosition;
+}
+// A renamed or temporarily disabled host remains the same destination. A catalog
+// replacement must never make a persisted notification point at another server.
+export const noticeEndpointKey = (machine: Machine) => JSON.stringify([machine.target ?? '', machine.session ?? '', machine.platform ?? 'posix']);
 export interface FleetState { generation: string; revision: number; hosts: HostView[]; notices: Notice[] }
 export type FleetEvent = { type: 'fleet.snapshot'; state: FleetState } | { type: 'fleet.host'; revision: number; host: HostView } | { type: 'fleet.catalog'; revision: number; hosts: HostView[] } | { type: 'fleet.notices'; revision: number; notices: Notice[]; added?: Notice };
 export interface SetupRequest { target: string; label: string; session: string; platform: 'posix' | 'windows' }

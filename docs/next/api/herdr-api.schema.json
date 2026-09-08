@@ -348,6 +348,83 @@
         "EventData": {
           "oneOf": [
             {
+              "description": "Ephemeral runtime notification; presentation remains client-local.",
+              "properties": {
+                "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/schemas/event/$defs/SemanticNotificationKind"
+                },
+                "pane_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/ToastHerdrPosition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sound": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/SemanticNotificationSound"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tab_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "terminal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notification_semantic",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "kind",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "definition": {
                   "anyOf": [
@@ -1016,6 +1093,7 @@
         },
         "EventKind": {
           "enum": [
+            "notification.semantic",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -1318,6 +1396,24 @@
           ],
           "type": "object"
         },
+        "SemanticNotificationKind": {
+          "enum": [
+            "needs_attention",
+            "finished",
+            "update_installed",
+            "custom",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "SemanticNotificationSound": {
+          "enum": [
+            "done",
+            "request",
+            "unknown"
+          ],
+          "type": "string"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -1369,6 +1465,15 @@
             "agent_status"
           ],
           "type": "object"
+        },
+        "ToastHerdrPosition": {
+          "enum": [
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right"
+          ],
+          "type": "string"
         },
         "WorkspaceInfo": {
           "properties": {
@@ -4270,6 +4375,18 @@
         },
         "Subscription": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "notification.semantic",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -7480,6 +7597,83 @@
         "EventData": {
           "oneOf": [
             {
+              "description": "Ephemeral runtime notification; presentation remains client-local.",
+              "properties": {
+                "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/schemas/success_response/$defs/SemanticNotificationKind"
+                },
+                "pane_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/ToastHerdrPosition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sound": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/SemanticNotificationSound"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tab_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "terminal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notification_semantic",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "kind",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "definition": {
                   "anyOf": [
@@ -8163,6 +8357,7 @@
         },
         "EventKind": {
           "enum": [
+            "notification.semantic",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -11197,6 +11392,24 @@
             }
           ]
         },
+        "SemanticNotificationKind": {
+          "enum": [
+            "needs_attention",
+            "finished",
+            "update_installed",
+            "custom",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "SemanticNotificationSound": {
+          "enum": [
+            "done",
+            "request",
+            "unknown"
+          ],
+          "type": "string"
+        },
         "ServerCapabilities": {
           "properties": {
             "detached_server_daemon": {
@@ -11223,6 +11436,11 @@
             "passive_metadata": {
               "default": false,
               "description": "Inactive endpoint attachment never creates sessions or nudges live panes.",
+              "type": "boolean"
+            },
+            "semantic_notifications": {
+              "default": false,
+              "description": "Supports opt-in ephemeral semantic notification subscriptions.",
               "type": "boolean"
             },
             "surface_interest": {
@@ -11367,6 +11585,15 @@
             "agent_status"
           ],
           "type": "object"
+        },
+        "ToastHerdrPosition": {
+          "enum": [
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right"
+          ],
+          "type": "string"
         },
         "WorkspaceInfo": {
           "properties": {

@@ -13,6 +13,7 @@ async function until(check: () => boolean) {
 }
 class Endpoint implements NativeEndpoint {
   version = 'fixture'; closed = false;
+  capabilities?: { semantic_notifications?: boolean };
   listeners: { subscriptions: Subscription[]; receive(event: NativeEvent): void; fail(error: Error): void }[] = [];
   snapshot = { ...emptySnapshot(), version: 'fixture', workspaces: [{ workspace_id: 'w:1', label: 'Workspace', agent_status: 'working' as AgentStatus }], tabs: [{ workspace_id: 'w:1', tab_id: 't:1', label: 'Tab' }], panes: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus }], agents: [{ workspace_id: 'w:1', tab_id: 't:1', pane_id: 'p:1', terminal_id: 'terminal:1', agent_status: 'working' as AgentStatus, agent: 'Claude', state_change_seq: 1 }] };
   async request(method: string) { assert.equal(method, 'session.snapshot'); return { snapshot: structuredClone(this.snapshot) }; }
@@ -27,6 +28,27 @@ class Endpoint implements NativeEndpoint {
   }
   close() { this.closed = true; this.listeners = []; }
 }
+
+test('semantic notifications exclusively use the advertised stream and retain native facts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-semantic-fleet-'));
+  const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: true };
+  const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => endpoint);
+  try {
+    await fleet.start(); await until(() => endpoint.listeners.length === 2 && fleet.state().hosts[0]?.connection === 'online');
+    const emit = (data: object) => { for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'notification.semantic')) listener.receive({ event: 'notification.semantic', data }); };
+    endpoint.status('blocked');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fleet.state().notices.length, 0, 'status transitions cannot synthesize duplicate semantic notifications');
+    emit({ kind: 'needs_attention', title: 'Native title', body: 'Native context', pane_id: 'p:1', terminal_id: 'terminal:1', workspace_id: 'w:1', tab_id: 't:1', sound: 'request', agent: 'claude' });
+    await until(() => fleet.state().notices.length === 1);
+    const notice = fleet.state().notices[0]; assert.equal(notice.title, 'Native title'); assert.equal(notice.body, 'Native context'); assert.equal(notice.terminalId, 'terminal:1'); assert.equal(notice.sound, 'request');
+    emit({ kind: 'future_kind', title: 'Ignored future event' });
+    emit({ kind: 'custom', title: 'No pane', position: 'bottom-left' });
+    await until(() => fleet.state().notices.length === 2);
+    assert.equal(fleet.state().notices[0].paneId, ''); assert.equal(fleet.state().notices[0].position, 'bottom-left');
+    assert.equal(fleet.state().hosts[0].connection, 'online');
+  } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
 
 test('host failures, colliding pane IDs, reconnects and notification persistence remain independent', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'werdr-fleet-test-')), path = join(directory, 'notices.json');
@@ -49,6 +71,10 @@ test('host failures, colliding pane IDs, reconnects and notification persistence
     await until(() => fleet.state().notices.length === 1);
     assert.equal(fleet.state().notices[0].machineId, 'two');
     endpoints.get('one')!.status('idle');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fleet.state().notices.length, 1, 'idle is not completion evidence');
+    endpoints.get('one')!.status('working');
+    endpoints.get('one')!.status('done');
     await until(() => fleet.state().notices.length === 2);
     assert.equal(fleet.state().notices[0].kind, 'finished');
     assert.equal(fleet.state().notices[0].machineId, 'one');

@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Supports opt-in ephemeral semantic notification subscriptions.
+    #[serde(default)]
+    pub semantic_notifications: bool,
     pub live_handoff: bool,
     #[serde(default)]
     pub detached_server_daemon: bool,

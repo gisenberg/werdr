@@ -66,6 +66,7 @@ pub(crate) fn start_server_with_stop_control(
 
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
+        semantic_notifications: true,
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
@@ -1144,6 +1145,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                semantic_notifications: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
@@ -1469,6 +1471,57 @@ mod tests {
         let result = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(result.is_ok());
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn semantic_notification_subscription_socket_delivery_and_disconnect() {
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (mut client, server, _path) = local_stream_pair("api-notification-disconnect");
+        client.write_all(br#"{"id":"notifications","method":"events.subscribe","params":{"subscriptions":[{"type":"notification.semantic"}]}}"#).unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let event_hub = EventHub::default();
+        let server_hub = event_hub.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let server_thread = std::thread::spawn(move || {
+            done_tx
+                .send(handle_connection(
+                    server,
+                    &api_tx,
+                    &server_hub,
+                    &running,
+                    None,
+                ))
+                .unwrap();
+        });
+        let ack: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(ack["result"]["type"], "subscription_started");
+        assert!(event_hub.has_semantic_notification_subscribers());
+        assert!(event_hub.publish_semantic_notification(
+            crate::api::schema::SemanticNotificationEvent {
+                kind: crate::api::schema::SemanticNotificationKind::Custom,
+                title: "socket delivery".into(),
+                body: None,
+                sound: None,
+                agent: None,
+                workspace_id: None,
+                tab_id: None,
+                pane_id: None,
+                terminal_id: None,
+                position: None,
+            }
+        ));
+        let event: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(event["event"], "notification.semantic");
+        assert_eq!(event["data"]["title"], "socket delivery");
+        drop(client);
+        assert!(done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_ok());
+        server_thread.join().unwrap();
+        assert!(!event_hub.has_semantic_notification_subscribers());
     }
 
     #[test]

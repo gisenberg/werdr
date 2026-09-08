@@ -92,7 +92,7 @@ const readSelection = async (machine: string) => (await api('/api/snapshot?' + n
 const selectionRestored = () => { if (authenticated && lifecycle.active) { choose(); renderFleetNavigation(); } };
 let restoration = new SelectionRestoration(initial.restore ? initial.selection : undefined, readSelection, selectionRestored);
 function selectPane(id: string) { if (!lifecycle.active) return; if (paneId === id && !pendingPane && !restoration.active) return; reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
-const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
+const activity = new Activity(api, (machine, workspace, tab, pane) => { selectTarget(machine, workspace, tab, pane); surface.requestFocus(pane); }, () => ({ machine: machineId, workspace: workspaceId, tab: tabId }), () => preferences, status, () => { if (paneId) surface.requestFocus(paneId); });
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const plugins = new Plugins(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId || undefined, pane: paneId || undefined, selectedText: surface.active?.readSelection() } : undefined; }, (machine, pane) => selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true), () => { fleet.resync(); void refresh(); });
@@ -107,6 +107,7 @@ const settings = new Settings(api, (value, nextColors) => {
   shortcuts?.update(value.shortcuts);
   preferences = value; colors = nextColors; sidebarSplit.update(value.sidebarSectionPercent);
   surface.updatePreferences(value, nextColors);
+  activity.refreshPreferences();
   renderNavigation(); renderFleetNavigation();
 });
 element('settings-integrations').onclick = () => integrations.open();
@@ -573,6 +574,7 @@ function refreshCommands() {
     ...(['tab', 'workspace', 'agent'] as const).map(kind => ({ id: (kind === 'agent' ? 'focus_agent' : `switch_${kind}`) as ShortcutAction, label: `Switch ${kind} 1 through 9`, palette: false, disabled: !online || !keyboardTargets(kind).length, run: () => {} })),
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
+    { id: 'open_notification_target', label: 'Open visible notification target', run: () => activity.openVisible() },
     ...([1, -1] as const).map(direction => ({ label: `${direction === 1 ? 'Next' : 'Previous'} agent needing attention`, disabled: !attentionTarget(fleetState, machine, pane, direction), run: () => {
       const target = attentionTarget(fleetState, machine, pane, direction); if (!target) return;
       selectTarget(target.machine, target.workspace, target.tab, target.pane); surface.requestFocus(target.pane);

@@ -277,6 +277,7 @@ struct ServerStatusJson {
 
 #[derive(Serialize)]
 struct ServerCapabilitiesJson {
+    semantic_notifications: bool,
     live_handoff: bool,
     detached_server_daemon: bool,
     endpoint_protocol_generation: Option<u32>,
@@ -320,6 +321,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             capabilities: capabilities
                 .as_ref()
                 .map(|capabilities| ServerCapabilitiesJson {
+                    semantic_notifications: capabilities.semantic_notifications,
                     live_handoff: capabilities.live_handoff,
                     detached_server_daemon: capabilities.detached_server_daemon,
                     endpoint_protocol_generation: capabilities.endpoint_protocol_generation,
@@ -411,6 +413,7 @@ mod tests {
             version: version.map(str::to_owned),
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
             capabilities: Some(crate::api::schema::ServerCapabilities {
+                semantic_notifications: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,

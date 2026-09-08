@@ -13,12 +13,12 @@ Each capability below needs native-reference evidence, implemented browser inter
 | Desktop layout | Render native split tree simultaneously; preserve ratios; drag and keyboard resize; zoom, directional focus, swap, move, reorder | Implemented native split tree, independent controllers, drag and keyboard ratios, zoom, directional focus/resize/swap, pane moves and workspace/tab ordering; isolated browser tests exercise input, stable terminal DOM, phone fallback and gateway restart |
 | Visual hierarchy | Native semantic palette, compact cell rhythm, borders and active pane cues, configurable sidebar sections and contextual hints | Partial: native semantic palette, configurable split/outer/shared borders with native label precedence, top/bottom desktop tabs, and independently scrolling workspace/agent sections with a draggable saved split; native agent row tokens, per-agent layouts and conditional styles are implemented; workspace row tokens and contextual hints remain |
 | Themes | All native theme choices, custom semantic overrides, light/dark/system selection and live preview/cancel | Implemented palette extraction, preview/cancel, system switching and custom colors; package and browser tests cover these behaviors |
-| Preferences | Durable user settings with device overrides, sidebar geometry/group state/sorting, status indicators, tab/border behavior, shortcuts and confirmations | Partial: settings store, appearance, font/device override, sidebar width/density and workspace/agent split, agent order, indicators, confirmations, pane borders/gaps/labels, tab placement and notification controls; host-scoped worktree grouping and durable collapse state are implemented; configurable native-style prefix and built-in action bindings now use a migrated version-twelve store, including standalone native configuration reload; custom shell and notification-target bindings remain |
+| Preferences | Durable user settings with device overrides, sidebar geometry/group state/sorting, status indicators, tab/border behavior, shortcuts and confirmations | Partial: settings store, appearance, font/device override, sidebar width/density and workspace/agent split, agent order, indicators, confirmations, pane borders/gaps/labels, tab placement and notification controls; host-scoped worktree grouping and durable collapse state are implemented; configurable native-style prefix and built-in action bindings now use a migrated version-thirteen store, including standalone native configuration reload and visible notification targeting; custom shell bindings remain |
 | Terminal interaction | Native copy mode and search, selection/copy, scrollback editing, links, mouse behavior and image paste | Partial: native scrollbars with stable one-column gutters, alternate-screen reclamation, keyboard and pointer scrolling, saved settings, and isolated metadata subscriptions; native full-scrollback copy/search with revision-checked character/line selections, word/paragraph motions, repeat search, clipboard feedback and scroll restoration; normal mouse selection copies on release or retains a range for explicit copy, supports native URL/path word selection, drag autoscroll and retained scrolling, and paints readable native selection colors through Ghostty; isolated browser tests cover Unicode, combining characters, wrapped matches, content changes, queued-operation cancellation, clipboard denial and phone controls; native host-editor invocation with full-history export, overlay focus restoration, reload, early-exit recovery and temporary-file cleanup; native plugin link activation and safe HTTP/HTTPS opening with revision/viewport checks, OSC targets, blocked-tab fallback and delayed non-link drag preservation; application mouse press/drag/release and wheel coordinates/modifiers follow native mode records; Kitty press/repeat/release/reset uses the native encoder, with browser checks for modifier changes and focus loss; native image paste and drop support advertises companion capabilities, bounds files to 16 MiB, preserves queued input and host bytes, cancels stale file reads, and uses native staging cleanup; complete keyboard layout/protocol coverage remains |
 | Workspace navigation | Native workspace/tab/pane actions, pickers, keyboard navigation and context menus | Partial: create/rename/close plus searchable host-qualified workspace/tab/pane palette entries, keyboard result navigation, live removal and terminal focus restoration; unit tests verify duplicate-label identity and stale-target rejection, and browser tests cover desktop/phone switching without remounting the selected pane; workspace/tab/pane chrome context menus add rename, close, new tab, split and zoom with keyboard access, stale-target dismissal and attach-focus protection; pane menus also clear manual names and swap explicit native pane identities, with browser layout verification; native worktree-group navigation, selected-child retention, collapsed attention status, search reveal, durable collapse/expand, explicit group closure, and scoped create/open/delete checkout menus are implemented and tested; ordinary Git workspace menus now discover native repository context on demand, preserve keyboard focus during discovery, and open scoped worktree actions; configurable prefix navigation, indexed tabs/workspaces/agents and persistent resize mode are implemented; native Navigate preview/confirm, directional pane movement, scoped bindings, a phone switcher, and configurable last-pane toggling across tabs/workspaces are implemented; right-click-routing menu actions remain |
 | Worktrees | Native list/create/open/remove flows with host and repository scope and native errors | Implemented native repository picker and create/open/remove; isolated Git browser test verifies branch and checkout identity, dirty removal rejection, explicit force, normal native checkout hooks, and repository retention |
 | Agents | Start/prompt/rename, native ordering/views, detail/status metadata and attention navigation | Partial: basic actions and fleet list, native status priority with newest transitions first within each host, workspace/tab/title/cwd search and tooltips, and next/previous blocked-agent navigation in native snapshot order; native agent row tokens, per-agent layouts, metadata labels and first-match conditional styles are implemented; native custom views and custom-tab-label metadata are implemented in the candidate runtime; live runtime adoption remains |
-| Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Partial: durable fleet activity and desktop opt-in |
+| Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Native semantic subscriptions, bounded client queue, delayed state validation, active-tab suppression, visible-target navigation, native durations, four positions and built-in sounds are implemented; older runtimes use a conservative status-transition fallback; semantic runtime adoption, custom sound configuration and clipboard-toast preferences remain |
 | Integrations | Native readiness list and explicit installation/uninstallation with results | Implemented all native targets, individual and recommended installs, uninstall confirmation and native results; isolated agent-config browser tests verify install/reinstall/uninstall, preservation of unrelated settings and native failures |
 | Plugins | Native management, actions, logs and plugin pane lifecycle | Partial: native linking/unlinking, enable/disable, manifest inspection, selected-context actions, logs, and overlay/split/tab/zoomed panes; isolated native tests verify command outcomes, input, closure, focus restoration and gateway restart; GitHub installation now preserves the native manifest preview, explicit confirmation, ref/provenance, build results and failed-replacement rollback, with managed uninstall and bounded owner-scoped job history; popup surfaces remain |
 | Host onboarding | Shared native catalog, explicit compatibility/install prompts and repair, no forced runtime replacement | Existing management tests; extend compatibility coverage |
@@ -39,7 +39,7 @@ A forced move-response race verifies destination selection after automatic nativ
 The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.
 Existing Kitty, copy-mode, layout, context-menu, and reconnect tests remain characterization coverage for this browser-owned input layer.
 Help keeps its heading and close control visible on desktop and phone layouts.
-Native custom shell commands, notification-target shortcuts and complete keyboard-layout/protocol coverage remain outstanding.
+Native custom shell commands and complete keyboard-layout/protocol coverage remain outstanding.
 Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.
 Its request epoch cancels delayed reads and actions, fences stale authentication failures, and keeps online/visibility wakeups idle.
 Resume validates the preserved endpoint and terminal identity through a fresh snapshot, including after an expired login; missing or replaced targets require explicit selection.
@@ -99,7 +99,7 @@ Keep this matrix incomplete until each row has direct evidence.
 ## Lifecycle action audit
 
 The native reference for these remaining bindings is `src/client/shell/actions.rs`, with defaults in `src/config/model.rs`.
-Notification targeting remains absent from `web/shared/shortcuts.ts`.
+Visible notification targeting uses the native `prefix+o` default.
 Standalone configuration reload now uses the native default and reports host and browser results independently.
 Detach is implemented with the native default and explicit browser resume.
 Last-pane switching is implemented with the native unbound default and conservative connection-reset behavior.
@@ -108,7 +108,7 @@ Last-pane switching is implemented with the native unbound default and conservat
 | --- | --- | --- |
 | `detach` (`prefix+q`) | Sets the client detach outcome without closing a pane or stopping the runtime | Suspend this browser's terminal connections and reconnect work, preserve native sessions, and provide an explicit return path; verify independent viewers and unchanged native process identities |
 | `reload_config` (`prefix+shift+r`) | Requests `server.reload_config` on the active endpoint and separately reloads client configuration | Scope the native request to the selected host, refresh browser preferences separately, retain input and selection, and report either failure without implying both reloads succeeded |
-| `open_notification_target` (`prefix+o`) | Consumes the currently visible notification, promotes the queue, and focuses its pane across endpoints; an offline pane target retains the notification and displays an unavailable notice | Implement explicit visible-toast identity and queue policy before binding this action; verify expiry, offline retention, pane removal, cross-host targeting, and notices without pane targets |
+| `open_notification_target` (`prefix+o`) | Consumes the currently visible notification, promotes the queue, and focuses its pane across endpoints; an offline pane target retains the notification and displays an unavailable notice | Uses the visible toast identity and native FIFO policy; offline targets retain the toast, target resolution validates endpoint and terminal identity, and targetless notices dismiss without selection |
 | `last_pane` (unbound) | Focuses the previous valid pane in the active endpoint snapshot, including another tab or workspace; ignores a missing or already-focused target | Track reconciled browser selection, revalidate the complete target against the current host snapshot, and verify toggling, closure, delayed focus responses, endpoint changes, and reconnects |
 
 Native last-pane history is updated by focused-pane transitions in `src/client/shell/state.rs` and cleared by endpoint projection reset, including native boot changes.
@@ -117,12 +117,12 @@ Neither the public `SessionSnapshot` nor the browser `Snapshot` currently includ
 A browser implementation must invalidate history across an uncertain connection replacement instead of assuming reused pane IDs belong to the same runtime.
 Gateway event generation is not native boot identity.
 
-The browser activity implementation currently replaces one toast and maintains a durable notice list.
-Native `src/client/shell/notification_policy.rs` instead owns a bounded queue, kind-specific duration, delayed validation, and active-target suppression based on tab or workspace context.
-Binding the latest durable activity entry would not reproduce native visible-notification targeting.
+The browser activity implementation uses `src/client/shell/notification_policy.rs` as its queue and delivery reference.
+The durable activity list and the currently visible notification have separate identities and lifetimes.
+The target shortcut consumes only the visible toast, promotes its successor, and uses current native pane ancestry after validating the original endpoint and terminal.
 The existing runtime-settings save flow also does not establish a standalone reload binding: that action must reload existing configuration without writing it.
 
-The notification-target row remains an audited requirement rather than an implemented capability.
+Notification targeting is implemented for browser toasts; native semantic event delivery requires a capable owning runtime.
 The reload action invokes the selected endpoint's existing `server.reload_config` method without writing configuration, while refreshing browser preferences independently.
 Offline, partial, failed, unsupported, and malformed native outcomes do not imply browser reload failure, and browser read failures do not hide a successful native result.
 Settings previews opened while a read is pending remain intact, duplicate reloads are suppressed, and detach or authentication changes discard old results.
@@ -132,6 +132,36 @@ Reload passed live desktop and phone verification on the POSIX host and both Win
 Detach passed isolated lifecycle and browser tests plus live POSIX and Windows verification, with existing native identities and settings preserved.
 Last-pane unit and browser tests cover split/tab/workspace toggling, unchanged selections, preview isolation, current ancestry, closure, reused terminal identity, settings migration, and gateway or unloaded-host transitions.
 Exact retention across a reconnect to the same native boot remains unproven until the public API exposes native boot identity; conservative resets preserve safety but do not establish that part of native parity.
+
+## Semantic notifications
+
+The optional `semantic_notifications` capability advertises the explicit `notification.semantic` JSON subscription.
+It carries the same native attention, completion, custom and update events as the TUI, adding terminal identity without changing frozen terminal-client codecs.
+Subscriptions have bounded per-connection queues, no replay and scoped cleanup; a browser-only subscriber can receive `notification.show` without attaching a terminal client or creating a workspace.
+Native custom-notification results and rate limiting count accepted delivery to a live sink.
+The gateway uses semantic events exclusively when advertised, while older runtimes retain a conservative transition fallback that requires public `Done` completion state.
+Neither a reconnect snapshot nor restored activity history creates a fresh toast.
+The version-two activity store preserves old rows as non-navigable history because their original terminal and endpoint identities cannot be reconstructed safely.
+Queued persistence from a retired connection cannot create a late browser alert.
+
+The browser keeps one visible notification and at most eight queued notifications, supersedes earlier events for the same endpoint and pane, and gives promoted entries a fresh native lifetime.
+Custom messages bypass delay; completion always validates `Done`, with a one-second receipt-based grace and 50 ms rechecks for a missing or still-working projection.
+Delayed attention requires `Blocked` when its deadline arrives.
+In-app suppression uses the selected tab, with workspace fallback; desktop and completion-sound suppression additionally require browser focus.
+Attention sounds remain eligible in the active tab, following native policy.
+Notifications already accepted into the visible queue retain native queue semantics when preferences change; the new delivery policy applies when pending events become eligible.
+Detach, logout and gateway-generation replacement cancel transient presentation independently of durable activity.
+
+New browser profiles use native defaults: delivery off, a one-second agent delay, bottom-right positioning, and 8/5/3/5-second attention/completion/update/custom lifetimes.
+Desktop delivery uses browser notifications and requires browser-local permission and opt-in; native terminal-emulator delivery has no separate browser destination.
+The version-thirteen migration preserves earlier delivery, custom duration, disabled toasts, revision and keybindings, leaving `prefix+o` unbound when another action already owns it.
+Built-in sound files come directly from the native assets and are served as audio; browser playback remains subject to browser audio policy.
+Custom sound paths, per-agent sound configuration and clipboard-toast preferences still need browser equivalents.
+
+`web/test/notification-policy.test.ts` verifies queue order and overflow, supersession, delayed validation, focus suppression, offline retention, pane moves, replaced terminal and endpoint rejection, delivery modes and legacy history.
+`web/test/notifications.spec.ts` verifies real native custom delivery without a terminal client, literal text, native audio bytes, desktop/phone positions, visible-target shortcuts, offline retention, unchanged terminal identity and pending input, resumed-work cancellation, detach/resume, and durable history without re-alerting.
+Native tests verify mixed JSON/TUI delivery, report-agent completion projection, truthful browser-only custom results, bounded queues, no replay, disconnect cleanup and frozen-codec compatibility.
+The deployed native runtimes remain unchanged until the lossless rollout gate below is satisfied.
 
 ## Windows resize recovery
 

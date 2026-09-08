@@ -1,6 +1,58 @@
 use super::*;
 
 impl HeadlessServer {
+    pub(super) fn send_semantic_notification(
+        &mut self,
+        event: protocol::SemanticNotification,
+    ) -> bool {
+        if !self.app.event_hub.has_semantic_notification_subscribers() {
+            return self.send_to_client_shells(ServerMessage::SemanticNotification(event));
+        }
+        let terminal_id = event.pane_id.as_deref().and_then(|public_id| {
+            let (ws_idx, pane_id) = self.app.parse_current_public_pane_id(public_id)?;
+            self.app
+                .state
+                .workspaces
+                .get(ws_idx)?
+                .terminal_id(pane_id)
+                .map(|id| id.to_string())
+        });
+        let public = api::schema::SemanticNotificationEvent {
+            kind: match event.kind {
+                protocol::SemanticNotificationKind::NeedsAttention => {
+                    api::schema::SemanticNotificationKind::NeedsAttention
+                }
+                protocol::SemanticNotificationKind::Finished => {
+                    api::schema::SemanticNotificationKind::Finished
+                }
+                protocol::SemanticNotificationKind::UpdateInstalled => {
+                    api::schema::SemanticNotificationKind::UpdateInstalled
+                }
+                protocol::SemanticNotificationKind::Custom => {
+                    api::schema::SemanticNotificationKind::Custom
+                }
+            },
+            title: event.title.clone(),
+            body: event.body.clone(),
+            sound: event.sound.map(|sound| match sound {
+                protocol::SemanticNotificationSound::Done => {
+                    api::schema::SemanticNotificationSound::Done
+                }
+                protocol::SemanticNotificationSound::Request => {
+                    api::schema::SemanticNotificationSound::Request
+                }
+            }),
+            agent: event.agent.clone(),
+            workspace_id: event.workspace_id.clone(),
+            tab_id: event.tab_id.clone(),
+            pane_id: event.pane_id.clone(),
+            terminal_id,
+            position: event.position,
+        };
+        let public_delivered = self.app.event_hub.publish_semantic_notification(public);
+        self.send_to_client_shells(ServerMessage::SemanticNotification(event)) || public_delivered
+    }
+
     fn pane_effective_state(&self, pane_id: crate::layout::PaneId) -> crate::detect::AgentState {
         self.app
             .state
@@ -111,19 +163,17 @@ impl HeadlessServer {
         let agent = known_agent
             .map(crate::detect::agent_label)
             .map(str::to_owned);
-        self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
-                kind: semantic_kind,
-                title: format!("{agent_label} {event_text}"),
-                body: non_empty_body(&context),
-                sound,
-                agent,
-                workspace_id: Some(workspace_id),
-                tab_id: Some(tab_id),
-                pane_id: Some(public_pane_id),
-                position: None,
-            },
-        ))
+        self.send_semantic_notification(protocol::SemanticNotification {
+            kind: semantic_kind,
+            title: format!("{agent_label} {event_text}"),
+            body: non_empty_body(&context),
+            sound,
+            agent,
+            workspace_id: Some(workspace_id),
+            tab_id: Some(tab_id),
+            pane_id: Some(public_pane_id),
+            position: None,
+        })
     }
 
     fn forward_pane_state_update_notifications_to_clients(
@@ -264,7 +314,7 @@ impl HeadlessServer {
             .as_deref()
             .and_then(|body| sanitize_notification_text(body, 240));
         let has_client_shell = self.clients.values().any(ClientConnection::is_shell_client);
-        if !has_client_shell {
+        if !has_client_shell && !self.app.event_hub.has_semantic_notification_subscribers() {
             let reason = if self.app.state.toast_config.delivery == config::ToastDelivery::Off {
                 NotificationShowReason::Disabled
             } else {
@@ -284,19 +334,17 @@ impl HeadlessServer {
                 Some(protocol::SemanticNotificationSound::Request)
             }
         };
-        let shown = self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
-                kind: protocol::SemanticNotificationKind::Custom,
-                title,
-                body,
-                sound,
-                agent: None,
-                workspace_id: None,
-                tab_id: None,
-                pane_id: None,
-                position: params.position,
-            },
-        ));
+        let shown = self.send_semantic_notification(protocol::SemanticNotification {
+            kind: protocol::SemanticNotificationKind::Custom,
+            title,
+            body,
+            sound,
+            agent: None,
+            workspace_id: None,
+            tab_id: None,
+            pane_id: None,
+            position: params.position,
+        });
         if shown {
             self.app.mark_api_notification_shown(Instant::now());
         }
@@ -563,19 +611,17 @@ impl HeadlessServer {
                 let install_command = install_command.clone();
 
                 self.app.handle_internal_event(ev);
-                self.send_to_client_shells(ServerMessage::SemanticNotification(
-                    protocol::SemanticNotification {
-                        kind: protocol::SemanticNotificationKind::UpdateInstalled,
-                        title: format!("Herdr v{version} available"),
-                        body: Some(crate::update::update_install_instruction(&install_command)),
-                        sound: None,
-                        agent: None,
-                        workspace_id: None,
-                        tab_id: None,
-                        pane_id: None,
-                        position: None,
-                    },
-                ));
+                self.send_semantic_notification(protocol::SemanticNotification {
+                    kind: protocol::SemanticNotificationKind::UpdateInstalled,
+                    title: format!("Herdr v{version} available"),
+                    body: Some(crate::update::update_install_instruction(&install_command)),
+                    sound: None,
+                    agent: None,
+                    workspace_id: None,
+                    tab_id: None,
+                    pane_id: None,
+                    position: None,
+                });
 
                 let toast_msg =
                     if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {

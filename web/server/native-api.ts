@@ -17,6 +17,7 @@ export class NativeApiError extends Error {
 }
 export interface NativeEndpoint {
   version: string;
+  capabilities?: { semantic_notifications?: boolean };
   request(method: string, params?: object): Promise<any>;
   subscribe(subscriptions: Subscription[], receive: (event: NativeEvent) => void, closed: (error: Error) => void): Promise<() => void>;
   close(): void;
@@ -124,6 +125,7 @@ export async function nativeEndpoint(machine: Machine): Promise<NativeEndpoint> 
   }
   return {
     version: status.server.version || '',
+    capabilities: { semantic_notifications: status.server.capabilities?.semantic_notifications === true },
     request(method, params = {}) {
       return new Promise((resolve, reject) => {
         let close = () => {};

@@ -130,7 +130,7 @@ dialog:not(#boot) textarea { resize: vertical; }
 .inline-actions button { width: auto; flex: 1 0 auto; }
 #setup-output { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 38vh; min-height: 120px; border: 1px solid var(--herdr-surface1, #35413d); padding: 12px; }
 #command-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-#notice-toast { position: fixed; right: 12px; top: 64px; z-index: 50; max-width: min(480px, calc(100vw - 24px)); padding: 14px; border-color: var(--herdr-peach, #edb789); }
+#notice-toast { position: fixed; right: 12px; top: 64px; z-index: 50; max-width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 160px); overflow: auto; padding: 14px; border-color: var(--herdr-peach, #edb789); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
 footer > div { display: flex; flex-shrink: 0; }
 @media (max-width: 700px) {
   #notice-toast { top: 88px; }
@@ -157,7 +157,8 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 :root[data-indicators=symbols] aside nav button[data-badge=BLOCKED]::after { content: '! ATTENTION'; }
 :root[data-indicators=symbols] aside nav button[data-badge=WORKING]::after { content: '> WORKING'; }
 :root[data-indicators=symbols] aside nav button[data-badge=DONE]::after { content: '✓ DONE'; }
-:root[data-toast-position=bottom-right] #notice-toast { top: auto; bottom: 60px; }
+#notice-toast[data-position^=bottom] { top: auto; bottom: 60px; }
+#notice-toast[data-position$=left] { right: auto; left: 12px; }
 @media (max-width: 700px) {
   .account-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #settings-fields fieldset, #settings-colors { grid-template-columns: 1fr; }
