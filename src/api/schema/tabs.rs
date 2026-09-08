@@ -42,6 +42,8 @@ pub struct TabInfo {
     pub workspace_id: String,
     pub number: usize,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_label: Option<bool>,
     pub focused: bool,
     pub pane_count: usize,
     pub agent_status: AgentStatus,

@@ -159,10 +159,10 @@ pub(super) fn snapshot(
         .agent_view_override
         .as_ref()
         .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
-    let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
-        .into_iter()
-        .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
-        .collect();
+    let agent_order = snapshot
+        .agent_view
+        .map(|view| view.pane_ids)
+        .unwrap_or_default();
 
     let zoomed = focused_tab_id
         .as_deref()

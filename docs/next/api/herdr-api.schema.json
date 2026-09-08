@@ -79,8 +79,296 @@
           ],
           "type": "string"
         },
+        "AgentViewBuiltinField": {
+          "enum": [
+            "status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewBuiltinSortField": {
+          "enum": [
+            "workspace_order",
+            "tab_order",
+            "pane_order",
+            "attention",
+            "status",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewContext": {
+          "enum": [
+            "current_workspace_id",
+            "current_tab_id"
+          ],
+          "type": "string"
+        },
+        "AgentViewField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/event/$defs/AgentViewBuiltinField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewFilter": {
+          "oneOf": [
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "all",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "any",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filter": {
+                  "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                },
+                "op": {
+                  "const": "not",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filter"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "eq",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/schemas/event/$defs/AgentViewValue"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "in",
+                  "type": "string"
+                },
+                "values": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewValue"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "values"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "exists",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "field"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSetParams": {
+          "properties": {
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sort": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/AgentViewSort"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "AgentViewSort": {
+          "properties": {
+            "field": {
+              "$ref": "#/schemas/event/$defs/AgentViewSortField"
+            },
+            "order": {
+              "$ref": "#/schemas/event/$defs/AgentViewSortOrder",
+              "default": "asc"
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "type": "object"
+        },
+        "AgentViewSortField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/event/$defs/AgentViewBuiltinSortField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "AgentViewValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "properties": {
+                "context": {
+                  "$ref": "#/schemas/event/$defs/AgentViewContext"
+                }
+              },
+              "required": [
+                "context"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "definition": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/AgentViewSetParams"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "agent_view_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -753,7 +1041,8 @@
             "pane_exited",
             "pane_agent_detected",
             "pane_agent_status_changed",
-            "layout_updated"
+            "layout_updated",
+            "agent_view_changed"
           ],
           "type": "string"
         },
@@ -1040,6 +1329,12 @@
           "properties": {
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
+            },
+            "custom_label": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "focused": {
               "type": "boolean"
@@ -4332,6 +4627,18 @@
             {
               "properties": {
                 "type": {
+                  "const": "agent.view.changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "layout.updated",
                   "type": "string"
                 }
@@ -5386,6 +5693,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentRenameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.view.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
             }
           },
           "required": [
@@ -6847,6 +7170,297 @@
           ],
           "type": "string"
         },
+        "AgentViewBuiltinField": {
+          "enum": [
+            "status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewBuiltinSortField": {
+          "enum": [
+            "workspace_order",
+            "tab_order",
+            "pane_order",
+            "attention",
+            "status",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewContext": {
+          "enum": [
+            "current_workspace_id",
+            "current_tab_id"
+          ],
+          "type": "string"
+        },
+        "AgentViewField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/success_response/$defs/AgentViewBuiltinField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewFilter": {
+          "oneOf": [
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "all",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "any",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filter": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                },
+                "op": {
+                  "const": "not",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filter"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "eq",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewValue"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "in",
+                  "type": "string"
+                },
+                "values": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewValue"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "values"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "exists",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "field"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewInfo": {
+          "description": "Current native view and its evaluated pane order. A missing definition means no override.",
+          "properties": {
+            "definition": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewSetParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pane_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pane_ids"
+          ],
+          "type": "object"
+        },
+        "AgentViewSetParams": {
+          "properties": {
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sort": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentViewSort"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "AgentViewSort": {
+          "properties": {
+            "field": {
+              "$ref": "#/schemas/success_response/$defs/AgentViewSortField"
+            },
+            "order": {
+              "$ref": "#/schemas/success_response/$defs/AgentViewSortOrder",
+              "default": "asc"
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "type": "object"
+        },
+        "AgentViewSortField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/success_response/$defs/AgentViewBuiltinSortField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "AgentViewValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "properties": {
+                "context": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewContext"
+                }
+              },
+              "required": [
+                "context"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -6865,6 +7479,28 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "definition": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/AgentViewSetParams"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "agent_view_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -7552,7 +8188,8 @@
             "pane_exited",
             "pane_agent_detected",
             "pane_agent_status_changed",
-            "layout_updated"
+            "layout_updated",
+            "agent_view_changed"
           ],
           "type": "string"
         },
@@ -9556,6 +10193,22 @@
             },
             {
               "properties": {
+                "type": {
+                  "const": "agent_view_state",
+                  "type": "string"
+                },
+                "view": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewInfo"
+                }
+              },
+              "required": [
+                "type",
+                "view"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "active": {
                   "type": "boolean"
                 },
@@ -10580,6 +11233,16 @@
         },
         "SessionSnapshot": {
           "properties": {
+            "agent_view": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "agents": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/AgentInfo"
@@ -10659,6 +11322,12 @@
           "properties": {
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "custom_label": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "focused": {
               "type": "boolean"

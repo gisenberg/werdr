@@ -5,9 +5,45 @@ use crate::api::schema::{
     AgentViewField, AgentViewFilter, AgentViewSetParams, AgentViewSort, AgentViewSortField,
     AgentViewSortOrder, AgentViewValue,
 };
-use crate::ui::AgentPanelEntry;
+use crate::detect::AgentState;
 
 use super::AppState;
+
+pub(crate) struct AgentViewEntry {
+    pub ws_idx: usize,
+    pub tab_idx: usize,
+    pub pane_id: crate::layout::PaneId,
+    pub agent_kind_label: Option<String>,
+    pub state: AgentState,
+    pub seen: bool,
+    pub last_agent_state_change_seq: Option<u64>,
+    pub tokens: std::collections::HashMap<String, String>,
+}
+
+pub(crate) fn agent_view_entries(app: &AppState) -> Vec<AgentViewEntry> {
+    let mut entries = app
+        .workspaces
+        .iter()
+        .enumerate()
+        .flat_map(|(ws_idx, workspace)| {
+            workspace
+                .pane_details(&app.terminals)
+                .into_iter()
+                .map(move |detail| AgentViewEntry {
+                    ws_idx,
+                    tab_idx: detail.tab_idx,
+                    pane_id: detail.pane_id,
+                    agent_kind_label: detail.agent_kind_label,
+                    state: detail.state,
+                    seen: detail.seen,
+                    last_agent_state_change_seq: detail.last_agent_state_change_seq,
+                    tokens: detail.tokens,
+                })
+        })
+        .collect();
+    apply_agent_view(app, &mut entries);
+    entries
+}
 
 const MAX_FILTER_DEPTH: usize = 8;
 const MAX_FILTER_NODES: usize = 64;
@@ -50,7 +86,7 @@ pub(crate) fn validate_agent_view_source(source: &str) -> Result<String, String>
     normalize_source(source)
 }
 
-pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentPanelEntry>) {
+pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentViewEntry>) {
     if let Some(spec) = app.agent_view_override.as_ref() {
         if let Some(filter) = &spec.filter {
             entries.retain(|entry| matches_filter(app, entry, filter));
@@ -228,7 +264,7 @@ fn validate_token(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn matches_filter(app: &AppState, entry: &AgentPanelEntry, filter: &AgentViewFilter) -> bool {
+fn matches_filter(app: &AppState, entry: &AgentViewEntry, filter: &AgentViewFilter) -> bool {
     match filter {
         AgentViewFilter::All { filters } => filters
             .iter()
@@ -252,8 +288,8 @@ fn matches_filter(app: &AppState, entry: &AgentPanelEntry, filter: &AgentViewFil
 
 fn compare_entries(
     app: &AppState,
-    left: &AgentPanelEntry,
-    right: &AgentPanelEntry,
+    left: &AgentViewEntry,
+    right: &AgentViewEntry,
     sorts: &[AgentViewSort],
 ) -> Ordering {
     for sort in sorts {
@@ -289,7 +325,7 @@ fn compare_optional_values(
 
 fn field_value(
     app: &AppState,
-    entry: &AgentPanelEntry,
+    entry: &AgentViewEntry,
     field: &AgentViewField,
 ) -> Option<EvalValue> {
     match field {
@@ -300,7 +336,7 @@ fn field_value(
 
 fn builtin_field_value(
     app: &AppState,
-    entry: &AgentPanelEntry,
+    entry: &AgentViewEntry,
     field: AgentViewBuiltinField,
 ) -> Option<EvalValue> {
     match field {
@@ -346,7 +382,7 @@ fn context_value(app: &AppState, context: AgentViewContext) -> Option<EvalValue>
 
 fn sort_value(
     app: &AppState,
-    entry: &AgentPanelEntry,
+    entry: &AgentViewEntry,
     field: &AgentViewSortField,
 ) -> Option<EvalValue> {
     match field {
@@ -402,7 +438,7 @@ fn status_name(state: crate::detect::AgentState, seen: bool) -> String {
     .to_string()
 }
 
-fn public_tab_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
+fn public_tab_id(app: &AppState, entry: &AgentViewEntry) -> Option<String> {
     let workspace = app.workspaces.get(entry.ws_idx)?;
     let number = workspace.public_tab_number(entry.tab_idx)?;
     Some(crate::workspace::public_tab_id_for_number(
@@ -411,7 +447,7 @@ fn public_tab_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
     ))
 }
 
-fn public_pane_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
+fn public_pane_id(app: &AppState, entry: &AgentViewEntry) -> Option<String> {
     let workspace = app.workspaces.get(entry.ws_idx)?;
     let number = workspace.public_pane_number(entry.pane_id)?;
     Some(crate::workspace::public_pane_id_for_number(
@@ -445,8 +481,8 @@ mod tests {
         state
     }
 
-    fn projected_entries(state: &AppState) -> Vec<crate::ui::AgentPanelEntry> {
-        crate::ui::agent_panel_entries_from(state, &crate::terminal::TerminalRuntimeRegistry::new())
+    fn projected_entries(state: &AppState) -> Vec<AgentViewEntry> {
+        agent_view_entries(state)
     }
 
     fn current_workspace_view() -> AgentViewSetParams {

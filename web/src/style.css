@@ -14,6 +14,7 @@ main { display: flex; flex: 1; min-height: 0; position: relative; }
 #host-toggle { display: none; }
 aside { width: var(--sidebar-width, 248px); flex-shrink: 0; border-right: 1px solid var(--herdr-surface1, #35413d); overflow: auto; }
 .section { color: var(--herdr-overlay1, #85968e); padding: 14px 12px 8px; display: flex; align-items: center; justify-content: space-between; }
+#agent-views { display: block; padding: 0 12px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section button { padding: 3px 7px; }
 aside nav { display: flex; flex-direction: column; }
 aside nav button { border: 0; border-bottom: 1px solid var(--herdr-surface-dim, #25302c); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

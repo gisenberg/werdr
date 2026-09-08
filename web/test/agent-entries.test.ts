@@ -23,3 +23,30 @@ test('agent search and tooltip retain native workspace, tab, title and cwd conte
   assert.equal(agentEntries(hosts, 'native', 'all', '')[0].title, 'builder / Project Mercury / Review changes\nInvestigating reconnect\n/repo/feature');
   assert.deepEqual(ids(hosts, 'priority', 'working'), []);
 });
+
+test('native views filter and order each host before browser search and status filters', () => {
+  const first = host('first', [agent('blocked', 'blocked'), agent('working', 'working'), agent('hidden', 'done')]);
+  first.snapshot!.agent_view = { definition: { source: 'test', label: 'Focus' }, pane_ids: ['working', 'blocked'] };
+  const second = host('second', [agent('remote', 'blocked')]);
+  assert.deepEqual(ids([first, second]), ['working', 'blocked', 'remote']);
+  assert.deepEqual(ids([first], 'native'), ['working', 'blocked']);
+  assert.deepEqual(ids([first], 'priority', 'blocked'), ['blocked']);
+  assert.deepEqual(ids([first], 'priority', 'all', 'hidden'), []);
+  first.snapshot!.agent_view.pane_ids = [];
+  assert.deepEqual(ids([first]), []);
+  first.snapshot!.agent_view.definition = null;
+  assert.deepEqual(ids([first]), ['blocked', 'hidden', 'working']);
+});
+
+test('single automatic tab labels are hidden only when the native runtime identifies them', () => {
+  const first = host('first', [agent('agent', 'working')]);
+  const label = () => agentEntries([first], 'native', 'all', '')[0].tabLabel;
+  assert.equal(label(), 'Review changes');
+  first.snapshot!.tabs[0].custom_label = false;
+  assert.equal(label(), undefined);
+  first.snapshot!.tabs[0].custom_label = true;
+  assert.equal(label(), 'Review changes');
+  first.snapshot!.tabs[0].custom_label = false;
+  first.snapshot!.tabs.push({ tab_id: 't2', workspace_id: 'w', label: 'Second' });
+  assert.equal(label(), 'Review changes');
+});

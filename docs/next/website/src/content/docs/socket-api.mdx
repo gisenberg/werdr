@@ -106,7 +106,7 @@ Raw socket method names use dot notation:
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.graphics.info`, `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.stream`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
-| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
+| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.get`, `agent.view.set`, `agent.view.clear` |
 | Events | `events.subscribe`, `events.wait` |
 | Integrations | `integration.install`, `integration.uninstall` |
 | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
@@ -489,6 +489,20 @@ Clear unconditionally, or only when the named source still owns the view:
 
 A source mismatch leaves the active view unchanged. Set and clear responses use
 `type: "agent_view"` and report `active`, `source`, and optional `label`.
+
+Read the active definition and its evaluated order with `agent.view.get`:
+
+```json
+{"id":"view_get","method":"agent.view.get","params":{}}
+```
+
+The response has `type: "agent_view_state"` and a `view` object containing `definition` and ordered public `pane_ids`.
+A null definition means no override; the pane IDs then reflect the runtime's ordinary agent ordering.
+`session.snapshot` includes the same object in optional `agent_view` metadata.
+An absent field means the runtime does not support this metadata.
+Subscribe explicitly to `agent.view.changed` to observe definition changes, including source-owned clearing when a plugin is disabled or removed.
+Refresh the projection after ordinary pane, workspace, focus, and agent-status events too, because view membership can depend on those facts.
+Tab metadata also includes optional `custom_label` to distinguish explicit labels from automatic names without guessing on older runtimes.
 
 ## Plugin APIs
 

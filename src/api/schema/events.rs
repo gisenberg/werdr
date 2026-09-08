@@ -80,6 +80,8 @@ pub enum Subscription {
     },
     #[serde(rename = "pane.scroll_changed")]
     PaneScrollChanged { pane_id: String },
+    #[serde(rename = "agent.view.changed")]
+    AgentViewChanged {},
     #[serde(rename = "layout.updated")]
     LayoutUpdated {},
 }
@@ -218,6 +220,7 @@ pub enum EventKind {
     PaneAgentDetected,
     PaneAgentStatusChanged,
     LayoutUpdated,
+    AgentViewChanged,
 }
 
 impl EventKind {
@@ -248,6 +251,7 @@ impl EventKind {
             EventKind::PaneExited => "pane.exited",
             EventKind::PaneAgentDetected => "pane.agent_detected",
             EventKind::PaneAgentStatusChanged => "pane.agent_status_changed",
+            EventKind::AgentViewChanged => "agent.view.changed",
             EventKind::LayoutUpdated => "layout.updated",
         }
     }
@@ -281,6 +285,7 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::PaneAgentDetected,
     EventKind::PaneAgentStatusChanged,
     EventKind::LayoutUpdated,
+    EventKind::AgentViewChanged,
 ];
 
 pub const PLUGIN_HOOK_EVENT_KINDS: &[EventKind] = &[
@@ -420,6 +425,9 @@ pub struct PaneScrollChangedEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventData {
+    AgentViewChanged {
+        definition: Option<super::agents::AgentViewSetParams>,
+    },
     WorkspaceCreated {
         workspace: WorkspaceInfo,
     },

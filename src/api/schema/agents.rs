@@ -60,6 +60,13 @@ pub struct AgentViewSetParams {
     pub sort: Vec<AgentViewSort>,
 }
 
+/// Current native view and its evaluated pane order. A missing definition means no override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentViewInfo {
+    pub definition: Option<AgentViewSetParams>,
+    pub pane_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct AgentViewClearParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]

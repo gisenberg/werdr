@@ -762,6 +762,7 @@ fn session_snapshot_request_and_response_round_trip() {
                 panes: Vec::new(),
                 layouts: Vec::new(),
                 agents: Vec::new(),
+                agent_view: None,
             }),
         },
     };
@@ -815,6 +816,7 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 number: 1,
                 label: "herdr".into(),
+                custom_label: None,
                 focused: true,
                 pane_count: 1,
                 agent_status: AgentStatus::Unknown,
@@ -1243,6 +1245,7 @@ fn create_response_round_trips_with_root_pane() {
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "review".into(),
+                custom_label: None,
                 focused: false,
                 pane_count: 1,
                 agent_status: AgentStatus::Unknown,

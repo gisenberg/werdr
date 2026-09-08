@@ -41,6 +41,7 @@ test('host failures, colliding pane IDs, reconnects and notification persistence
     await fleet.start();
     await until(() => fleet.state().hosts.filter(host => host.connection === 'online').length === 2);
     await until(() => endpoints.get('one')!.listeners.length === 2 && endpoints.get('two')!.listeners.length === 2);
+    assert.ok([...endpoints.values()].every(endpoint => endpoint.listeners.every(listener => listener.subscriptions.every(item => item.type !== 'agent.view.changed'))), 'legacy runtimes must not receive the optional view subscription');
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(fleet.state().notices.length, 0, 'bootstrap must not announce existing work');
     endpoints.get('two')!.status('blocked'); endpoints.get('two')!.status('blocked');
@@ -176,4 +177,20 @@ test('terminal scroll subscriptions stay pane-local and cannot follow a reassign
     const count = values.length; watcher.receive({ event: 'pane.scroll_changed', data: { pane_id: 'p:1', scroll: { offset_from_bottom: 30, max_offset_from_bottom: 100, viewport_rows: 20 } } });
     assert.equal(values.length, count);
   } finally { stop(); fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('native view subscriptions are capability gated and refresh after definition changes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-view-test-'));
+  const endpoint = new Endpoint();
+  endpoint.snapshot.agent_view = { definition: null, pane_ids: ['p:1'] };
+  const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => endpoint);
+  try {
+    await fleet.start();
+    await until(() => endpoint.listeners.some(listener => listener.subscriptions.some(item => item.type === 'agent.view.changed')));
+    endpoint.snapshot.agent_view = { definition: { source: 'test', label: 'Focus' }, pane_ids: [] };
+    for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'agent.view.changed')) listener.receive({ event: 'agent.view.changed', data: { definition: endpoint.snapshot.agent_view.definition } });
+    await until(() => fleet.state().hosts[0].snapshot?.agent_view?.definition?.label === 'Focus');
+    assert.deepEqual(fleet.state().hosts[0].snapshot!.agent_view!.pane_ids, []);
+    assert.equal(fleet.state().notices.length, 0);
+  } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });

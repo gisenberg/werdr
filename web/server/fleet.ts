@@ -6,9 +6,10 @@ import type { Agent, AgentStatus, FleetEvent, FleetState, HostView, Machine, Not
 import { nativeEndpoint, NativeApiError, type NativeEndpoint, type NativeEvent, type Subscription } from './native-api.ts';
 import { readPrivateJson, writePrivateJson } from './private-json.ts';
 
-const lifecycle: Subscription[] = ['workspace.created', 'workspace.updated', 'workspace.metadata_updated', 'workspace.renamed', 'workspace.moved', 'workspace.reordered', 'workspace.closed', 'tab.created', 'tab.closed', 'tab.renamed', 'tab.moved', 'pane.created', 'pane.closed', 'pane.updated', 'pane.moved', 'pane.exited', 'pane.agent_detected', 'layout.updated'].map(type => ({ type }));
+const lifecycle: Subscription[] = ['workspace.focused', 'tab.focused', 'pane.focused', 'workspace.created', 'workspace.updated', 'workspace.metadata_updated', 'workspace.renamed', 'workspace.moved', 'workspace.reordered', 'workspace.closed', 'tab.created', 'tab.closed', 'tab.renamed', 'tab.moved', 'pane.created', 'pane.closed', 'pane.updated', 'pane.moved', 'pane.exited', 'pane.agent_detected', 'layout.updated'].map(type => ({ type }));
 const identity = (machine: Machine) => JSON.stringify([machine.target, machine.session, machine.enabled, machine.platform]);
-const validSnapshot = (value: any): value is Snapshot => value && typeof value.version === 'string' && ['workspaces', 'tabs', 'panes', 'agents', 'layouts'].every(key => Array.isArray(value[key]) && value[key].length <= 4096);
+const validSnapshot = (value: any): value is Snapshot => value && typeof value.version === 'string' && ['workspaces', 'tabs', 'panes', 'agents', 'layouts'].every(key => Array.isArray(value[key]) && value[key].length <= 4096) && (value.agent_view === undefined || validAgentView(value.agent_view)) && value.tabs.every((tab: any) => tab.custom_label === undefined || typeof tab.custom_label === 'boolean');
+const validAgentView = (view: any): boolean => view && Array.isArray(view.pane_ids) && view.pane_ids.length <= 4096 && view.pane_ids.every((id: any) => typeof id === 'string' && id.length <= 256) && new Set(view.pane_ids).size === view.pane_ids.length && (view.definition === null || view.definition && typeof view.definition.source === 'string' && view.definition.source.length <= 120 && (view.definition.label === undefined || typeof view.definition.label === 'string' && view.definition.label.length <= 128));
 interface Host {
   view: HostView; epoch: number; api?: NativeEndpoint; timer?: ReturnType<typeof setTimeout>; health?: ReturnType<typeof setInterval>;
   refreshTimer?: ReturnType<typeof setTimeout>; reading: boolean; dirty: boolean; attempts: number; eventSequence: number;
@@ -164,12 +165,14 @@ export class Fleet extends EventEmitter {
   private async watchAgents(host: Host) {
     if (!host.api || !host.view.snapshot || host.watching) return;
     const ids = host.view.snapshot.panes.map(pane => pane.pane_id).sort();
-    const key = JSON.stringify(ids);
+    const subscriptions: Subscription[] = ids.map(pane_id => ({ type: 'pane.agent_status_changed', pane_id }));
+    if (host.view.snapshot.agent_view) subscriptions.push({ type: 'agent.view.changed' });
+    const key = JSON.stringify(subscriptions);
     if (host.watchKey === key) return;
     const epoch = host.epoch; host.watching = true;
     try {
       let stop: (() => void) | undefined;
-      if (ids.length) stop = await host.api.subscribe(ids.map(pane_id => ({ type: 'pane.agent_status_changed', pane_id })), event => { if (host.epoch === epoch) this.event(host, event); }, error => { if (host.epoch === epoch) this.fail(host, error); });
+      if (subscriptions.length) stop = await host.api.subscribe(subscriptions, event => { if (host.epoch === epoch) this.event(host, event); }, error => { if (host.epoch === epoch) this.fail(host, error); });
       if (host.epoch !== epoch) { stop?.(); return; }
       host.stopWatch?.(); host.stopWatch = stop; host.watchKey = key;
       this.invalidate(host, 0);

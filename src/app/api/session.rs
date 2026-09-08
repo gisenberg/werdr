@@ -53,6 +53,7 @@ impl App {
             panes: self.collect_panes_for_workspace(None).unwrap_or_default(),
             layouts,
             agents: self.collect_agent_infos(),
+            agent_view: Some(self.agent_view_info()),
         }
     }
 }
