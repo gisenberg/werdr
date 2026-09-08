@@ -92,7 +92,11 @@ Editable controls, dialogs, IME composition, clipboard access, and held command 
 Unrelated pane, attachment, or host changes cancel an armed command.
 Navigate preserves its own directional pane focus through the expected terminal attachment.
 Native fallback after a move still follows the moved pane, while a newer navigation or command prevents an older response from changing selection.
-The browser binding catalog covers its supported built-in actions; native custom shell bindings, detach/reload/notification-target bindings, and last-pane tracking remain outside this catalog.
+Last pane toggles between your two most recent pane selections, including panes in other tabs or workspaces on the same host.
+It is available from the command palette and starts unbound, matching the native default; assign `last_pane` in Settings.
+History stays in this browser and clears when changing hosts or reconnecting through an uncertain endpoint.
+Closed panes and replaced terminals cannot become last-pane targets.
+The browser binding catalog covers its supported built-in actions; native custom shell bindings and detach/reload/notification-target bindings remain outside this catalog.
 ## Current behavior
 
 **SETTINGS** provides native herdr palettes, custom semantic colors, live preview/cancel, system light/dark switching, terminal fonts, sidebar density/width, agent ordering, close confirmations, and notification options.

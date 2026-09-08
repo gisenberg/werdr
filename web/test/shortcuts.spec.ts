@@ -333,3 +333,63 @@ test('Navigate survives the expected attachment of a previously hidden pane', as
     await page.keyboard.press('Escape'); await expect(page.locator('#shortcut-status')).toBeHidden();
   } finally { hold = false; for (const release of queued.splice(0)) release(); await runtime.close(); }
 });
+
+test('last-pane binding toggles scoped selections and clears uncertain reconnect history', async ({ page }) => {
+  test.setTimeout(120_000); const runtime = await fixture(); const inputs: string[] = [];
+  let observedGeneration = '';
+  page.on('websocket', socket => { if (socket.url().endsWith('/ws/fleet')) socket.on('framereceived', frame => {
+    const event = JSON.parse(String(frame.payload)); if (event.type === 'fleet.snapshot') observedGeneration = event.state.generation;
+  }); });
+  const selected = () => new URL(page.url()).searchParams.get('pane');
+  const last = async () => { await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'F2'); };
+  try {
+    await capture(page, inputs); await login(page, runtime);
+    const first = selected();
+    await prefix(page, 's'); await page.locator('#settings-keybindings summary').click();
+    await expect(page.locator('[data-shortcut=last_pane]')).toHaveValue('');
+    await page.locator('[data-shortcut=last_pane]').fill('prefix+f2');
+    await page.locator('#settings-form button[type=submit]').click(); await expect(page.locator('#settings-dialog')).toBeHidden();
+    await last(); expect(selected()).toBe(first);
+    await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await expect.poll(selected).not.toBe(first); const second = selected();
+    const firstInput = await page.locator(`.terminal-pane[data-pane="${first}"] textarea`).elementHandle();
+    await last(); await expect.poll(selected).toBe(first);
+    await last(); await expect.poll(selected).toBe(second);
+    expect(await firstInput!.evaluate(node => node.isConnected)).toBe(true);
+    await prefix(page, 'c'); await expect(page.locator('#tabs button')).toHaveCount(2);
+    await expect.poll(selected).not.toBe(second); const third = selected();
+    await last(); await expect.poll(selected).toBe(second);
+    await last(); await expect.poll(selected).toBe(third);
+    await prefix(page, 'Shift+n'); await expect(page.locator('#workspaces button')).toHaveCount(2);
+    await expect.poll(selected).not.toBe(third); const fourth = selected();
+    await last(); await expect.poll(selected).toBe(third);
+    await last(); await expect.poll(selected).toBe(fourth);
+    // Preview never becomes history; cancellation retains the previous actual pane.
+    await prefix(page, 'w'); await page.keyboard.press('ArrowUp'); await page.keyboard.press('Escape');
+    await last(); await expect.poll(selected).toBe(third);
+    await runtime.cli('pane', 'close', fourth!);
+    await expect(page.locator('#workspaces button')).toHaveCount(1);
+    await last(); expect(selected()).toBe(third);
+    await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
+    const beforeReconnect = selected(); await last(); await expect.poll(selected).toBe(third);
+    const previousGeneration = observedGeneration; await runtime.restartGateway();
+    await expect.poll(() => observedGeneration).not.toBe(previousGeneration);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.locator('#hosts button').first()).toHaveAttribute('data-badge', 'ONLINE');
+    await expect(page.locator('#shield')).toBeHidden();
+    await last(); expect(selected()).toBe(third); expect(selected()).not.toBe(beforeReconnect);
+    // A host without metadata must clear history before choose() can reconcile a pane.
+    await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
+    await last(); await expect.poll(selected).toBe(third);
+    const { mkdir, writeFile } = await import('node:fs/promises'); const { join } = await import('node:path');
+    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'a'.repeat(32), label: 'Unloaded host', target: '127.0.0.1', session: 'last-pane-unavailable', enabled: true }] }), { mode: 0o600 });
+    const unloaded = page.locator('#hosts button').filter({ hasText: 'Unloaded host' });
+    await unloaded.click(); await expect(unloaded).toHaveClass(/active/);
+    await page.locator('#hosts button').first().click(); await expect(page.locator('#shield')).toBeHidden();
+    await last(); expect(selected()).toBe(third);
+    expect(inputs).toEqual([]);
+    await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('Last pane');
+    await expect(page.locator('#command-list button').filter({ hasText: 'Last pane' })).toBeDisabled();
+  } finally { await runtime.close(); }
+});

@@ -9,7 +9,7 @@ export const shortcutDefaults = {
   rename_pane: ['prefix+shift+p'], edit_scrollback: ['prefix+e'], copy_mode: ['prefix+['],
   focus_pane_left: ['prefix+h'], focus_pane_down: ['prefix+j'], focus_pane_up: ['prefix+k'], focus_pane_right: ['prefix+l'],
   swap_pane_left: ['prefix+shift+h'], swap_pane_down: ['prefix+shift+j'], swap_pane_up: ['prefix+shift+k'], swap_pane_right: ['prefix+shift+l'],
-  cycle_pane_next: ['prefix+tab'], cycle_pane_previous: ['prefix+shift+tab'],
+  cycle_pane_next: ['prefix+tab'], cycle_pane_previous: ['prefix+shift+tab'], last_pane: [],
   split_vertical: ['prefix+v', 'ctrl+d', 'super+d'], split_horizontal: ['prefix+minus', 'ctrl+shift+d', 'super+shift+d'],
   close_pane: ['prefix+x'], zoom: ['prefix+z'], resize_mode: ['prefix+r'],
   resize_pane_left: [], resize_pane_down: [], resize_pane_up: [], resize_pane_right: [], toggle_sidebar: ['prefix+b'],

@@ -1,4 +1,5 @@
 import { MobileSwitcher } from './mobile-switcher';
+import { LastPane } from './last-pane';
 import { mobileSwitcherSections, type MobileTargetKind } from './mobile-switcher-model';
 import { NavigatePreview } from './navigate-preview';
 import { initialSelection, SelectionRestoration } from './selection-restoration';
@@ -66,11 +67,16 @@ let revealedWorkspace: string | undefined;
 let closingFocus: { machine: string; workspace: string; tab: string } | undefined;
 for (const type of ['pointerdown', 'keydown', 'paste', 'focusin']) document.addEventListener(type, () => { ++interactionRevision; closingFocus = undefined; }, true);
 let gatewayOnline = false;
+const lastPane = new LastPane();
 const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
+  if (!online) lastPane.reset();
   if (!authenticated) return;
   if (!online) { status('[RECONNECTING] GATEWAY'); void refresh(); }
-  else if (recovered) surface.recover();
+  else if (recovered) {
+    if (!pendingPane && !restoration.active) lastPane.observe(lastPaneScope(), paneId, snapshot);
+    surface.recover();
+  }
 });
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
@@ -101,12 +107,18 @@ function machineContext(id: string) {
   const machine = fleetState.hosts.find(host => host.machine.id === id)?.machine;
   return machine ? JSON.stringify([machine.id, machine.target || '', machine.session || '']) : undefined;
 }
+function lastPaneScope() {
+  const host = selectedHost();
+  return authenticated && gatewayOnline && host?.connection === 'online'
+    ? JSON.stringify([fleetState.generation, machineContext(machineId), host.connectionGeneration]) : undefined;
+}
 function selectHost(id: string, fulfill = false) {
   if (!fulfill) { ++selectionIntent; pendingHost = undefined; }
   const restoring = restoration.active; restoration.cancel();
   if (restoring) { workspaceId = ''; tabId = ''; paneId = ''; }
   if (!fleetState.hosts.some(host => host.machine.id === id)) { pendingHost = { id, intent: selectionIntent }; fleet.resync(); return; }
   if (machineId === id) { if (restoring) { choose(); renderFleetNavigation(); } return; }
+  lastPane.reset();
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
   detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
@@ -114,7 +126,7 @@ function selectHost(id: string, fulfill = false) {
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
   restoration.cancel(); ++selectionIntent;
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
-  if (machineId !== machine) detach();
+  if (machineId !== machine) { lastPane.reset(); detach(); }
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
@@ -141,11 +153,12 @@ function waitForPane(machine: string, pane: string, tab: string, closedNotice = 
   pendingPaneTimer = setTimeout(inspect, 500);
 }
 function applyFleet(state: FleetState, added?: Notice) {
-  const previous = selectedHost()?.connection; fleetState = state;
+  const previous = selectedHost()?.connection, previousScope = lastPaneScope(); fleetState = state;
+  if (previousScope !== lastPaneScope()) lastPane.reset();
   if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
   if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
   if (!restoration.active && !selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
-    detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
+    lastPane.reset(); detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
   if (closingFocus?.machine === machineId && closingFocus.workspace === workspaceId && closingFocus.tab === tabId) {
@@ -293,6 +306,7 @@ function choose() {
     const nativePane = snapshot.layouts.find(layout => layout?.tab_id === tabId)?.focused_pane_id;
     paneId = snapshot.panes.find(p => p.tab_id === tabId && p.pane_id === nativePane)?.pane_id || snapshot.panes.find(p => p.tab_id === tabId)?.pane_id || '';
   }
+  lastPane.observe(lastPaneScope(), paneId, snapshot);
   renderNavigation(); rememberSelection();
   surface.sync(machineId, tabId, paneId, snapshot, selectedHost()?.connection === 'online');
   if (restoreFocus) surface.requestFocus(paneId);
@@ -477,6 +491,10 @@ function refreshCommands() {
     { id: 'command_palette', label: 'Command palette', run: () => openCommands() },
     { id: 'workspace_picker', label: 'Workspace picker', disabled: !online, run: () => shortcuts?.enterNavigate() },
     { id: 'goto', label: 'Go to workspace, tab or pane', run: () => openCommands('', true) },
+    { id: 'last_pane', label: 'Last pane', disabled: !online || !lastPane.target(lastPaneScope(), pane, snapshot), run: () => {
+      const target = lastPane.target(lastPaneScope(), paneId, snapshot);
+      if (target) selectTarget(machineId, target.workspace_id, target.tab_id, target.pane_id);
+    } },
     { id: 'new_worktree', label: 'Create worktree', disabled: !online || !workspaceAction, run: () => worktrees.open(worktreeTarget, 'create') },
     { id: 'open_worktree', label: 'Open worktree', disabled: !online || !workspaceAction, run: () => worktrees.open(worktreeTarget, 'open') },
     { id: 'remove_worktree', label: 'Remove worktree checkout', disabled: !online || !snapshot.workspaces.find(item => item.workspace_id === workspaceAction)?.worktree?.is_linked_worktree, run: () => worktrees.open(worktreeTarget, 'remove') },

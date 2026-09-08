@@ -53,11 +53,14 @@ test('host failures, colliding pane IDs, reconnects and notification persistence
     assert.equal(fleet.state().notices[0].kind, 'finished');
     assert.equal(fleet.state().notices[0].machineId, 'one');
     const old = endpoints.get('two')!;
+    const connectionGeneration = fleet.state().hosts.find(host => host.machine.id === 'two')!.connectionGeneration;
+    assert.match(connectionGeneration!, /^[0-9a-f]{32}$/);
     old.listeners[0].fail(new Error('SSH lost'));
     assert.equal(fleet.state().hosts.find(host => host.machine.id === 'one')!.connection, 'online');
     assert.equal(fleet.state().hosts.find(host => host.machine.id === 'two')!.snapshot!.panes.length, 1);
     fleet.retry('two');
     await until(() => endpoints.get('two') !== old && fleet.state().hosts.find(host => host.machine.id === 'two')!.connection === 'online');
+    assert.notEqual(fleet.state().hosts.find(host => host.machine.id === 'two')!.connectionGeneration, connectionGeneration);
     catalog = catalog.map(machine => machine.id === 'two' ? { ...machine, enabled: false } : machine);
     await fleet.reloadCatalog();
     assert.equal(endpoints.get('two')!.closed, true);

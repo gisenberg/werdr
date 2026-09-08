@@ -25,7 +25,10 @@ Browser-session revocation removes persisted authority and closes the matching t
 Token replacement or explicit access-token revocation invalidates token-authenticated sessions; their persisted token fingerprint also prevents resurrection if shutdown interrupts rotation.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
 `ShortcutMode` owns prefix, Navigate, and resize state, while `DesktopShortcuts` resolves configured commands before terminal keyboard encoding.
-Bindings and prefix preferences live in the version-nine browser settings store, with migration and revision-checked saves.
+Bindings and prefix preferences live in the version-ten browser settings store, with migration and revision-checked saves.
+`LastPane` records reconciled browser pane/terminal identity and resolves current ancestry when invoked.
+It clears on host changes, lost gateway continuity, and native API connection replacement, including replacements whose offline delta was missed.
+The gateway publishes a fresh `connectionGeneration` for each native connection attempt; this is a conservative connection boundary, not a native boot identifier.
 `NavigatePreview` retains a stable host/workspace highlight independently from the active terminal.
 Workspace commands capture this target before leaving the mode, while directional pane focus preserves the expected attachment transition.
 The mobile switcher uses a pure section model and a retained DOM renderer, makes the background inert, and restores terminal or copy focus when hidden.

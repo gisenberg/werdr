@@ -89,7 +89,7 @@ export class Fleet extends EventEmitter {
     // Bound concurrent SSH handshakes without allowing one failed host to stall others.
     if (this.connecting >= 4) { this.schedule(host, 200); return; }
     const epoch = ++host.epoch; this.connecting++;
-    host.view = { ...host.view, connection: 'connecting', detail: undefined, retryAt: undefined }; this.publishHost(host);
+    host.view = { ...host.view, connection: 'connecting', connectionGeneration: randomBytes(16).toString('hex'), detail: undefined, retryAt: undefined }; this.publishHost(host);
     try {
       const api = await this.connect(host.view.machine);
       if (this.stopped || host.epoch !== epoch) { api.close(); return; }
