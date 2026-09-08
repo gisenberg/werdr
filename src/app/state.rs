@@ -16,6 +16,8 @@ pub(crate) struct PluginPaneRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PopupPaneState {
+    /// Stable tab ownership is assigned by the producer before the popup is published.
+    pub owner_tab_id: String,
     pub pane_id: PaneId,
     pub terminal_id: crate::terminal::TerminalId,
     pub width: Option<crate::popup_size::PopupSize>,

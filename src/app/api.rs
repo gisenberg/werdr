@@ -1009,6 +1009,9 @@ impl App {
                     },
                 );
             }
+            Method::CommandExecute(params) => {
+                return self.handle_command_execute(request.id, params);
+            }
             Method::CommandInvoke(params) => {
                 return self.handle_command_invoke(request.id, params);
             }

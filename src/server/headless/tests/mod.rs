@@ -68,7 +68,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         next_client_id: 1,
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
-        popup_owner_tab_id: None,
         client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
         api_window_title: None,
@@ -2193,6 +2192,46 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 }
 
 #[tokio::test]
+async fn popup_owner_survives_global_focus_and_tab_movement_but_closes_with_its_tab() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces = vec![
+        crate::workspace::Workspace::test_adversarial_identity_state(),
+        crate::workspace::Workspace::test_new("other"),
+    ];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    let owner_index = server.app.state.workspaces[0].active_tab_index();
+    let owner = server.app.public_tab_id(0, owner_index).unwrap();
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+        40, 12, 0, b"POPUP", 4,
+    );
+    let (_, terminal_id) = server.app.install_test_popup_runtime(runtime);
+    assert_eq!(server.popup_owner_tab_id(), Some(owner.as_str()));
+    server.app.state.active = Some(1);
+    server.reconcile_client_shell_locations();
+    assert_eq!(server.popup_owner_tab_id(), Some(owner.as_str()));
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+    let tab_count = server.app.state.workspaces[0].tabs.len();
+    let insert_index = if owner_index == 0 { tab_count } else { 0 };
+    assert!(server.app.state.workspaces[0].move_tab(owner_index, insert_index));
+    server.app.state.workspaces[0].assert_invariants_for_test();
+    // Workspace ordering changes without changing the owning workspace identity.
+    server.app.state.workspaces.swap(0, 1);
+    server.app.state.active = Some(0);
+    server.reconcile_client_shell_locations();
+    assert_eq!(server.popup_owner_tab_id(), Some(owner.as_str()));
+    let (workspace, tab) = server.app.parse_tab_id(&owner).unwrap();
+    assert_eq!(workspace, 1);
+    assert_ne!(tab, owner_index);
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+    server.app.state.workspaces[workspace].tabs.remove(tab);
+    server.reconcile_client_shell_locations();
+    assert!(server.popup_owner_tab_id().is_none());
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn client_shell_streams_and_targets_popup_terminal_content() {
     let mut server = test_headless_server();
     let mut pane_input = install_focused_test_runtime(&mut server, b"base-pane");
@@ -2367,7 +2406,7 @@ async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
             4,
         );
     let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
-    server.popup_owner_tab_id = Some(first_tab_id);
+    server.app.state.popup_pane.as_mut().unwrap().owner_tab_id = first_tab_id;
     assert!(server.apply_shell_tab_geometry(31, false));
     let popup_size = server
         .app

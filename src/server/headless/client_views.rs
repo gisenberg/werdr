@@ -127,20 +127,20 @@ impl HeadlessServer {
         }
     }
 
+    pub(super) fn popup_owner_tab_id(&self) -> Option<&str> {
+        self.app
+            .state
+            .popup_pane
+            .as_ref()
+            .map(|popup| popup.owner_tab_id.as_str())
+    }
+
     pub(super) fn reconcile_client_shell_locations(&mut self) {
-        if self.app.state.popup_pane.is_none() {
-            self.popup_owner_tab_id = None;
-        } else if self
-            .popup_owner_tab_id
-            .as_deref()
+        if self
+            .popup_owner_tab_id()
             .is_some_and(|tab_id| self.app.parse_tab_id(tab_id).is_none())
         {
-            self.popup_owner_tab_id = None;
             self.app.close_popup_pane();
-        } else if self.popup_owner_tab_id.is_none() {
-            self.popup_owner_tab_id = self
-                .default_shell_target()
-                .and_then(|target| self.tab_id_for_target(target));
         }
         let topology = self.client_shell_topology();
         let live_clients = self.clients.keys().copied().collect::<HashSet<_>>();
@@ -229,7 +229,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::CommandExecute(_)
+                | Method::CommandInvoke(_)
                 | Method::PaneClose(_)
                 | Method::PaneEditScrollback(_)
                 | Method::PaneSplit(_)
@@ -248,7 +249,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::CommandExecute(_)
+                | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
                 | Method::PaneCopyMotion(_)
@@ -286,7 +288,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::CommandExecute(_)
+                | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
                 | Method::PaneEditScrollback(_)
@@ -595,8 +598,7 @@ impl HeadlessServer {
             );
         }
         if self
-            .popup_owner_tab_id
-            .as_deref()
+            .popup_owner_tab_id()
             .is_some_and(|owner| self.tab_id_for_target(target).as_deref() == Some(owner))
         {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
@@ -759,8 +761,7 @@ impl HeadlessServer {
             .as_ref()
             .is_some_and(|popup| popup.terminal_id.as_str() == terminal_id)
         {
-            self.popup_owner_tab_id
-                .as_deref()
+            self.popup_owner_tab_id()
                 .and_then(|tab_id| self.app.parse_tab_id(tab_id))
                 .map(|(workspace_index, tab_index)| crate::ui::TabSurfaceTarget {
                     workspace_index,
@@ -886,12 +887,8 @@ impl HeadlessServer {
             self.apply_shell_navigation_request(client_id, &msg.request.method);
         self.set_default_shell_target_from_client(client_id);
         let popup_before = self.app.state.popup_pane.is_some();
-        let popup_owner = self.shell_tab_id_for_client(client_id);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false);
         self.focus_shell_client_on_default_target(client_id);
-        if !popup_before && self.app.state.popup_pane.is_some() {
-            self.popup_owner_tab_id = popup_owner;
-        }
         if reconcile || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }

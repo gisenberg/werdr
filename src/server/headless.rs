@@ -210,8 +210,6 @@ pub struct HeadlessServer {
     foreground_client_id: Option<u64>,
     /// Ephemeral shell connection controlling PTY geometry for each stable tab id.
     tab_geometry_controllers: HashMap<String, u64>,
-    /// Stable tab id whose viewers may see and interact with the one terminal popup.
-    popup_owner_tab_id: Option<String>,
     /// Process-local identity used to reject shell replacements from an earlier server boot.
     client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
@@ -352,7 +350,6 @@ impl HeadlessServer {
             next_client_id: 1,
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
-            popup_owner_tab_id: None,
             client_shell_boot_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -1274,7 +1271,8 @@ impl HeadlessServer {
                     return false;
                 };
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
-                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                    && self.popup_owner_tab_id()
+                        == self.shell_tab_id_for_client(client_id).as_deref();
                 if popup_blocks_input
                     || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
                 {
@@ -1316,7 +1314,8 @@ impl HeadlessServer {
                     return false;
                 };
                 if popup_terminal_id.as_str() != terminal_id
-                    || self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id)
+                    || self.popup_owner_tab_id()
+                        != self.shell_tab_id_for_client(client_id).as_deref()
                 {
                     return false;
                 }
@@ -2030,12 +2029,6 @@ impl HeadlessServer {
                 connection.shell_location = Some(location);
                 connection.shell_snapshot = Some(seed_snapshot);
                 self.clients.insert(client_id, connection);
-                if surface_active
-                    && self.app.state.popup_pane.is_some()
-                    && self.popup_owner_tab_id.is_none()
-                {
-                    self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
-                }
                 self.send_to_client(client_id, snapshot_message);
                 if surface_active {
                     self.foreground_client_id = Some(client_id);
@@ -2406,7 +2399,8 @@ impl HeadlessServer {
                     runtime.pixel_size(),
                 );
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
-                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                    && self.popup_owner_tab_id()
+                        == self.shell_tab_id_for_client(client_id).as_deref();
                 if popup_blocks_input
                     || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
                 {
@@ -2496,7 +2490,7 @@ impl HeadlessServer {
                     runtime.current_size(),
                     runtime.pixel_size(),
                 );
-                if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
+                if self.popup_owner_tab_id() != self.shell_tab_id_for_client(client_id).as_deref() {
                     let releases = events
                         .into_iter()
                         .filter(client_pane_input_releases_press)

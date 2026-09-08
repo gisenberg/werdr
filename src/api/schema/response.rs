@@ -48,6 +48,9 @@ pub enum ResponseResult {
         #[serde(default)]
         capabilities: Option<ServerCapabilities>,
     },
+    CommandExecuted {
+        effect: super::commands::CommandEffect,
+    },
     CommandList {
         commands: Vec<super::commands::CommandInfo>,
     },

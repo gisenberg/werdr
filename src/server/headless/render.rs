@@ -5,7 +5,7 @@ impl HeadlessServer {
         &self,
         client_id: u64,
     ) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
-        if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
+        if self.popup_owner_tab_id() == self.shell_tab_id_for_client(client_id).as_deref() {
             if let Some(popup) = &self.app.state.popup_pane {
                 return self
                     .app
@@ -249,7 +249,7 @@ impl HeadlessServer {
                 } else {
                     pane_ids.extend(tab.layout.pane_ids());
                 }
-                if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
+                if self.popup_owner_tab_id() == self.shell_tab_id_for_client(client_id).as_deref() {
                     if let Some(popup) = &self.app.state.popup_pane {
                         pane_ids.insert(popup.pane_id);
                     }
@@ -357,7 +357,8 @@ impl HeadlessServer {
                 .as_ref()
                 .is_some_and(|popup| popup.pane_id == pane_id)
             {
-                return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                return self.popup_owner_tab_id()
+                    == self.shell_tab_id_for_client(client_id).as_deref();
             }
             let Some(target) = self.shell_target_for_client(client_id) else {
                 return false;
@@ -410,7 +411,7 @@ impl HeadlessServer {
             let area = Rect::new(0, 0, cols, rows);
             let shell_target = self.shell_target_for_client(client_id);
             let shell_tab_id = self.shell_tab_id_for_client(client_id);
-            let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id.as_deref();
+            let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id();
             let mut shell_projection_revision = 0;
             if matches!(mode, ClientConnectionMode::ClientShell) {
                 let location = self

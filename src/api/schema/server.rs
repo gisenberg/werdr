@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Executes opaque commands with explicit context and producer-owned result identities.
+    #[serde(default)]
+    pub command_execution: bool,
     /// Supports command.list and command.manifest_changed subscriptions.
     #[serde(default)]
     pub command_catalog: bool,

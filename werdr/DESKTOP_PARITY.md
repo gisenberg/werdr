@@ -214,7 +214,11 @@ Native tests verify secret-free ordered metadata, unchanged focus, empty-fleet r
 Gateway tests cover concurrent reload, endpoint replacement, unsupported servers, failed subscriptions and reads, retry recovery, late responses, disposal, and host isolation.
 The foundation passed full native checks with 3,285 tests and two platform skips, Windows cross-target lint and test compilation, and 167 browser package tests with typechecking and build.
 This work is not deployed, and browser command dispatch is still incomplete.
-The existing invoke reply does not identify a command-created pane atomically; a later global-focus read can observe another client's action and is not sufficient evidence of the result.
+The candidate adds capability-gated `command.execute`, validating the complete workspace/tab/pane/terminal target and selection revision before changing focus.
+Its producer returns the created pane or popup identity, shell-start acknowledgement, or plugin invocation ID without exposing executable text or plugin output.
+The original `command.invoke` reply remains unchanged.
+Popup ownership is assigned by the producer before publication and survives tab and workspace reordering; removing the owning tab closes its popup.
+Browser dispatch must consume these exact results because a later global-focus read can observe another client's action.
 Popup commands additionally require their singleton terminal's metadata, rendering, input, ownership, and close path; plugin actions may open these popups too.
 Complete browser dispatch must preserve scoped workspace/tab/pane identities and selected-text coordinates with their authoritative content revision, report stale IDs without automatic retry or label-based remapping, and verify native command outcomes on desktop and phone.
 

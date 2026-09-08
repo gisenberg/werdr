@@ -226,7 +226,7 @@ impl App {
         &mut self,
         action_id: String,
         selected_text: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<crate::api::schema::PluginCommandLogInfo, String> {
         self.refresh_installed_plugins()
             .map_err(|err| format!("failed to load plugin registry: {err}"))?;
         let (plugin, action) = self
@@ -251,7 +251,6 @@ impl App {
             &context,
             None,
         )
-        .map(|_| ())
         .map_err(|(_, message)| message)
     }
 
@@ -2462,6 +2461,17 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
     #[cfg(unix)]
     #[test]
     fn manifest_action_invoke_runs_command_and_captures_log() {
+        assert_manifest_action_execution(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_command_plugin_effect_identifies_log_without_exposing_execution_details() {
+        assert_manifest_action_execution(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_manifest_action_execution(scoped: bool) {
         let mut app = test_app();
         let root = unique_temp_path("plugin-action-runner");
         write_manifest_content(
@@ -2481,16 +2491,65 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
         );
         link_manifest(&mut app, &root);
 
-        let invoke = app.handle_api_request(Request {
-            id: "invoke-runner".into(),
-            method: Method::PluginActionInvoke(PluginActionInvokeParams {
-                plugin_id: Some("example.runner".into()),
-                action_id: "run".into(),
-                context: None,
-            }),
-        });
-        let ResponseResult::PluginActionInvoked { log, .. } = response_result(&invoke) else {
-            panic!("expected plugin action invocation: {invoke}");
+        let invoke = if scoped {
+            let binding = crate::config::CustomCommandKeybind {
+                bindings: crate::config::ActionKeybinds::prefix("z"),
+                label: "prefix+z".into(),
+                command: "example.runner.run".into(),
+                action: crate::config::CustomCommandAction::PluginAction,
+                description: None,
+                width: None,
+                height: None,
+            };
+            app.endpoint_commands =
+                crate::app::custom_commands::EndpointCommandRegistry::new(&[binding]);
+            let command_id = app.command_manifest()[0].command_id.clone();
+            app.handle_command_execute(
+                "invoke-runner".into(),
+                crate::api::schema::CommandExecuteParams {
+                    command_id,
+                    target: None,
+                    selection: None,
+                },
+            )
+        } else {
+            app.handle_api_request(Request {
+                id: "invoke-runner".into(),
+                method: Method::PluginActionInvoke(PluginActionInvokeParams {
+                    plugin_id: Some("example.runner".into()),
+                    action_id: "run".into(),
+                    context: None,
+                }),
+            })
+        };
+        let log = if scoped {
+            let ResponseResult::CommandExecuted {
+                effect: crate::api::schema::CommandEffect::PluginStarted { log_id, plugin_id },
+            } = response_result(&invoke)
+            else {
+                panic!("expected command plugin result: {invoke}");
+            };
+            assert_eq!(plugin_id, "example.runner");
+            for private in [
+                "argv",
+                "command",
+                "stdout",
+                "stderr",
+                "HERDR_PLUGIN_ACTION_ID",
+            ] {
+                assert!(!invoke.contains(&format!("\"{private}\"")));
+            }
+            app.state
+                .plugin_command_logs
+                .iter()
+                .find(|entry| entry.log_id == log_id)
+                .expect("producer log")
+                .clone()
+        } else {
+            let ResponseResult::PluginActionInvoked { log, .. } = response_result(&invoke) else {
+                panic!("expected plugin action invocation: {invoke}");
+            };
+            log
         };
         assert_eq!(log.status, PluginCommandStatus::Running);
 

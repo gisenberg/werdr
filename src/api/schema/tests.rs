@@ -723,6 +723,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                command_execution: true,
                 command_catalog: true,
                 semantic_notifications: true,
                 workspace_git_status: true,
@@ -1545,4 +1546,18 @@ fn command_catalog_contract_is_optional_and_forward_compatible() {
         EventKind::CommandManifestChanged.dot_name(),
         "command.manifest_changed"
     );
+}
+
+#[test]
+fn scoped_command_effects_keep_unknown_results_non_actionable() {
+    let effect: CommandEffect = serde_json::from_value(
+        serde_json::json!({"type":"future_effect","pane_id":"not-a-navigation-target"}),
+    )
+    .unwrap();
+    assert_eq!(effect, CommandEffect::Unknown);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.command_execution);
+    let request: Request = serde_json::from_value(serde_json::json!({"id":"execute","method":"command.execute","params":{"command_id":"opaque","target":{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","terminal_id":"term1"}}})).unwrap();
+    assert!(crate::api::request_changes_ui(&request));
 }

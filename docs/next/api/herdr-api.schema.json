@@ -2166,6 +2166,38 @@
           ],
           "type": "object"
         },
+        "CommandExecuteParams": {
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PaneSelectionReadParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/CommandTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "None is an explicit global context, permitted only while the endpoint has no workspaces."
+            }
+          },
+          "required": [
+            "command_id"
+          ],
+          "type": "object"
+        },
         "CommandInvokeParams": {
           "properties": {
             "command_id": {
@@ -2204,6 +2236,29 @@
           },
           "required": [
             "command_id"
+          ],
+          "type": "object"
+        },
+        "CommandTarget": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "terminal_id"
           ],
           "type": "object"
         },
@@ -5404,6 +5459,22 @@
         {
           "properties": {
             "method": {
+              "const": "command.execute",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/CommandExecuteParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "command.invoke",
               "type": "string"
             },
@@ -7675,6 +7746,86 @@
           ],
           "type": "string"
         },
+        "CommandEffect": {
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "shell_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "pane": {
+                  "$ref": "#/schemas/success_response/$defs/CommandTarget"
+                },
+                "type": {
+                  "const": "pane_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "popup": {
+                  "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                },
+                "type": {
+                  "const": "popup_opened",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "popup"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "log_id": {
+                  "type": "string"
+                },
+                "plugin_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "plugin_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "log_id",
+                "plugin_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "CommandInfo": {
           "description": "Configuration-backed command metadata. Executable text stays on the owning endpoint.",
           "properties": {
@@ -7701,6 +7852,68 @@
             "command_id",
             "binding_labels",
             "action"
+          ],
+          "type": "object"
+        },
+        "CommandPopup": {
+          "properties": {
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "owner_tab_id": {
+              "type": "string"
+            },
+            "owner_workspace_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "terminal_id",
+            "owner_workspace_id",
+            "owner_tab_id"
+          ],
+          "type": "object"
+        },
+        "CommandTarget": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "terminal_id"
           ],
           "type": "object"
         },
@@ -10208,6 +10421,22 @@
             },
             {
               "properties": {
+                "effect": {
+                  "$ref": "#/schemas/success_response/$defs/CommandEffect"
+                },
+                "type": {
+                  "const": "command_executed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "effect"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "commands": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/CommandInfo"
@@ -11565,6 +11794,11 @@
             "command_catalog": {
               "default": false,
               "description": "Supports command.list and command.manifest_changed subscriptions.",
+              "type": "boolean"
+            },
+            "command_execution": {
+              "default": false,
+              "description": "Executes opaque commands with explicit context and producer-owned result identities.",
               "type": "boolean"
             },
             "detached_server_daemon": {

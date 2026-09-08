@@ -38,7 +38,7 @@ impl App {
         cwd: Option<PathBuf>,
         extra_env: Vec<(String, String)>,
         geometry: PopupGeometry,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<crate::api::schema::CommandPopup> {
         self.spawn_popup_command(
             cwd,
             extra_env,
@@ -70,7 +70,7 @@ impl App {
         cwd: Option<PathBuf>,
         extra_env: Vec<(String, String)>,
         geometry: PopupGeometry,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<crate::api::schema::CommandPopup> {
         self.spawn_popup_command(
             cwd,
             extra_env,
@@ -102,7 +102,7 @@ impl App {
         extra_env: Vec<(String, String)>,
         geometry: PopupGeometry,
         spawn: F,
-    ) -> std::io::Result<()>
+    ) -> std::io::Result<crate::api::schema::CommandPopup>
     where
         F: FnOnce(
             PaneId,
@@ -134,6 +134,9 @@ impl App {
             active_tab.cwd_for_pane(focused_pane, &self.state.terminals, &self.terminal_runtimes)
         });
         let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+        let owner_tab_id = self
+            .public_tab_id(ws_idx, ws.active_tab_index())
+            .ok_or_else(|| std::io::Error::other("popup owning tab disappeared"))?;
         let pane_id = PaneId::alloc();
         let terminal_id = TerminalId::alloc();
         let launch_env = PaneLaunchEnv::from_extra(extra_env).without_pane_identity();
@@ -159,14 +162,22 @@ impl App {
         };
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
         self.state.terminals.insert(terminal_id.clone(), terminal);
+        let result = crate::api::schema::CommandPopup {
+            terminal_id: terminal_id.as_str().to_owned(),
+            owner_workspace_id: self.public_workspace_id(ws_idx),
+            owner_tab_id: owner_tab_id.clone(),
+            width: geometry.width,
+            height: geometry.height,
+        };
         self.state.popup_pane = Some(crate::app::state::PopupPaneState {
+            owner_tab_id,
             pane_id,
             terminal_id,
             width: geometry.width,
             height: geometry.height,
         });
         self.state.mode = Mode::Terminal;
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -184,6 +195,13 @@ impl App {
             TerminalState::new(terminal_id.clone(), PathBuf::from("/popup")),
         );
         self.state.popup_pane = Some(crate::app::state::PopupPaneState {
+            owner_tab_id: self
+                .state
+                .active
+                .and_then(|ws_idx| {
+                    self.public_tab_id(ws_idx, self.state.workspaces[ws_idx].active_tab_index())
+                })
+                .expect("test popup requires an owning tab"),
             pane_id,
             terminal_id: terminal_id.clone(),
             width: None,
@@ -215,6 +233,7 @@ mod tests {
             TerminalState::new(terminal_id.clone(), PathBuf::from("/popup")),
         );
         app.state.popup_pane = Some(crate::app::state::PopupPaneState {
+            owner_tab_id: app.public_tab_id(0, 0).expect("test owning tab"),
             pane_id: PaneId::alloc(),
             terminal_id,
             width: None,

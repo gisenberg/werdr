@@ -277,6 +277,7 @@ struct ServerStatusJson {
 
 #[derive(Serialize)]
 struct ServerCapabilitiesJson {
+    command_execution: bool,
     command_catalog: bool,
     semantic_notifications: bool,
     workspace_git_status: bool,
@@ -323,6 +324,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             capabilities: capabilities
                 .as_ref()
                 .map(|capabilities| ServerCapabilitiesJson {
+                    command_execution: capabilities.command_execution,
                     command_catalog: capabilities.command_catalog,
                     semantic_notifications: capabilities.semantic_notifications,
                     workspace_git_status: capabilities.workspace_git_status,
@@ -417,6 +419,7 @@ mod tests {
             version: version.map(str::to_owned),
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
             capabilities: Some(crate::api::schema::ServerCapabilities {
+                command_execution: true,
                 command_catalog: true,
                 semantic_notifications: true,
                 workspace_git_status: true,

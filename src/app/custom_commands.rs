@@ -96,6 +96,96 @@ impl App {
             .map(|entry| entry.binding.clone())
     }
 
+    fn command_pane_target(
+        &self,
+        workspace_index: usize,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<crate::api::schema::CommandTarget> {
+        let workspace = self.state.workspaces.get(workspace_index)?;
+        let tab_index = workspace.find_tab_index_for_pane(pane_id)?;
+        Some(crate::api::schema::CommandTarget {
+            workspace_id: self.public_workspace_id(workspace_index),
+            tab_id: self.public_tab_id(workspace_index, tab_index)?,
+            pane_id: self.public_pane_id(workspace_index, pane_id)?,
+            terminal_id: workspace.terminal_id(pane_id)?.as_str().to_owned(),
+        })
+    }
+
+    pub(crate) fn handle_command_execute(
+        &mut self,
+        id: String,
+        params: crate::api::schema::CommandExecuteParams,
+    ) -> String {
+        use crate::app::api::responses::{encode_error, encode_success};
+        let Some(binding) = self.resolve_client_shell_command(&params.command_id) else {
+            return encode_error(
+                id,
+                "command_not_found",
+                "custom command manifest is stale; reload configuration",
+            );
+        };
+        if binding.action == crate::config::CustomCommandAction::Popup
+            && self.state.popup_pane.is_some()
+        {
+            return encode_error(id, "popup_already_open", "popup already open");
+        }
+        let target = if let Some(expected) = params.target.as_ref() {
+            let Some((workspace, pane)) = self.parse_pane_id(&expected.pane_id) else {
+                return encode_error(
+                    id,
+                    "command_target_mismatch",
+                    "command target is no longer available",
+                );
+            };
+            if self.command_pane_target(workspace, pane).as_ref() != Some(expected) {
+                return encode_error(
+                    id,
+                    "command_target_mismatch",
+                    "command target identity changed",
+                );
+            }
+            Some((workspace, pane))
+        } else {
+            if !self.state.workspaces.is_empty() {
+                return encode_error(
+                    id,
+                    "command_target_required",
+                    "choose an explicit command target",
+                );
+            }
+            None
+        };
+        let selected_text = if let Some(selection) = params.selection.as_ref() {
+            if binding.action != crate::config::CustomCommandAction::PluginAction
+                || params.target.as_ref().map(|target| target.pane_id.as_str())
+                    != Some(selection.pane_id.as_str())
+                || selection.content_revision.is_none()
+            {
+                return encode_error(
+                    id,
+                    "command_selection_mismatch",
+                    "command selection requires the exact plugin target and content revision",
+                );
+            }
+            match self.pane_selection_text(selection) {
+                Ok(text) => Some(text),
+                Err((code, message)) => return encode_error(id, code, message),
+            }
+        } else {
+            None
+        };
+        if let Some((workspace, pane)) = target {
+            self.state.focus_pane_in_workspace(workspace, pane);
+        }
+        match self.execute_custom_command_binding(&binding, selected_text) {
+            Ok(effect) => encode_success(
+                id,
+                crate::api::schema::ResponseResult::CommandExecuted { effect },
+            ),
+            Err(error) => encode_error(id, "command_failed", error.to_string()),
+        }
+    }
+
     pub(crate) fn handle_command_invoke(
         &mut self,
         id: String,
@@ -141,7 +231,7 @@ impl App {
         selected_text: Option<String>,
     ) -> String {
         match self.execute_custom_command_binding(binding, selected_text) {
-            Ok(()) => crate::app::api::responses::encode_success(
+            Ok(_) => crate::app::api::responses::encode_success(
                 id,
                 crate::api::schema::ResponseResult::Ok {},
             ),
@@ -232,32 +322,34 @@ impl App {
         &mut self,
         binding: &crate::config::CustomCommandKeybind,
         selected_text: Option<String>,
-    ) -> io::Result<()> {
+    ) -> io::Result<crate::api::schema::CommandEffect> {
+        use crate::api::schema::CommandEffect;
         match binding.action {
-            crate::config::CustomCommandAction::Shell => self.spawn_custom_command(binding),
-            crate::config::CustomCommandAction::Pane => {
-                self.spawn_pane_command(&binding.command, Vec::new())
-            }
-            crate::config::CustomCommandAction::Popup => self.spawn_custom_popup_command(binding),
+            crate::config::CustomCommandAction::Shell => self
+                .spawn_custom_command(binding)
+                .map(|()| CommandEffect::ShellStarted {}),
+            crate::config::CustomCommandAction::Pane => self
+                .spawn_pane_command(&binding.command, Vec::new())
+                .map(|pane| CommandEffect::PaneCreated { pane }),
+            crate::config::CustomCommandAction::Popup => self
+                .spawn_popup_shell_command(
+                    &binding.command,
+                    None,
+                    self.custom_command_env().0,
+                    crate::app::popup::PopupGeometry {
+                        width: binding.width,
+                        height: binding.height,
+                    },
+                )
+                .map(|popup| CommandEffect::PopupOpened { popup }),
             crate::config::CustomCommandAction::PluginAction => self
                 .invoke_plugin_action_from_keybind(binding.command.clone(), selected_text)
+                .map(|log| CommandEffect::PluginStarted {
+                    log_id: log.log_id,
+                    plugin_id: log.plugin_id,
+                })
                 .map_err(io::Error::other),
         }
-    }
-
-    fn spawn_custom_popup_command(
-        &mut self,
-        binding: &crate::config::CustomCommandKeybind,
-    ) -> io::Result<()> {
-        self.spawn_popup_shell_command(
-            &binding.command,
-            None,
-            self.custom_command_env().0,
-            crate::app::popup::PopupGeometry {
-                width: binding.width,
-                height: binding.height,
-            },
-        )
     }
 
     pub(crate) fn custom_command_env(&self) -> (Vec<(String, String)>, Option<std::path::PathBuf>) {
@@ -383,7 +475,7 @@ impl App {
         &mut self,
         command: &str,
         temp_files: Vec<std::path::PathBuf>,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<crate::api::schema::CommandTarget> {
         let Some(ws_idx) = self.state.active else {
             return Err(std::io::Error::other("no active workspace"));
         };
@@ -453,7 +545,8 @@ impl App {
         );
         self.state.remove_alias_shadowed_by_new_pane(new_pane_id);
         self.state.mode = Mode::Terminal;
-        Ok(())
+        self.command_pane_target(ws_idx, new_pane_id)
+            .ok_or_else(|| io::Error::other("created command pane disappeared"))
     }
 
     pub(crate) fn spawn_overlay_argv_command(
@@ -631,6 +724,166 @@ mod tests {
                 .map(|binding| binding.command),
             Some("secret-command --token hidden".into())
         );
+    }
+
+    fn scoped_app(
+        action: crate::config::CustomCommandAction,
+    ) -> (crate::app::App, crate::api::schema::CommandExecuteParams) {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            crate::workspace::Workspace::test_new("target"),
+            crate::workspace::Workspace::test_new("other"),
+        ];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(1);
+        let mut configured = binding(action);
+        configured.command = crate::app::exiting_test_command().into();
+        install(&mut app, configured);
+        let params = crate::api::schema::CommandExecuteParams {
+            command_id: app.command_manifest()[0].command_id.clone(),
+            target: app.command_pane_target(0, app.state.workspaces[0].tabs[0].root_pane),
+            selection: None,
+        };
+        (app, params)
+    }
+
+    #[test]
+    fn scoped_command_rejects_stale_identity_and_missing_context_without_changing_focus() {
+        for field in ["workspace", "tab", "pane", "terminal", "command", "missing"] {
+            let (mut app, mut params) = scoped_app(crate::config::CustomCommandAction::Shell);
+            let before = app.session_snapshot();
+            match field {
+                "workspace" => {
+                    params.target.as_mut().unwrap().workspace_id = app.public_workspace_id(1)
+                }
+                "tab" => params.target.as_mut().unwrap().tab_id = app.public_tab_id(1, 0).unwrap(),
+                "pane" => params.target.as_mut().unwrap().pane_id = "stale".into(),
+                "terminal" => params.target.as_mut().unwrap().terminal_id = "replaced".into(),
+                "command" => params.command_id = "stale".into(),
+                _ => params.target = None,
+            }
+            let response = app.handle_command_execute("scoped".into(), params);
+            let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert!(error.error.code.starts_with("command_"));
+            assert_eq!(app.session_snapshot(), before);
+            assert!(app.detached_process_children.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_command_reports_shell_execution_in_explicit_and_empty_global_contexts() {
+        use crate::api::schema::{CommandEffect, ResponseResult, SuccessResponse};
+        for global in [false, true] {
+            let (mut app, mut params) = scoped_app(crate::config::CustomCommandAction::Shell);
+            if global {
+                app.state.workspaces.clear();
+                app.state.active = None;
+                params.target = None;
+            }
+            let response: SuccessResponse =
+                serde_json::from_str(&app.handle_command_execute("shell".into(), params)).unwrap();
+            assert_eq!(
+                response.result,
+                ResponseResult::CommandExecuted {
+                    effect: CommandEffect::ShellStarted {}
+                }
+            );
+            assert_eq!(app.detached_process_children.len(), 1);
+            for child in &mut app.detached_process_children {
+                assert!(child.wait().unwrap().success());
+            }
+            assert_eq!(app.state.active, if global { None } else { Some(0) });
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_command_validates_selection_before_changing_focus() {
+        let (mut app, mut params) = scoped_app(crate::config::CustomCommandAction::PluginAction);
+        let target = params.target.as_ref().unwrap();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal = app.state.workspaces[0].terminal_id(pane).cloned().unwrap();
+        app.terminal_runtimes.insert(
+            terminal,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"selection"),
+        );
+        params.selection = Some(crate::api::schema::PaneSelectionReadParams {
+            pane_id: target.pane_id.clone(),
+            anchor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
+            cursor: crate::api::schema::PaneTextPoint { row: 0, col: 3 },
+            content_revision: Some(u64::MAX),
+        });
+        let before = app.session_snapshot();
+        let error: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&app.handle_command_execute("selection".into(), params)).unwrap();
+        assert_eq!(error.error.code, "stale_content");
+        assert_eq!(app.session_snapshot(), before);
+        assert!(app.state.plugin_command_logs.is_empty());
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_command_preserves_existing_popup_and_focus_on_rejection() {
+        let (mut app, params) = scoped_app(crate::config::CustomCommandAction::Popup);
+        let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            40,
+            12,
+            0,
+            b"EXISTING",
+            4,
+        );
+        app.install_test_popup_runtime(runtime);
+        let popup = app.state.popup_pane.clone();
+        let before = app.session_snapshot();
+        let error: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&app.handle_command_execute("existing".into(), params)).unwrap();
+        assert_eq!(error.error.code, "popup_already_open");
+        assert_eq!(app.session_snapshot(), before);
+        assert_eq!(app.state.popup_pane, popup);
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_command_results_identify_produced_pane_and_popup_before_later_focus_changes() {
+        use crate::api::schema::{CommandEffect, ResponseResult, SuccessResponse};
+        for action in [
+            crate::config::CustomCommandAction::Pane,
+            crate::config::CustomCommandAction::Popup,
+        ] {
+            let (mut app, params) = scoped_app(action);
+            let source = params.target.clone().unwrap();
+            let response = app.handle_command_execute("created".into(), params);
+            let response: SuccessResponse = serde_json::from_str(&response).unwrap();
+            let ResponseResult::CommandExecuted { effect } = response.result else {
+                panic!("execution result")
+            };
+            app.state.active = Some(1);
+            match effect {
+                CommandEffect::PaneCreated { pane } => {
+                    assert_eq!(pane.workspace_id, source.workspace_id);
+                    assert_eq!(pane.tab_id, source.tab_id);
+                    assert_ne!(pane.pane_id, source.pane_id);
+                    assert_ne!(pane.terminal_id, source.terminal_id);
+                    let (workspace, id) = app.parse_pane_id(&pane.pane_id).unwrap();
+                    assert_eq!(app.command_pane_target(workspace, id), Some(pane));
+                }
+                CommandEffect::PopupOpened { popup } => {
+                    assert_eq!(popup.owner_workspace_id, source.workspace_id);
+                    assert_eq!(popup.owner_tab_id, source.tab_id);
+                    let state = app.state.popup_pane.as_ref().unwrap();
+                    assert_eq!(state.owner_tab_id, popup.owner_tab_id);
+                    assert_eq!(state.terminal_id.as_str(), popup.terminal_id);
+                    assert_ne!(popup.terminal_id, source.terminal_id);
+                }
+                _ => panic!("wrong command effect"),
+            }
+            for (_, runtime) in app.terminal_runtimes.drain() {
+                runtime.shutdown();
+            }
+        }
     }
 
     #[test]
