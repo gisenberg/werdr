@@ -101,6 +101,7 @@ compinit
 ```bash
 herdr server
 herdr server stop
+herdr server stop-if-idle
 herdr server reload-config
 herdr server agent-manifests [--json]
 herdr server update-agent-manifests [--json]
@@ -108,6 +109,12 @@ herdr server reload-agent-manifests
 ```
 
 `herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
+
+`stop-if-idle` asks the server to check for sessions and pending work and commit shutdown atomically.
+It returns `server_busy` without stopping when panes, retained terminal state, detached commands, plugin commands, or worktree operations remain.
+The socket method is `server.stop_if_idle` with empty parameters, advertised by the optional `stop_if_idle` ping capability.
+Older servers do not support this operation; the command never falls back to unconditional `stop`.
+A successful response means shutdown has been committed; a supervisor may subsequently start a new server.
 
 ## Notifications
 

@@ -15,6 +15,9 @@ pub struct ServerLiveHandoffParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Atomically rejects shutdown while sessions or pending work remain.
+    #[serde(default)]
+    pub stop_if_idle: bool,
     /// Supports popup.get, popup.close_exact, plugin.popup.open and popup.changed subscriptions.
     #[serde(default)]
     pub popup_sessions: bool,

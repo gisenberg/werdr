@@ -1,5 +1,6 @@
 use super::*;
 
+mod idle_shutdown;
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
 #[path = "surface_interest.rs"]

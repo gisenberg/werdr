@@ -82,9 +82,9 @@ mod retained_surface;
 mod surface_interest;
 
 pub use bootstrap::run_server;
-use lifecycle::wait_for_live_handoff_response_write;
 #[cfg(unix)]
 use lifecycle::wait_for_old_public_sockets_to_close;
+use lifecycle::wait_for_shutdown_response_write;
 
 use crate::protocol::MAX_GRAPHICS_FRAME_SIZE;
 
@@ -2925,6 +2925,10 @@ impl HeadlessServer {
             return false;
         }
 
+        if matches!(msg.request.method, api::schema::Method::ServerStopIfIdle(_)) {
+            return self.handle_stop_if_idle(msg);
+        }
+
         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
             AltScreenReadConflict::None => None,
             AltScreenReadConflict::Frozen(snapshot) => Some(snapshot),
@@ -2960,7 +2964,7 @@ impl HeadlessServer {
             .unwrap_or_else(|_| "{}".to_string());
             let _ = msg.respond_to.send(response);
             if handoff_succeeded {
-                wait_for_live_handoff_response_write(msg.response_write_complete);
+                wait_for_shutdown_response_write(msg.response_write_complete, "live_handoff");
                 self.finish_live_handoff_shutdown();
             }
             return true;

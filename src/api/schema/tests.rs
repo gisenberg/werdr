@@ -221,6 +221,20 @@ fn request_round_trips_for_server_stop() {
 }
 
 #[test]
+fn stop_if_idle_has_a_distinct_method_and_defaults_to_unsupported() {
+    let request = Request {
+        id: "idle-stop".into(),
+        method: Method::ServerStopIfIdle(EmptyParams::default()),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "server.stop_if_idle");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff": false})).unwrap();
+    assert!(!capabilities.stop_if_idle);
+}
+
+#[test]
 fn request_round_trips_for_server_reload_config() {
     let request = Request {
         id: "req_reload".into(),
@@ -723,6 +737,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                stop_if_idle: true,
                 popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,

@@ -271,6 +271,11 @@ Service supervision must preserve both the imported runtime and existing shell p
 
 Do not replace these checks with a pane-count check followed by `server.stop`.
 The existing stop method has no atomic idle condition, so a concurrent native client can create a pane between observation and shutdown.
-An idle-only upgrade needs a separately advertised server operation that rejects new creation while committing shutdown, with compatibility rejection on older runtimes.
+The candidate now advertises `stop_if_idle` and implements the distinct `server.stop_if_idle` operation, also available as `herdr server stop-if-idle`.
+The runtime owner checks terminal metadata, panes, runtimes, detached commands, plugin commands, and pending worktree operations before atomically committing shutdown.
+Queued API creation is rejected after that commit, and the response writer gets a bounded opportunity to flush before process exit.
+Unit tests cover queued creation, busy rejection, pending work, and capability compatibility; isolated socket/CLI tests verify empty-server exit and preservation of a busy shell PID and variables.
+Older production runtimes do not gain this operation from a companion update; unsupported callers must not fall back to unconditional stop.
+This enables a future idle-only upgrade path but does not replace the live-transfer and supervision requirements.
 Before adopting a live transfer, verify process identity, workspace/tab/pane identity, complete retained history, primary and alternate screens, pending output, input, and supervisor recovery in an isolated service instance.
 Until those conditions are established on each target platform, native rollout remains outstanding even when isolated feature tests pass.

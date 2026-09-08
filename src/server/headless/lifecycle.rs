@@ -1,26 +1,79 @@
 use super::*;
 
-const LIVE_HANDOFF_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(6);
+const SHUTDOWN_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(6);
 
-pub(super) fn wait_for_live_handoff_response_write(
+pub(super) fn wait_for_shutdown_response_write(
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    operation: &str,
 ) {
     let Some(response_write_complete) = response_write_complete else {
         return;
     };
 
-    match response_write_complete.recv_timeout(LIVE_HANDOFF_RESPONSE_WRITE_TIMEOUT) {
+    match response_write_complete.recv_timeout(SHUTDOWN_RESPONSE_WRITE_TIMEOUT) {
         Ok(()) => {}
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            warn!("timed out waiting for live handoff response write; old server exiting");
+            warn!(
+                operation,
+                "timed out waiting for shutdown response write; server exiting"
+            );
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            warn!("live handoff response writer disconnected; old server exiting");
+            warn!(
+                operation,
+                "shutdown response writer disconnected; server exiting"
+            );
         }
     }
 }
 
 impl HeadlessServer {
+    /// Check and commit on the runtime owner thread, without draining events or
+    /// creating a default workspace between the check and the shutdown fence.
+    pub(super) fn handle_stop_if_idle(&mut self, msg: api::ApiRequestMessage) -> bool {
+        self.app.reap_finished_detached_processes();
+        let busy = !self.app.state.terminals.is_empty()
+            || self.app.terminal_runtimes.len() != 0
+            || self
+                .app
+                .state
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.tabs.iter().any(|tab| !tab.panes.is_empty()))
+            || self.app.state.popup_pane.is_some()
+            || self.app.state.plugin_commands_in_flight != 0
+            || !self.app.detached_process_children.is_empty()
+            || !self.app.pending_api_worktree_creates.is_empty()
+            || !self.app.pending_api_worktree_removes.is_empty()
+            || !self.app.pending_api_worktree_remove_paths.is_empty()
+            || !self.app.pending_worktree_remove_runtime_exits.is_empty()
+            || !self.app.pending_worktree_remove_runtime_restores.is_empty()
+            || self.handoff_in_progress;
+        let response = if busy {
+            serde_json::to_string(&api::schema::ErrorResponse {
+                id: msg.request.id,
+                error: api::schema::ErrorBody {
+                    code: "server_busy".into(),
+                    message: "server has sessions or pending work; shutdown was not started".into(),
+                },
+            })
+        } else {
+            // This also sets should_quit before any queued API/client event can
+            // be dispatched. Cleanup rejects queued requests and connections.
+            self.initiate_shutdown();
+            serde_json::to_string(&api::schema::SuccessResponse {
+                id: msg.request.id,
+                result: api::schema::ResponseResult::Ok {},
+            })
+        }
+        .unwrap_or_else(|_| "{}".to_string());
+        let _ = msg.respond_to.send(response);
+        if !busy {
+            wait_for_shutdown_response_write(msg.response_write_complete, "stop_if_idle");
+        }
+        !busy
+    }
+
     #[cfg(unix)]
     pub(super) fn perform_live_handoff(
         &mut self,

@@ -908,12 +908,14 @@ impl App {
                     result: ResponseResult::Ok {},
                 }
             }
-            Method::ServerLiveHandoff(_) => {
+            Method::ServerStopIfIdle(_) | Method::ServerLiveHandoff(_) => {
                 let response = ErrorResponse {
                     id: request.id,
                     error: ErrorBody {
                         code: "unsupported_in_app_mode".into(),
-                        message: "live handoff is only supported by the headless server".into(),
+                        message:
+                            "this lifecycle operation is only supported by the headless server"
+                                .into(),
                     },
                 };
                 return serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());

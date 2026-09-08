@@ -159,6 +159,9 @@ fn server_command() -> Command {
     Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
+        .subcommand(
+            Command::new("stop-if-idle").about("Stop only when no sessions or pending work remain"),
+        )
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
         .subcommand(
             Command::new("agent-manifests")

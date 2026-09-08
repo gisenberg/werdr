@@ -7,6 +7,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
 
     match subcommand {
         "stop" => server_stop(&args[1..]).map(Some),
+        "stop-if-idle" => server_stop_if_idle(&args[1..]).map(Some),
         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
         "--handoff-import" => Ok(None),
         "reload-config" => server_reload_config(&args[1..]).map(Some),
@@ -22,6 +23,17 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
             Ok(Some(2))
         }
     }
+}
+
+fn server_stop_if_idle(args: &[String]) -> std::io::Result<i32> {
+    if !args.is_empty() {
+        eprintln!("usage: herdr server stop-if-idle");
+        return Ok(2);
+    }
+    super::print_response(&super::send_request(&Request {
+        id: "cli:server:stop-if-idle".into(),
+        method: Method::ServerStopIfIdle(EmptyParams::default()),
+    })?)
 }
 
 fn server_stop(args: &[String]) -> std::io::Result<i32> {
@@ -256,6 +268,7 @@ fn print_server_help() {
     eprintln!("herdr server commands:");
     eprintln!("  herdr server                run as headless server");
     eprintln!("  herdr server stop           stop the running server via the API socket");
+    eprintln!("  herdr server stop-if-idle   stop only when no sessions or pending work remain");
     eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
     eprintln!("  herdr server reload-config  reload config.toml in the running server");
     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");

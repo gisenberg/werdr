@@ -421,6 +421,7 @@ mod tests {
             version: version.map(str::to_owned),
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
             capabilities: Some(crate::api::schema::ServerCapabilities {
+                stop_if_idle: true,
                 popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,

@@ -66,6 +66,7 @@ pub(crate) fn start_server_with_stop_control(
 
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
+        stop_if_idle: true,
         popup_sessions: true,
         command_execution: true,
         command_catalog: true,
@@ -392,6 +393,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
+        Method::ServerStopIfIdle(_) => "server.stop_if_idle",
         Method::ServerLiveHandoff(_) => "server.live_handoff",
         Method::ServerReloadConfig(_) => "server.reload_config",
         Method::ServerAgentManifests(_) => "server.agent_manifests",
@@ -1154,6 +1156,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                stop_if_idle: true,
                 popup_sessions: true,
                 command_execution: true,
                 command_catalog: true,
@@ -1210,6 +1213,38 @@ mod tests {
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn stop_if_idle_dispatches_to_runtime_instead_of_unconditionally_stopping() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        let thread = std::thread::spawn(move || {
+            handle_request(
+                Request {
+                    id: "conditional_stop".into(),
+                    method: Method::ServerStopIfIdle(crate::api::schema::EmptyParams::default()),
+                },
+                &tx,
+                default_capabilities(),
+                Some(&thread_stop),
+                None,
+            )
+        });
+        let msg = rx.blocking_recv().unwrap();
+        assert!(matches!(msg.request.method, Method::ServerStopIfIdle(_)));
+        assert!(!stop.load(Ordering::Acquire));
+        msg.respond_to
+            .send(error_response_json(
+                msg.request.id,
+                "server_busy",
+                "busy".into(),
+            ))
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&thread.join().unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], "server_busy");
+        assert!(!stop.load(Ordering::Acquire));
     }
 
     #[test]

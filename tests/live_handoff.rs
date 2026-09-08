@@ -532,6 +532,105 @@ fn wait_for_http_contains(port: u16, needle: &str, timeout: Duration) -> String 
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn stop_if_idle_acknowledges_before_the_empty_server_exits() {
+    let _guard = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    register_runtime_dir(&runtime_dir);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let ping = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "capabilities", "method": "ping", "params": {}
+        }),
+    );
+    assert_eq!(ping["result"]["capabilities"]["stop_if_idle"], true);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["server", "stop-if-idle"])
+        .env("HERDR_SOCKET_PATH", &api_socket)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = spawned.child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "idle server did not exit");
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(!api_socket.exists());
+    assert!(!runtime_dir.join("herdr-client.sock").exists());
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn stop_if_idle_preserves_the_busy_server_and_shell_state() {
+    let _guard = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let marker = base.join("shell-pids");
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    register_runtime_dir(&runtime_dir);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "create", "method": "workspace.create", "params": {"cwd": "/tmp"}
+        }),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "before", "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": format!(
+                "idle_guard=retained; echo $$ > {}; echo IDLE_GUARD_READY", marker.display()
+            ), "keys": ["Enter"]}
+        }),
+    ));
+    let shell_pid = wait_for_file_contains(&marker, "\n", Duration::from_secs(5));
+    assert!(shell_pid.trim().parse::<u32>().unwrap() > 0);
+    let rejection = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "stop", "method": "server.stop_if_idle", "params": {}
+        }),
+    );
+    assert_eq!(rejection["error"]["code"], "server_busy");
+    assert!(spawned.child.try_wait().unwrap().is_none());
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "after", "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": format!(
+                "echo $$ >> {}; echo IDLE_GUARD_$idle_guard", marker.display()
+            ), "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_output(&api_socket, pane_id, "IDLE_GUARD_retained");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), shell_pid.repeat(2));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "cleanup", "method": "server.stop", "params": {}
+        }),
+    ));
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn live_server_holds_one_pty_master_fd_per_pane() {
     let _lock = test_lock();
     let base = unique_test_dir();

@@ -5422,6 +5422,22 @@
         {
           "properties": {
             "method": {
+              "const": "server.stop_if_idle",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "server.live_handoff",
               "type": "string"
             },
@@ -12025,6 +12041,11 @@
             "semantic_notifications": {
               "default": false,
               "description": "Supports opt-in ephemeral semantic notification subscriptions.",
+              "type": "boolean"
+            },
+            "stop_if_idle": {
+              "default": false,
+              "description": "Atomically rejects shutdown while sessions or pending work remain.",
               "type": "boolean"
             },
             "surface_interest": {
