@@ -725,12 +725,15 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
 }
 
 #[tokio::test]
-async fn passive_attachment_preserves_empty_runtime_and_pending_handoff() {
+async fn passive_attachment_preserves_empty_runtime() {
     let mut server = test_headless_server();
     server.app.state.workspaces.clear();
     server.app.state.active = None;
     server.app.state.mode = crate::app::Mode::Navigate;
-    server.pending_handoff_repaint_nudge = true;
+    #[cfg(unix)]
+    {
+        server.pending_handoff_repaint_nudge = true;
+    }
     let original_size = server.effective_size;
     let (writer, control_rx, render_rx) = test_client_writer();
     server.handle_server_event(ServerEvent::ClientShellConnected {
@@ -747,6 +750,7 @@ async fn passive_attachment_preserves_empty_runtime_and_pending_handoff() {
         writer,
     });
     assert!(server.app.state.workspaces.is_empty());
+    #[cfg(unix)]
     assert!(server.pending_handoff_repaint_nudge);
     assert_eq!(server.foreground_client_id, None);
     assert_eq!(server.effective_size, original_size);
@@ -758,6 +762,7 @@ async fn passive_attachment_preserves_empty_runtime_and_pending_handoff() {
     server.render_and_stream();
     assert!(render_rx.try_recv().is_err());
     assert!(server.app.state.workspaces.is_empty());
+    #[cfg(unix)]
     assert!(server.pending_handoff_repaint_nudge);
     assert!(server.set_client_shell_surface_active(73, true).is_some());
     assert!(!server.app.state.workspaces.is_empty());

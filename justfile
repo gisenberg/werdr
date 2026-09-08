@@ -48,6 +48,7 @@ ci filter='all()': lint
 windows-lint:
     rustup target add x86_64-pc-windows-msvc
     LIBGHOSTTY_VT_SIMD=false cargo clippy --bin herdr --locked --target x86_64-pc-windows-msvc -- -D warnings
+    LIBGHOSTTY_VT_SIMD=false cargo check --tests --locked --target x86_64-pc-windows-msvc
 
 # Check formatting + run unit tests + Windows target lint + documentation contract tests
 [unix]
