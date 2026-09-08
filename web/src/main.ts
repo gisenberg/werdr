@@ -323,12 +323,16 @@ function closeWorkspace(machine: string, id: string) {
   if (!preferences.confirmClose || confirm(message)) void action('workspace.close', id, group ? { close_group: true } : {}, machine);
 }
 function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: { x: number; y: number }) {
+  const sourceHost = fleetState.hosts.find(host => host.machine.id === target.machine);
+  if (!sourceHost) return;
+  const sourceIdentity = workspaceGroupKey(sourceHost.machine, '');
   const current = () => {
-    const host = fleetState.hosts.find(host => host.machine.id === target.machine && host.machine.enabled && host.connection === 'online');
+    const host = fleetState.hosts.find(host => host.machine.id === target.machine && host.machine.enabled && host.connection === 'online' && workspaceGroupKey(host.machine, '') === sourceIdentity);
     return target.kind === 'workspace' ? host?.snapshot?.workspaces.find(item => item.workspace_id === target.id) : target.kind === 'tab' ? host?.snapshot?.tabs.find(item => item.tab_id === target.id) : host?.snapshot?.panes.find(item => item.pane_id === target.id);
   };
   const item = current(); if (!item) return;
   const invoke = (name: string, id = target.id, params = {}) => { void action(name, id, params, target.machine); };
+  let discoveredActions: Promise<ContextAction[]> | undefined;
   const items: ContextAction[] = [
     { label: 'RENAME', run: () => rename(target.kind + '.rename', target.id, current()?.label || '', target.machine) },
   ];
@@ -341,6 +345,18 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
     };
     if (workspace.worktree?.is_linked_worktree) items.push({ label: 'DELETE WORKTREE CHECKOUT...', run: () => openWorktrees('remove') });
     else if (workspace.worktree) items.push({ label: 'NEW WORKTREE', run: () => openWorktrees('create') }, { label: 'OPEN WORKTREE...', run: () => openWorktrees('open') });
+    else {
+      // Ordinary Git workspaces have no attached worktree provenance. Resolve
+      // their native repository context only when the menu is requested.
+      discoveredActions = api('/api/action', { machine: target.machine, action: 'worktree.list', id: target.id }).then(result => {
+        const cwd = result.source?.source_checkout_path;
+        if (typeof cwd !== 'string' || !cwd || !current()) return [];
+        const open = (intent: 'create' | 'open') => {
+          if (current()) void worktrees.open({ machine: target.machine, label: host.machine.label, workspace: target.id, cwd }, intent);
+        };
+        return [{ label: 'NEW WORKTREE', run: () => open('create') }, { label: 'OPEN WORKTREE...', run: () => open('open') }];
+      }).catch(() => []);
+    }
     if (group) {
       const key = workspaceGroupKey(host.machine, workspace.worktree!.repo_key), collapsed = preferences.collapsedWorkspaceGroups.includes(key);
       items.push({ label: collapsed ? 'EXPAND GROUP' : 'COLLAPSE GROUP', run: () => { void toggleWorkspaceGroup(key, !collapsed); } });
@@ -360,7 +376,8 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
     { label: 'ZOOM / RESTORE', run: () => invoke('pane.zoom', target.id, { mode: 'toggle' }) },
   );
   if (target.kind !== 'workspace') items.push({ label: 'CLOSE ' + target.kind.toUpperCase(), run: () => { if (!preferences.confirmClose || confirm(`Close this ${target.kind} and end its running processes?`)) invoke(target.kind + '.close'); } });
-  contextMenu.open(origin, `${target.kind.toUpperCase()} ${item.label || target.id}`, items, () => authenticated && !!current(), position);
+  const append = contextMenu.open(origin, `${target.kind.toUpperCase()} ${item.label || target.id}`, items, () => authenticated && !!current(), position, !!discoveredActions);
+  if (discoveredActions) void discoveredActions.then(items => append?.(items));
 }
 for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addEventListener(type, event => {
   const origin = (event.target as Element).closest<HTMLElement>('.pane-title'); if (!origin) return;

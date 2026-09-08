@@ -146,3 +146,76 @@ test('workspace selection reveals crowded groups while metadata preserves manual
     await page.screenshot({ path: 'test-results/workspace-groups-reveal-mobile.png' });
   } finally { await runtime.close(); }
 });
+
+test('ordinary Git workspace menus discover native worktrees without moving focus or leaking delayed results', async ({ page }) => {
+  test.setTimeout(120000);
+  const runtime = await fixture();
+  let release: (() => void) | undefined;
+  try {
+    const repo = await repository(runtime.directory);
+    const gitPane = JSON.parse(await runtime.cli('workspace', 'create', '--cwd', repo, '--label', 'Ordinary Git workspace')).result.root_pane;
+    const plain = JSON.parse(await runtime.cli('workspace', 'create', '--cwd', runtime.directory, '--label', 'Outside Git')).result.root_pane;
+    const native = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot;
+    expect(native.workspaces.find((workspace: any) => workspace.workspace_id === gitPane.workspace_id).worktree).toBeUndefined();
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await login(page, runtime); await row(page, gitPane.workspace_id).click(); await expect(page.locator('#shield')).toBeHidden();
+    const terminal = await page.locator('.pane-active textarea').elementHandle();
+    let delayed = false, received: (() => void) | undefined;
+    await page.route('**/api/action', async route => {
+      const data = route.request().postDataJSON();
+      if (!delayed || data.action !== 'worktree.list' || data.id !== gitPane.workspace_id) { await route.continue(); return; }
+      delayed = false;
+      const response = await route.fetch();
+      await new Promise<void>(resolve => { release = resolve; received?.(); });
+      await route.fulfill({ response });
+    });
+    const delay = () => { delayed = true; return new Promise<void>(resolve => { received = resolve; }); };
+    const first = delay();
+    await row(page, gitPane.workspace_id).focus(); await page.keyboard.press('Shift+F10'); await first;
+    await page.keyboard.press('ArrowDown');
+    const close = page.getByRole('menuitem', { name: 'CLOSE WORKSPACE', exact: true });
+    await expect(close).toBeFocused(); const closeNode = await close.elementHandle();
+    release!(); release = undefined;
+    await expect(page.getByRole('menuitem', { name: 'NEW WORKTREE', exact: true })).toBeVisible();
+    await expect(close).toBeFocused(); expect(await closeNode!.evaluate(node => node === document.activeElement)).toBe(true);
+    expect(await terminal!.evaluate(node => node.isConnected)).toBe(true);
+    await page.screenshot({ path: 'test-results/workspace-git-context.png' });
+    await page.keyboard.press('Escape');
+
+    const late = delay();
+    await row(page, gitPane.workspace_id).click({ button: 'right' }); await late;
+    await page.keyboard.press('Escape');
+    await row(page, plain.workspace_id).focus(); await page.keyboard.press('Shift+F10');
+    release!(); release = undefined;
+    await expect(page.getByRole('menu')).toHaveAttribute('aria-label', 'WORKSPACE Outside Git');
+    await expect(page.getByRole('menu')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.getByRole('menuitem')).toHaveCount(2);
+    await page.keyboard.press('Escape');
+    await expect(row(page, plain.workspace_id)).toBeFocused();
+
+    const closed = delay();
+    await row(page, gitPane.workspace_id).click({ button: 'right' }); await closed;
+    await page.keyboard.press('Escape');
+    release!(); release = undefined;
+    await expect(page.getByRole('menu')).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#host-toggle').click();
+    await row(page, gitPane.workspace_id).focus(); await page.keyboard.press('Shift+F10');
+    await expect(page.getByRole('menuitem', { name: 'NEW WORKTREE', exact: true })).toBeVisible();
+    const bounds = await page.getByRole('menu').boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(844);
+    await page.screenshot({ path: 'test-results/workspace-git-context-mobile.png' });
+    await page.keyboard.press('Escape'); await page.setViewportSize({ width: 1440, height: 900 });
+    await row(page, plain.workspace_id).click();
+    await row(page, gitPane.workspace_id).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'NEW WORKTREE', exact: true }).click();
+    await expect(page.locator('#worktree-branch')).toBeFocused(); await expect(page.locator('#worktree-cwd')).toHaveValue(repo);
+    const checkout = join(runtime.directory, 'discovered checkout');
+    await page.locator('#worktree-branch').fill('discovered-context'); await page.locator('#worktree-path').fill(checkout);
+    await page.getByRole('button', { name: 'CREATE AND OPEN', exact: true }).click();
+    await expect(page.locator('#worktrees-dialog')).toBeHidden(); await access(join(checkout, 'README.md'));
+    expect((await exec('git', ['-C', checkout, 'branch', '--show-current'])).stdout.trim()).toBe('discovered-context');
+
+    expect(errors).toEqual([]);
+  } finally { release?.(); await runtime.close(); }
+});
