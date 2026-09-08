@@ -2,9 +2,17 @@ import { test, expect } from '@playwright/test';
 import { fixture } from './fixture';
 import { consoleInput } from './console-helpers';
 
+// Only these capability tests need the candidate server. The rest of the suite
+// continues to verify the pinned runtime that owns deployed panes.
+function scrollbarFixture() {
+  const binary = process.env.WERDR_TERMINAL_CLIENT_BIN || process.env.WERDR_TEST_HERDR_BIN;
+  if (!binary) throw new Error('Scrollbar capability tests require a candidate runtime through WERDR_TERMINAL_CLIENT_BIN or WERDR_TEST_HERDR_BIN.');
+  return fixture(false, false, false, undefined, binary);
+}
+
 test('native scrollbars preserve history, row geometry, keyboard and drag behavior across screen modes and settings', async ({ page }) => {
   test.setTimeout(90000);
-  const runtime = await fixture();
+  const runtime = await scrollbarFixture();
   try {
     await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
     await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
@@ -98,7 +106,7 @@ test('older native scroll records keep terminals usable without guessing alterna
 });
 
 test('initial reveal waits for scroll metadata and an API outage retains terminal geometry', async ({ page }) => {
-  const runtime = await fixture();
+  const runtime = await scrollbarFixture();
   let mode: 'hold' | 'live' | 'offline' = 'hold'; const queued: (() => void)[] = [];
   let sendState: ((value: unknown) => void) | undefined;
   let latest: any;
@@ -136,7 +144,7 @@ test('initial reveal waits for scroll metadata and an API outage retains termina
 });
 
 test('a delayed scroll reply cannot restore a normal-screen gutter over a newer alternate screen', async ({ page }) => {
-  const runtime = await fixture();
+  const runtime = await scrollbarFixture();
   let release = () => {};
   try {
     await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();

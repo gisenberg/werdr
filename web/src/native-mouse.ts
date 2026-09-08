@@ -3,11 +3,13 @@ import type { Terminal } from 'ghostty-web';
 /** The native attach client accepts SGR cell reports and applies the application's modes. */
 export class NativeMouse {
   private enabled = false;
+  get reporting() { return this.enabled; }
   private buttons = new Set<number>();
   private last?: { column: number; row: number; modifiers: number };
   private motion = '';
   constructor(private content: HTMLElement, private terminal: () => Terminal | undefined, private available: () => boolean, private send: (text: string) => void) {
     content.addEventListener('mousedown', this.down, true);
+    content.addEventListener('click', this.context, true);
     content.addEventListener('contextmenu', this.context, true);
     document.addEventListener('mousemove', this.move, true);
     document.addEventListener('mouseup', this.up, true);
@@ -21,6 +23,7 @@ export class NativeMouse {
   dispose() {
     this.release();
     this.content.removeEventListener('mousedown', this.down, true);
+    this.content.removeEventListener('click', this.context, true);
     this.content.removeEventListener('contextmenu', this.context, true);
     document.removeEventListener('mousemove', this.move, true);
     document.removeEventListener('mouseup', this.up, true);

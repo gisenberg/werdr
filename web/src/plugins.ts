@@ -3,6 +3,7 @@ import type { Pane } from '../shared/fleet';
 import type { Plugin, PluginLog, PluginPane } from '../shared/plugins';
 
 interface Target { machine: string; label: string; workspace?: string; pane?: string; selectedText?: string }
+type PendingTarget = Omit<Target, 'selectedText'> & { selectedText?: Promise<string> };
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const pluginsMarkup = `<dialog id="plugins-dialog"><h1>PLUGINS</h1><div class="plugin-body"><p id="plugin-host"></p><p id="plugin-context"></p><div class="inline-actions"><button id="plugin-refresh">REFRESH</button><button id="plugin-focus-pane">FOCUS PLUGIN PANE</button><button id="plugin-close-pane">CLOSE PLUGIN PANE</button></div><details id="plugin-link-details"><summary>LINK A PLUGIN DIRECTORY</summary><p>Plugins run their declared commands as your user. Link trusted code already present on this host.</p><form id="plugin-link-form"><label>DIRECTORY ON THIS HOST<input id="plugin-link-path" required maxlength="4096" autocomplete="off" spellcheck="false"></label><label class="plugin-checkbox"><input id="plugin-link-enabled" type="checkbox" checked> ENABLE AFTER LINKING</label><button type="submit">LINK PLUGIN</button></form></details><label>FIND PLUGIN<input id="plugin-search" type="search" autocomplete="off"></label><div id="plugin-list"></div><details id="plugin-log-details"><summary>COMMAND LOGS</summary><label>PLUGIN<select id="plugin-log-filter"><option value="">ALL PLUGINS</option></select></label><label>RECENT COMMANDS<select id="plugin-log-limit"><option>10</option><option selected>50</option><option>100</option><option>200</option></select></label><button id="plugin-log-refresh">REFRESH LOGS</button><div id="plugin-logs"></div></details><pre id="plugin-result" role="status"></pre><p id="plugin-error" role="alert"></p></div><div class="plugin-footer"><button id="plugin-done">DONE</button></div></dialog>`;
 
@@ -19,7 +20,7 @@ export class Plugins {
   private poll?: ReturnType<typeof setTimeout>;
   private readingLogs = false;
   private logsDirty = false;
-  constructor(private api: Api, private selected: () => Target | undefined, private selectPane: (machine: string, pane: Pane) => void, private changed: () => void) {
+  constructor(private api: Api, private selected: () => PendingTarget | undefined, private selectPane: (machine: string, pane: Pane) => void, private changed: () => void) {
     el('plugin-done').onclick = () => el<HTMLDialogElement>('plugins-dialog').close();
     el('plugins-dialog').addEventListener('close', () => { if (!el<HTMLDialogElement>('plugins-dialog').open) { ++this.epoch; clearTimeout(this.poll); } });
     el('plugin-refresh').onclick = () => void this.load();
@@ -34,12 +35,19 @@ export class Plugins {
   }
   open() {
     const target = this.selected(); if (!target) return;
-    ++this.epoch; this.busy = false; this.readingLogs = false; this.logsDirty = false; this.target = { ...target }; this.items = []; this.logs = []; clearTimeout(this.poll);
+    const epoch = ++this.epoch; this.busy = true; this.readingLogs = false; this.logsDirty = false; this.target = { ...target, selectedText: undefined }; this.items = []; this.logs = []; clearTimeout(this.poll);
     el('plugin-host').textContent = target.label;
-    el('plugin-context').textContent = target.pane ? `CONTEXT ${target.workspace} / ${target.pane}${target.selectedText ? ' / TEXT SELECTED' : ''}` : 'GLOBAL CONTEXT';
+    el('plugin-context').textContent = target.pane ? `CONTEXT ${target.workspace} / ${target.pane}` : 'GLOBAL CONTEXT';
     el('plugin-error').textContent = ''; el('plugin-result').textContent = '';
     el<HTMLInputElement>('plugin-search').value = ''; el<HTMLInputElement>('plugin-link-path').value = '';
-    this.render(); this.renderLogs(); el<HTMLDialogElement>('plugins-dialog').showModal(); void this.load();
+    this.render(); this.renderLogs(); el<HTMLDialogElement>('plugins-dialog').showModal();
+    void Promise.resolve(target.selectedText).then(text => {
+      if (epoch !== this.epoch || !this.target) return;
+      this.target.selectedText = text;
+      if (text) el('plugin-context').textContent += ' / TEXT SELECTED';
+    }).catch(error => {
+      if (epoch === this.epoch) el('plugin-error').textContent = `Selection unavailable: ${(error as Error).message}`;
+    }).finally(() => { if (epoch === this.epoch) { this.busy = false; void this.load(false); } });
   }
   private request(action: string, params: object = {}) { return this.api('/api/action', { machine: this.target!.machine, action, ...params }); }
   private async load(clearError = true) {

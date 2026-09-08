@@ -19,12 +19,14 @@ async function open(page: import('@playwright/test').Page) { await page.keyboard
 test('native plugin management preserves files, supplies the selected context and shows command outcomes', async ({ page }) => {
   test.setTimeout(90000); await login(page);
   await create(page);
+  await page.locator('#settings').click(); await page.locator('[data-setting=copyOnSelect]').uncheck(); await page.getByRole('button', { name: 'SAVE SETTINGS', exact: true }).click(); await expect(page.locator('#settings-dialog')).toBeHidden();
   const selected = Object.fromEntries(new URL(page.url()).searchParams);
   await page.locator('.pane-active textarea').focus(); await page.keyboard.type("printf '\\033[2J\\033[HSELECT_%s\\n' PLUGIN_CONTEXT"); await page.keyboard.press('Enter');
   await expect.poll(() => runtime.cli('pane', 'read', selected.pane, '--source', 'recent')).toContain('SELECT_PLUGIN_CONTEXT');
   const response = await page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', action: 'workspace.create', label: 'Other native focus' } });
   const other = (await response.json()).root_pane; await runtime.cli('workspace', 'focus', other.workspace_id);
   const canvas = await page.locator('.pane-active canvas').first().boundingBox(); await page.mouse.dblclick(canvas!.x + 12, canvas!.y + 8);
+  await expect(page.locator('.pane-content[data-native-selection]')).toHaveCount(1);
   await open(page); await expect(page.locator('#plugin-context')).toContainText('TEXT SELECTED'); await page.locator('#plugin-link-details summary').click(); await page.locator('#plugin-link-path').fill(directory); await page.locator('#plugin-link-form button[type=submit]').click();
   const plugin = page.locator('.plugin-row[data-plugin="example.browser-test"]'); await expect(plugin).toContainText('[ENABLED]');
   await plugin.getByRole('button', { name: 'RUN Inspect context', exact: true }).click();

@@ -1,5 +1,7 @@
 import type { Terminal } from 'ghostty-web';
 import { matchesNativeViewport, type NativeViewport } from './terminal-viewport';
+import { writeTerminalClipboard } from './terminal-clipboard';
+import { paintTerminalSelection } from './terminal-selection';
 
 type Point = { row: number; col: number };
 type Range = { start: Point; end: Point };
@@ -48,7 +50,7 @@ export class NativeCopyMode {
   private dragTimer?: ReturnType<typeof setInterval>;
   active = false;
 
-  constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void) {
+  constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void, private beforeStart: () => void = () => {}) {
     this.layer.className = 'copy-layer'; this.layer.tabIndex = 0; this.layer.setAttribute('role', 'region'); this.layer.setAttribute('aria-label', 'Terminal copy mode');
     this.marks.className = 'copy-marks'; this.layer.append(this.marks);
     this.toolbar.className = 'copy-toolbar'; this.toolbar.setAttribute('role', 'toolbar'); this.toolbar.setAttribute('aria-label', 'Terminal copy controls');
@@ -96,6 +98,7 @@ export class NativeCopyMode {
   }
   focus() { if (this.active) (this.form.hidden ? this.layer : this.query).focus({ preventScroll: true }); }
   private hide() {
+    this.terminal()?.clearSelection(); delete this.layer.dataset.selection;
     const ownsToolbar = this.toolbar.parentElement === this.toolbarHost;
     this.help.close(); this.help.remove(); this.toolbar.remove();
     if (ownsToolbar && !this.toolbarHost.querySelector('.copy-toolbar')) {
@@ -108,6 +111,7 @@ export class NativeCopyMode {
     await this.restore;
     if (this.active) { this.focus(); return; }
     if (!this.terminal() || !this.host.isConnected) return;
+    this.beforeStart();
     this.active = true; const generation = ++this.generation;
     this.context = undefined; this.entryOffset = undefined; this.dirty = false; this.awaitingFrame = false; this.startSearch = search; this.clearSelection(); this.form.hidden = true; this.notice.hidden = true;
     this.host.classList.add('copy-active'); this.content.append(this.layer); this.host.append(this.notice, this.help); this.toolbarScroll = this.toolbarHost.scrollLeft; this.toolbarHost.scrollLeft = 0; this.toolbarHost.append(this.toolbar); this.toolbarHost.classList.add('copy-controls-open'); this.status.textContent = 'COPY...'; this.focus();
@@ -145,11 +149,11 @@ export class NativeCopyMode {
   private message(text: string) { this.notice.textContent = text; this.notice.hidden = !text; }
   private get top() { return this.context ? this.context.scroll.max_offset_from_bottom - this.context.scroll.offset_from_bottom : 0; }
   private clearSelection() {
-    this.initialSearch = undefined; ++this.searchGeneration; this.searchRequested = false; this.anchor = undefined; this.selectionVisible = false; this.matches = []; this.current = undefined; this.total = 0; this.currentGlobal = undefined; this.searchQuery = ''; this.marks.replaceChildren(); }
+    this.initialSearch = undefined; ++this.searchGeneration; this.searchRequested = false; this.anchor = undefined; this.selectionVisible = false; this.matches = []; this.current = undefined; this.total = 0; this.currentGlobal = undefined; this.searchQuery = ''; this.clearPaint(); }
   afterFrame() {
     if (!this.active) return;
     this.awaitingFrame = false;
-    this.dirty = true; this.marks.replaceChildren();
+    this.dirty = true; this.clearPaint();
     if (this.timer || this.checking) return;
     this.timer = setTimeout(() => { this.timer = undefined; this.checkFrame(); }, 150);
   }
@@ -171,7 +175,7 @@ export class NativeCopyMode {
       this.resumeInitialSearch();
     }).catch(() => {}).finally(() => { this.checking = false; if (this.active && this.dirty && !this.awaitingFrame) this.afterFrame(); });
   }
-  private waitForFrame() { this.dirty = true; this.awaitingFrame = true; this.marks.replaceChildren(); this.status.textContent = 'COPY WAIT'; this.message('Waiting for a matching native terminal frame.'); }
+  private waitForFrame() { this.dirty = true; this.awaitingFrame = true; this.clearPaint(); this.status.textContent = 'COPY WAIT'; this.message('Waiting for a matching native terminal frame.'); }
   private clamp() {
     if (!this.context) return;
     this.cursor.row = Math.max(0, Math.min(this.cursor.row, this.context.scroll.max_offset_from_bottom + this.context.scroll.viewport_rows - 1));
@@ -191,7 +195,7 @@ export class NativeCopyMode {
     if (!this.context) return;
     if (offset !== this.context.scroll.offset_from_bottom) {
       const generation = this.generation;
-      this.dirty = true; this.marks.replaceChildren();
+      this.dirty = true; this.clearPaint();
       try { await this.request('pane.scroll', { offset_from_bottom: offset }); }
       finally { if (generation === this.generation) this.afterFrame(); }
       if (generation !== this.generation || !this.context) return;
@@ -238,26 +242,28 @@ export class NativeCopyMode {
     const range = ordered(this.anchor, this.cursor);
     return this.linewise ? { start: { row: range.start.row, col: 0 }, end: { row: range.end.row, col: (this.terminal()?.cols || 1) - 1 } } : range;
   }
+  readText(): Promise<string> {
+    const generation = this.generation;
+    return this.tail.then(async () => {
+      const range = this.selection();
+      if (!this.active || generation !== this.generation) throw new Error('Copy mode closed before the selection was read.');
+      if (!this.context || !range) return '';
+      const result = await this.request('pane.selection.read', { anchor: range.start, cursor: range.end, content_revision: this.context.content_revision });
+      if (!this.active || generation !== this.generation) throw new Error('Copy mode closed before the selection was read.');
+      if (this.dirty || !this.context || !matchesNativeViewport(this.terminal(), this.context) || JSON.stringify(this.selection()) !== JSON.stringify(range)) throw new Error('Terminal selection changed before it could be read.');
+      if (typeof result.text !== 'string') throw new Error('Native selection text is unavailable.');
+      return result.text;
+    });
+  }
   private copy() {
     if (!this.pending && !this.selection()) { this.exit(); return; }
     const generation = this.generation;
-    // Construct the clipboard write in the user's gesture; Safari requires this
-    // even though the revision-checked native read completes asynchronously.
-    const text = this.tail.then(async () => {
-      const range = this.selection();
-      if (!this.active || generation !== this.generation || !this.context || !range) throw new Error('Select text with v or V, or find a match first.');
-      const result = await this.request('pane.selection.read', { anchor: range.start, cursor: range.end, content_revision: this.context.content_revision });
-      if (!this.active || generation !== this.generation) throw new Error('Copy mode closed before the selection was read.');
-      return String(result.text);
-    });
-    let write: Promise<void>;
-    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') write = navigator.clipboard.write([new ClipboardItem({ 'text/plain': text.then(value => new Blob([value], { type: 'text/plain' })) })]);
-    else if (navigator.clipboard?.writeText) write = text.then(value => navigator.clipboard.writeText(value));
-    else { void text.catch(() => {}); this.message('Clipboard requires a secure browser connection.'); return; }
+    const write = writeTerminalClipboard(this.readText());
     void write.then(() => { if (generation === this.generation) { this.exit(); this.report('Copied native terminal selection.'); } }).catch(error => { if (generation === this.generation) this.message(`Copy failed: ${(error as Error).message}`); });
   }
   private key(event: KeyboardEvent) {
     if (!this.active) return;
+    if (event.key.toLowerCase() === 'c' && (event.ctrlKey !== event.metaKey) && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopImmediatePropagation(); this.copy(); return; }
     if (event.key === 'Tab' || event.metaKey || (event.ctrlKey && !['b', 'f', 'u', 'd'].includes(event.key.toLowerCase()))) return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.key === 'q') return this.exit();
@@ -289,12 +295,13 @@ export class NativeCopyMode {
     const metrics = this.terminal()?.renderer?.getMetrics() || { width: 8, height: 16 };
     return { row: this.top + Math.max(0, Math.min((this.context?.scroll.viewport_rows || 1) - 1, Math.floor((y - rect.top) / metrics.height))), col: Math.max(0, Math.min((this.terminal()?.cols || 1) - 1, Math.floor((x - rect.left) / metrics.width))) };
   }
+  private clearPaint() { this.marks.replaceChildren(); this.terminal()?.clearSelection(); delete this.layer.dataset.selection; this.layer.removeAttribute('aria-description'); }
   private draw() {
     if (!this.active || !this.context) return;
     const term = this.terminal(), metrics = term?.renderer?.getMetrics();
     this.status.textContent = `COPY ${this.cursor.row + 1}:${this.cursor.col + 1}${this.searchQuery ? ` ${this.currentGlobal === undefined ? 0 : this.currentGlobal + 1}/${this.total}` : ''}`;
     this.status.title = this.status.textContent; this.layer.dataset.row = String(this.cursor.row); this.layer.dataset.col = String(this.cursor.col);
-    this.marks.replaceChildren(); if (!term || !metrics || this.dirty) return;
+    this.clearPaint(); if (!term || !metrics || this.dirty) return;
     const canvas = this.content.querySelector('canvas')?.getBoundingClientRect(), bounds = this.layer.getBoundingClientRect();
     const left = (canvas?.left || bounds.left) - bounds.left, top = (canvas?.top || bounds.top) - bounds.top;
     const mark = (row: number, col: number, width: number, className: string) => {
@@ -309,7 +316,10 @@ export class NativeCopyMode {
       }
     };
     for (let index = 0; index < this.matches.length; index++) range(this.matches[index], index === this.current ? 'copy-match copy-current' : 'copy-match');
-    if (this.anchor && this.selectionVisible) range(this.selection()!, 'copy-selection');
+    if (this.anchor && this.selectionVisible && paintTerminalSelection(term, this.top, this.selection())) {
+      const selection = this.selection()!; this.layer.dataset.selection = 'true';
+      this.layer.setAttribute('aria-description', `Selected rows ${selection.start.row + 1} through ${selection.end.row + 1}`);
+    }
     mark(this.cursor.row, this.cursor.col, 1, 'copy-caret');
   }
 }

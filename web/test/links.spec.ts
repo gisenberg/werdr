@@ -103,11 +103,13 @@ test('a native API ahead of the displayed frame cannot dispatch its replacement 
 
 test('a delayed non-link response replays the drag into ordinary terminal selection', async ({ page }) => {
   const id = await create(page); await paint(page, id, 'NON_LINK_SELECTION');
+  await page.locator('#settings').click(); await page.locator('[data-setting=copyOnSelect]').uncheck(); await page.getByRole('button', { name: 'SAVE SETTINGS', exact: true }).click(); await expect(page.locator('#settings-dialog')).toBeHidden();
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let received = false;
   await page.route('**/api/action', async route => { if (route.request().postDataJSON()?.action === 'pane.link.activate') { received = true; await held; } await route.continue(); });
   const box = await page.locator('.pane-active canvas').first().boundingBox(); await page.keyboard.down('Control'); await page.mouse.move(box!.x + 2, box!.y + 8); await page.mouse.down(); await expect.poll(() => received).toBe(true);
   await page.mouse.move(box!.x + 140, box!.y + 8); await page.mouse.up(); await page.keyboard.up('Control');
   const completed = page.waitForResponse(r => r.url().endsWith('/api/action') && r.request().postDataJSON()?.action === 'pane.link.activate'); release(); await completed;
+  await expect(page.locator('.pane-content[data-native-selection]')).toHaveCount(1);
   await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: 'Plugins: management, actions, panes and logs', exact: true }).click();
   await expect(page.locator('#plugin-context')).toContainText('TEXT SELECTED');
   const invoked = page.waitForResponse(r => r.url().endsWith('/api/action') && r.request().postDataJSON()?.action === 'plugin.action.invoke');

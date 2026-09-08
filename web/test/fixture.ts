@@ -8,14 +8,14 @@ import { createServer } from 'node:net';
 import { get as httpsGet } from 'node:https';
 
 const exec = promisify(execFile);
-export async function fixture(passwordLogin = false, secure = false, isolatedClaude = false, editor?: string) {
+export async function fixture(passwordLogin = false, secure = false, isolatedClaude = false, editor?: string, nativeRuntime?: string) {
   const directory = await mkdtemp(resolve(tmpdir(), 'werdr-e2e-'));
   const username = 'test-user', password = randomBytes(24).toString('hex');
   const salt = randomBytes(16);
   const credentialsPath = resolve(directory, 'credentials.json');
   if (passwordLogin) await writeFile(credentialsPath, JSON.stringify({ username, passwordHash: `scrypt$${salt.toString('hex')}$${scryptSync(password, salt, 32).toString('hex')}` }), { mode: 0o600 });
   if (isolatedClaude) await mkdir(resolve(directory, 'claude-config'));
-  const binary = resolve(process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
+  const binary = resolve(nativeRuntime || process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
   const env = { ...process.env, XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary, ...(isolatedClaude ? { CLAUDE_CONFIG_DIR: resolve(directory, 'claude-config') } : {}), ...(editor === undefined ? {} : { EDITOR: editor, VISUAL: editor }) };
   for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSION', 'WERDR_SOCKET_PATH', 'WERDR_SESSION']) delete (env as Record<string, string | undefined>)[key];
   const listener = createServer(); await new Promise<void>(r => listener.listen(0, '127.0.0.1', r));

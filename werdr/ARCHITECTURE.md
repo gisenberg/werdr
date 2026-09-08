@@ -50,6 +50,10 @@ Browser copy mode uses native content revisions, scrollback coordinates, word/pa
 It brackets native viewport text and scroll geometry with content checks and compares that text with Ghostty's rendered graphemes before establishing selection coordinates.
 Only the active copy pane and explicit link clicks perform these checks, and queued operations are canceled when copy mode closes or the terminal disconnects.
 The browser owns selection highlights and restores the entry scroll offset when copy mode exits normally.
+Normal mouse selection uses the same native content revisions and buffer coordinates, including selections extended beyond the viewport.
+The browser applies the native copy-on-select preference, word rules for URLs and quoted paths, and explicit copy shortcuts for retained ranges.
+Ghostty paints the selected cells with the native contrasting foreground and background; clipboard text and plugin selection context still come from the native selection API.
+Mouse-reporting applications retain their gestures, and Ghostty's automatic click-copy handler cannot issue a second clipboard write.
 Scrollback editing focuses the explicitly selected native pane and invokes the host-configured editor through the native API.
 The runtime owns the full-history export, private temporary file, editor process, overlay restoration and cleanup.
 The browser selects an unambiguous new editor pane and follows native focus restoration after closure until the next user interaction.

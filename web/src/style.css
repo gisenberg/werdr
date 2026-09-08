@@ -154,7 +154,6 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 .copy-layer:focus-visible { outline: 1px solid var(--herdr-accent); outline-offset: -1px; }
 .copy-marks { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .copy-marks span { position: absolute; box-sizing: border-box; }
-.copy-selection { background: var(--herdr-selection-bg); opacity: .65; }
 .copy-match { background: var(--herdr-accent); opacity: .2; }
 .copy-current { opacity: .4; }
 .copy-caret { border: 1px solid var(--herdr-accent); }

@@ -30,7 +30,7 @@ test('copy mode searches native history without resizing, copies Unicode and res
   await open(page, true); await find(page, 'BROWSER_COPY_'); await expect(page.locator('.copy-status')).toContainText('/201');
   const before = await page.locator('.copy-layer').getAttribute('data-row'); await page.keyboard.press('n'); await expect(page.locator('.copy-layer')).not.toHaveAttribute('data-row', before!); await page.keyboard.press('N'); await expect(page.locator('.copy-layer')).toHaveAttribute('data-row', before!);
   await page.keyboard.press('Escape'); await page.keyboard.press('g'); await page.keyboard.press('Home'); await page.keyboard.press('V'); await page.keyboard.press('j');
-  await expect(page.locator('.copy-selection')).toHaveCount(2);
+  await expect(page.locator('.copy-layer')).toHaveAttribute('aria-description', 'Selected rows 1 through 2');
   const paneCount = await page.locator('.terminal-pane').count();
   const beforePage = await (await page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', action: 'pane.copy_context', id } })).json();
   await page.keyboard.press('Control+d'); expect(await page.locator('.terminal-pane').count()).toBe(paneCount);
@@ -90,7 +90,7 @@ test('copy mode waits for matching rendered content when the native API is ahead
   await runtime.cli('pane', 'send-text', id, "printf '\\033[2J\\033[HNEW_%s\\n' FRAME\n");
   await expect.poll(() => runtime.cli('pane', 'read', id, '--source', 'visible')).toContain('NEW_FRAME');
   await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: 'Terminal: search native scrollback', exact: true }).click();
-  await expect(page.locator('.copy-status')).toHaveText('COPY WAIT'); await expect(page.locator('.copy-caret')).toHaveCount(0); await expect(page.locator('.copy-selection')).toHaveCount(0);
+  await expect(page.locator('.copy-status')).toHaveText('COPY WAIT'); await expect(page.locator('.copy-caret')).toHaveCount(0); await expect(page.locator('.copy-layer[data-selection]')).toHaveCount(0);
   hold = false; for (const send of frames.splice(0)) send();
   await expect(page.locator('.copy-status')).toContainText(/COPY \d+:/); await expect(page.locator('.copy-search input')).toBeFocused();
   await find(page, 'NEW_FRAME'); await expect(page.locator('.copy-status')).toContainText('1/1'); await expect(page.locator('.copy-current')).not.toHaveCount(0);

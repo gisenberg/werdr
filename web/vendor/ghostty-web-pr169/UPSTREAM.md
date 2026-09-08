@@ -42,3 +42,16 @@ Without the unshifted codepoint, Kitty encoding falls back to plain text for pri
 The WASM binary remains byte-identical to the wmux4 artifact.
 Build the library with `npm run build:lib`, retain the root and dist WASM copies, set the package version above, include `LICENSE` in the package files, and run `npm pack`.
 Werdr verifies printable Kitty press, repeat, release, and reset behavior through its browser and pinned native-runtime fixture.
+
+## Werdr selection viewport correction
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr2.tgz`, version `0.4.1-pr169.faf6fbd.werdr2`.
+Its SHA-256 is `a4777a97f711dae465c91c565d94453c549e26b27478460db3d1c9050023208e`.
+Apply `werdr-selection-viewport.patch` after the five patches above.
+Programmatic `select()` and `selectAll()` now translate visible rows through the same scrollback coordinates as mouse selection and `selectLines()`.
+They previously selected old history rows after the buffer accumulated scrollback, which could leave the visible selection without a highlight.
+Replacing a programmatic selection also marks its previous rows for repaint, and invalid or oversized selection lengths are bounded without an unbounded loop.
+The patch includes selection-manager regressions for visible and scrolled viewports, replacement repainting, and length bounds.
+Build and package as above with the new version; do not rebuild WASM or edit generated bundles manually.
+Both packaged WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove this patch when an adopted upstream package includes these fixes and the native-selection browser checks still pass.
