@@ -51,7 +51,7 @@ export class PopupSurface {
       if (!popup) { this.clear(true); return; }
       if (this.popup?.terminal_id !== popup.terminal_id || this.popup.owner_tab_id !== popup.owner_tab_id) {
         this.clear(true); this.popup = popup;
-        this.controller = new TerminalController(host.machine.id, popup.terminal_id, popup.terminal_id, this.toolbar, this.preferences, this.colors, () => {}, () => this.terminalChanged(), this.api, message => { this.message.textContent = message; }, { kind: 'popup', ownerTabId: popup.owner_tab_id });
+        this.controller = new TerminalController(host.machine.id, popup.terminal_id, popup.terminal_id, this.toolbar, this.preferences, this.colors, () => {}, () => this.terminalChanged(), this.api, message => { this.message.textContent = message; }, () => {}, { kind: 'popup', ownerTabId: popup.owner_tab_id });
         this.controller.chrome({ top: false, right: false, bottom: false, left: false }, '', 'Native terminal popup', true);
         this.content.append(this.controller.element);
       }

@@ -98,10 +98,16 @@ History stays in this browser and clears when changing hosts or reconnecting thr
 Closed panes and replaced terminals cannot become last-pane targets.
 Action feedback remains readable for eight seconds through background refreshes and typing, then returns to the latest fleet summary.
 Late action failures identify the host on which the request began.
-The browser binding catalog covers its supported built-in actions; native custom shell bindings and detach/reload/notification-target bindings remain outside this catalog.
+The browser binding catalog includes supported built-in actions, detach, configuration reload, and visible-notification navigation.
+Configured host commands are available when the owning native runtime advertises command execution support.
 ## Current behavior
 
 **SETTINGS** provides native herdr palettes, custom semantic colors, live preview/cancel, system light/dark switching, terminal fonts, sidebar density/width, agent ordering, close confirmations, and notification options.
+
+Under **TERMINAL SELECTION**, clipboard success feedback can be enabled independently of agent alerts and placed at any of six top/bottom left/center/right positions.
+The native-style message lasts two seconds, moves aside for an overlapping notification, and leaves terminal focus unchanged.
+Disabling success feedback does not hide clipboard errors.
+These preferences support preview/cancel and persist across gateway restarts.
 Preferences are stored at the gateway with revision checks to prevent one browser overwriting another browser's edits.
 An optional device font-size override stays in that browser.
 Theme and font changes update the mounted terminal without releasing its controller.
@@ -229,4 +235,5 @@ Browser mutations are serialized per host so another browser action cannot inter
 Command logs retain native running, succeeded, and failed outcomes, exit codes, stdout, and stderr; filter by plugin and choose the native log limit from 10 through 200 entries.
 Plugin panes support native overlay, split, tab, and zoomed placements, input, focus, and explicit closure.
 An overlay's exit restores the native focused pane while retaining the underlying browser terminals.
-Native popup surfaces and GitHub plugin installation are still pending in the browser, as tracked in the [desktop parity matrix](werdr/DESKTOP_PARITY.md).
+GitHub plugin installation and native popup surfaces are implemented in the browser.
+Popup support requires a capable owning runtime; remaining rollout and verification requirements are tracked in the [desktop parity matrix](werdr/DESKTOP_PARITY.md).

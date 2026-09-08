@@ -42,16 +42,16 @@ export class TerminalController {
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   sendKey(event: KeyboardEvent) { if (this.ready && this.visible) this.keyboard?.sendKey(event); }
   readSelection() { return this.copyMode?.active ? this.copyMode?.readText() : this.selectionMode?.hasSelection ? this.selectionMode?.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
-  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
+  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, copied: () => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
     this.title.append(this.titleLabel);
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
-    if (!target) this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report, () => { this.selectionMode?.clear(); this.links?.cancel(); this.mouse.release(); });
+    if (!target) this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report, copied, () => { this.selectionMode?.clear(); this.links?.cancel(); this.mouse.release(); });
     if (!target) this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, text => this.imagePaste?.send({ type: 'terminal.input', text }));
-    if (!target) this.selectionMode = new NativeSelection(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active && !this.mouse.reporting, () => this.preferences.copyOnSelect, () => this.preferences.scrollLines, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
+    if (!target) this.selectionMode = new NativeSelection(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active && !this.mouse.reporting, () => this.preferences.copyOnSelect, () => this.preferences.scrollLines, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report, copied);
     if (!target) this.scrollbar = new NativeScrollbar(this.element, this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, () => { select(); this.links?.cancel(); this.mouse.release(); this.selectionMode?.clear(); }, offset_from_bottom => api('/api/action', { machine, id: pane, action: 'pane.scroll', offset_from_bottom }), report);
     this.scrollbar?.preference(preferences.paneScrollbars);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);

@@ -167,6 +167,9 @@ aside nav button[data-badge=DONE]::after, aside nav button[data-badge=IDLE]::aft
 
 /* Native split geometry owns terminal placement. Chrome stays outside pixels. */
 #terminal { position: relative; }
+#clipboard-feedback { position: absolute; z-index: 45; max-width: 100%; max-height: 100%; overflow: hidden; height: 3lh; padding: 0 1ch; display: flex; align-items: center; white-space: pre; pointer-events: none; border: 1px solid var(--herdr-green); background: var(--herdr-panel-bg); color: var(--herdr-text); font-weight: bold; }
+#clipboard-feedback[hidden] { display: none; }
+#clipboard-feedback > span { color: var(--herdr-green); }
 .terminal-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; --pane-border-color: var(--herdr-overlay1); border-style: solid; border-color: var(--pane-border-color); border-width: 0 var(--pane-border-right, 0px) var(--pane-border-bottom, 0px) var(--pane-border-left, 0px); }
 .terminal-pane[hidden] { display: none; }
 .terminal-pane.pane-active { --pane-border-color: var(--herdr-accent); }

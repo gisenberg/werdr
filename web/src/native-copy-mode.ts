@@ -50,7 +50,7 @@ export class NativeCopyMode {
   private dragTimer?: ReturnType<typeof setInterval>;
   active = false;
 
-  constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void, private beforeStart: () => void = () => {}) {
+  constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void, private copied: () => void, private beforeStart: () => void = () => {}) {
     this.layer.className = 'copy-layer'; this.layer.tabIndex = 0; this.layer.setAttribute('role', 'region'); this.layer.setAttribute('aria-label', 'Terminal copy mode');
     this.marks.className = 'copy-marks'; this.layer.append(this.marks);
     this.toolbar.className = 'copy-toolbar'; this.toolbar.setAttribute('role', 'toolbar'); this.toolbar.setAttribute('aria-label', 'Terminal copy controls');
@@ -265,7 +265,7 @@ export class NativeCopyMode {
     if (!this.pending && !this.selection()) { this.exit(); return; }
     const generation = this.generation;
     const write = writeTerminalClipboard(this.readText());
-    void write.then(() => { if (generation === this.generation) { this.exit(); this.report('Copied native terminal selection.'); } }).catch(error => { if (generation === this.generation) this.message(`Copy failed: ${(error as Error).message}`); });
+    void write.then(() => { if (generation === this.generation) { this.exit(); this.copied(); } }).catch(error => { if (generation === this.generation) this.message(`Copy failed: ${(error as Error).message}`); });
   }
   private key(event: KeyboardEvent) {
     if (!this.active) return;

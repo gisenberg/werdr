@@ -2,9 +2,11 @@ import { paneChrome, paneBorderLabel } from '../shared/pane-chrome';
 import type { Pane, Snapshot } from '../shared/fleet';
 import { geometry, type Layout, type LayoutNode, type Rect, type Divider } from '../shared/layout';
 import { palette, type Preferences } from '../shared/settings';
+import { ClipboardFeedback } from './clipboard-feedback';
 import { TerminalController } from './terminal-controller';
 type Api = (path: string, data?: object) => Promise<any>;
 export class DesktopSurface {
+  private clipboardFeedback: ClipboardFeedback;
   private overflow = new Map<string, HTMLButtonElement>();
   private controllers = new Map<string, TerminalController>();
   private machine = '';
@@ -24,7 +26,7 @@ export class DesktopSurface {
   private retry?: ReturnType<typeof setTimeout>;
   private drag?: { path: boolean[]; original: number; node: Extract<LayoutNode, { type: 'split' }> };
   constructor(private container: HTMLElement, private shield: HTMLElement, private toolbarHost: HTMLElement, private api: Api, preferences: Preferences, colors: ReturnType<typeof palette>, private select: (id: string) => void, private error: (message: string) => void, private notice: (message: string) => void) {
-    this.preferences = preferences; this.colors = colors; this.separators.className = 'pane-separators'; container.append(this.separators);
+    this.preferences = preferences; this.colors = colors; this.clipboardFeedback = new ClipboardFeedback(container, () => this.preferences); this.separators.className = 'pane-separators'; container.append(this.separators);
     document.addEventListener('focusin', event => {
       if (event.target instanceof Node && !container.contains(event.target)) this.focusTarget = undefined;
     });
@@ -35,13 +37,14 @@ export class DesktopSurface {
   requestFocus(pane: string) { this.focusTarget = pane || undefined; this.readiness(); }
   waitForSelection() { this.pendingSelection = true; this.container.inert = true; this.shield.hidden = false; this.shield.textContent = 'Waiting for native workspace update...'; }
   clear() {
+    this.clipboardFeedback.clear();
     this.pendingSelection = false; this.focusTarget = undefined; this.container.inert = false;
     ++this.epoch; this.loading = false; this.dirty = false; clearTimeout(this.retry); this.drag = undefined;
     for (const controller of this.controllers.values()) controller.dispose(); this.controllers.clear();
     for (const node of this.overflow.values()) node.remove(); this.overflow.clear();
     this.layout = undefined; this.fingerprint = ''; this.machine = ''; this.tab = ''; this.pane = ''; this.panes = []; this.separators.replaceChildren(); this.shield.hidden = false; this.shield.textContent = 'Attaching to Herdr...';
   }
-  updatePreferences(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; for (const controller of this.controllers.values()) controller.update(preferences, colors); this.render(); }
+  updatePreferences(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; this.clipboardFeedback.update(); for (const controller of this.controllers.values()) controller.update(preferences, colors); this.render(); }
   sync(machine: string, tab: string, pane: string, snapshot: Snapshot, online: boolean) {
     const selectionChanged = machine !== this.machine || tab !== this.tab || pane !== this.pane;
     this.pendingSelection = false; this.container.inert = false;
@@ -104,7 +107,7 @@ export class DesktopSurface {
         if (hidden) { hidden[1].dispose(); this.controllers.delete(hidden[0]); }
       }
       if (!controller && this.controllers.size < 16) {
-        controller = new TerminalController(this.machine, id, pane.terminal_id, this.toolbarHost, this.preferences, this.colors, () => this.select(id), this.readiness, this.api, (message, failed) => failed ? this.error(message) : this.notice(message));
+        controller = new TerminalController(this.machine, id, pane.terminal_id, this.toolbarHost, this.preferences, this.colors, () => this.select(id), this.readiness, this.api, (message, failed) => failed ? this.error(message) : this.notice(message), () => this.clipboardFeedback.show());
         this.controllers.set(id, controller); this.container.append(controller.element);
       }
       if (!controller) {

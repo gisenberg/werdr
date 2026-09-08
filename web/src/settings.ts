@@ -22,7 +22,7 @@ const groups: [string, Control[]][] = [
     { key: 'paneGaps', label: 'GAPS BETWEEN PANES' }, { key: 'showAgentLabelsOnPaneBorders', label: 'AGENT LABELS ON PANE BORDERS' },
   ]],
   ['NAVIGATION', [{ key: 'agentSort', label: 'AGENT ORDER', choices: ['priority', 'native'] }, { key: 'confirmClose', label: 'CONFIRM PROCESS CLOSURE' }, { key: 'scrollLines', label: 'SCROLL LINES', min: 1, max: 20 }]],
-  ['TERMINAL SELECTION', [{ key: 'copyOnSelect', label: 'COPY ON MOUSE SELECTION' }]],
+  ['TERMINAL SELECTION', [{ key: 'copyOnSelect', label: 'COPY ON MOUSE SELECTION' }, { key: 'clipboardToast', label: 'CLIPBOARD SUCCESS TOAST' }, { key: 'clipboardToastPosition', label: 'CLIPBOARD TOAST POSITION', choices: ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'] }]],
   ['NOTIFICATIONS', [{ key: 'notificationAttention', label: 'ATTENTION ALERTS' }, { key: 'notificationFinished', label: 'COMPLETION ALERTS' }, { key: 'notificationSound', label: 'ALERT SOUND' }, { key: 'toastDelivery', label: 'ALERT DELIVERY', choices: ['off', 'browser', 'desktop', 'both'] }, { key: 'toastDelaySeconds', label: 'AGENT ALERT DELAY (SECONDS)', min: 0, max: 60 }, { key: 'toastNativeDuration', label: 'NATIVE TOAST DURATIONS (ATTENTION 8S / DONE 5S / UPDATE 3S)' }, { key: 'toastSeconds', label: 'OVERRIDE DURATION (SECONDS; 0 HIDES TOASTS)', min: 0, max: 60 }, { key: 'toastPosition', label: 'TOAST POSITION', choices: ['top-left', 'top-right', 'bottom-left', 'bottom-right'] }]],
 ];
 export class Settings {

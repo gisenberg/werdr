@@ -28,7 +28,7 @@ export class NativeSelection {
   private highlightTimer?: ReturnType<typeof setTimeout>;
   private touched = -Infinity;
 
-  constructor(private content: HTMLElement, private terminal: () => Terminal | undefined, private available: () => boolean, private copyOnSelect: () => boolean, private scrollLines: () => number, private request: (action: string, params?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void) {
+  constructor(private content: HTMLElement, private terminal: () => Terminal | undefined, private available: () => boolean, private copyOnSelect: () => boolean, private scrollLines: () => number, private request: (action: string, params?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, private copied: () => void) {
     content.addEventListener('mousedown', this.down, true);
     content.addEventListener('click', this.click, true);
     content.addEventListener('wheel', this.wheel, { capture: true, passive: false });
@@ -138,7 +138,7 @@ export class NativeSelection {
     state.copying = true;
     void writeTerminalClipboard(this.readText(state)).then(() => {
       if (this.state !== state) return;
-      this.report('Copied native terminal selection.');
+      this.copied();
       if (state.word && this.copyOnSelect()) this.highlightTimer = setTimeout(() => { if (this.state === state) this.clear(); }, 500);
       else this.clear();
     }).catch(error => {
