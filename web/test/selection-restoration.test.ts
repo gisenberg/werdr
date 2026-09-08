@@ -69,6 +69,20 @@ test('new navigation and endpoint replacement fence delayed restoration replies'
   }
 });
 
+test('resuming a detached selection rejects reused terminal IDs and changed endpoints', async () => {
+  const identity = { endpoint: JSON.stringify(['local', '', '']), terminal: 'terminal2' };
+  for (const changed of ['terminal', 'endpoint', 'neither']) {
+    const current = host();
+    if (changed === 'terminal') current.snapshot!.panes[1].terminal_id = 'replacement';
+    if (changed === 'endpoint') current.machine.target = 'replacement-host';
+    const restoration = new SelectionRestoration(request, async () => current.snapshot!, () => {}, identity);
+    restoration.update(current); await new Promise(resolve => setImmediate(resolve));
+    if (changed === 'neither') assert.deepEqual(restoration.update(current), request);
+    else { assert.equal(restoration.update(current), undefined); assert.equal(restoration.active, true); }
+    restoration.cancel();
+  }
+});
+
 test('a changed terminal or populated empty scope is revalidated while waiting for cache convergence', async context => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
   for (const empty of [false, true]) {

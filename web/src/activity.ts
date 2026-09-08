@@ -6,6 +6,8 @@ const element = <T extends HTMLElement = HTMLElement>(id: string) => document.ge
 export class Activity {
   private state: FleetState = { generation: '', revision: 0, hosts: [], notices: [] };
   private timer?: ReturnType<typeof setTimeout>;
+  private active = true;
+  private desktop = new Set<Notification>();
   constructor(private readonly api: Api, private readonly select: (machine: string, workspace: string, tab: string, pane: string) => void, private readonly current: () => { machine: string; pane: string }, private readonly preferences: () => Preferences) {
     element('activity-done').onclick = () => element<HTMLDialogElement>('activity-dialog').close();
     element('read-notices').onclick = () => { void api('/api/notices/read', {}).catch(error => { element('activity-error').textContent = error.message; }); };
@@ -16,8 +18,15 @@ export class Activity {
       element('activity-error').textContent = permission === 'granted' ? 'Desktop notifications enabled while werdr is open.' : 'Notifications were not enabled. Check browser permissions to change this.';
     };
   }
-  open() { this.render(); element<HTMLDialogElement>('activity-dialog').showModal(); }
+  setActive(active: boolean) {
+    this.active = active;
+    if (active) return;
+    clearTimeout(this.timer); element('notice-toast').hidden = true;
+    for (const notification of this.desktop) notification.close(); this.desktop.clear();
+  }
+  open() { if (!this.active) return; this.render(); element<HTMLDialogElement>('activity-dialog').showModal(); }
   update(state: FleetState, added?: Notice) {
+    if (!this.active) return;
     this.state = state;
     const unread = state.notices.filter(notice => !notice.read).length;
     element('activity').textContent = `ACTIVITY${unread ? ' [' + unread + ']' : ''}`;
@@ -37,11 +46,13 @@ export class Activity {
     try {
       if ('Notification' in window && Notification.permission === 'granted' && localStorage.getItem('werdr-desktop-notices') === 'on') {
         const notification = new Notification(added.title, { body: added.body, tag: added.id });
+        this.desktop.add(notification); notification.onclose = () => this.desktop.delete(notification);
         notification.onclick = () => { window.focus(); this.follow(added); notification.close(); };
       }
     } catch {}
   }
   private follow(notice: Notice) {
+    if (!this.active) return;
     void this.api('/api/notices/read', { id: notice.id }).catch(() => {});
     const host = this.state.hosts.find(host => host.machine.id === notice.machineId);
     if (host?.snapshot?.panes.some(pane => pane.pane_id === notice.paneId)) {

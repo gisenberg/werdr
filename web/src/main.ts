@@ -1,9 +1,11 @@
+import { ClientLifecycle, ClientCancelled } from './client-lifecycle';
+import { DetachedScreen } from './detached-screen';
 import { MobileSwitcher } from './mobile-switcher';
 import { LastPane } from './last-pane';
 import { StatusLine } from './status-line';
 import { mobileSwitcherSections, type MobileTargetKind } from './mobile-switcher-model';
 import { NavigatePreview } from './navigate-preview';
-import { initialSelection, SelectionRestoration } from './selection-restoration';
+import { initialSelection, SelectionRestoration, type Selection, type SelectionIdentity } from './selection-restoration';
 import { DesktopShortcuts, type ShortcutCommand } from './desktop-shortcuts';
 import type { ShortcutAction } from '../shared/shortcuts';
 import { forgetAgentRows, renderAgentRows, resolveAgentRows, type RowToken } from './agent-row-renderer';
@@ -41,14 +43,16 @@ ${hostManagerMarkup}${activityMarkup}${settingsMarkup}${worktreesMarkup}${integr
 <dialog id="agent-dialog"><h1>AGENT</h1><p id="agent-context"></p><form id="agent-start-form"><label>AGENT KIND<input id="agent-kind" value="claude" list="agent-kinds" required maxlength="80" autocomplete="off"><datalist id="agent-kinds"><option value="claude"><option value="codex"><option value="opencode"><option value="aider"><option value="gemini"></datalist></label><label>NAME<input id="agent-name" required maxlength="256" autocomplete="off"></label><button type="submit">START AGENT IN THIS PANE</button></form><form id="agent-prompt-form"><label>PROMPT<textarea id="agent-prompt" required maxlength="32768" rows="5"></textarea></label><button type="submit">SEND PROMPT</button></form><p id="agent-error" role="alert"></p><button id="agent-done">DONE</button></dialog>`;
 const contextMenu = new ContextMenu();
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const boot = new BootConsole(value => api('/api/login', value), refresh);
+const lifecycle = new ClientLifecycle();
+const boot = new BootConsole(value => api('/api/login', value), async () => { if (!lifecycle.active) lifecycle.resume(); restoreClientSelection(); await refresh(); });
 const statusLine = new StatusLine(text => { element('status').textContent = text; element('status').title = text; });
-const status = (text: string) => statusLine.show(text);
+const status = (text: string) => { if (lifecycle.active) statusLine.show(text); };
 let machineId = 'local', workspaceId = '', tabId = '', paneId = '';
 let snapshot: Snapshot = emptySnapshot();
 let fleetState: FleetState = { generation: '', revision: 0, hosts: [], notices: [] };
 let pendingHost: { id: string; intent: number } | undefined;
 let pendingPane: { machine: string; pane: string; tab: string } | undefined;
+let reconnectSelection: { selection: Selection; identity: SelectionIdentity } | undefined;
 const selections = new Map<string, { workspace: string; tab: string; pane: string }>();
 let savedSelection: string | null = null;
 try { savedSelection = localStorage.getItem('werdr-selection'); } catch {}
@@ -73,7 +77,7 @@ const lastPane = new LastPane();
 const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
   if (!online) lastPane.reset();
-  if (!authenticated) return;
+  if (!authenticated || !lifecycle.active) return;
   if (!online) { statusLine.update('[RECONNECTING] GATEWAY'); void refresh(); }
   else if (recovered) {
     if (!pendingPane && !restoration.active) lastPane.observe(lastPaneScope(), paneId, snapshot);
@@ -83,8 +87,10 @@ const fleet = new FleetClient(applyFleet, online => {
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
-const restoration = new SelectionRestoration(initial.restore ? initial.selection : undefined, async machine => (await api('/api/snapshot?' + new URLSearchParams({ machine }))).snapshot, () => { if (authenticated) { choose(); renderFleetNavigation(); } });
-function selectPane(id: string) { if (paneId === id && !pendingPane && !restoration.active) return; restoration.cancel(); ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
+const readSelection = async (machine: string) => (await api('/api/snapshot?' + new URLSearchParams({ machine }))).snapshot;
+const selectionRestored = () => { if (authenticated && lifecycle.active) { choose(); renderFleetNavigation(); } };
+let restoration = new SelectionRestoration(initial.restore ? initial.selection : undefined, readSelection, selectionRestored);
+function selectPane(id: string) { if (!lifecycle.active) return; if (paneId === id && !pendingPane && !restoration.active) return; reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; pendingPane = undefined; paneId = id; choose(); renderFleetNavigation(); }
 const activity = new Activity(api, selectTarget, () => ({ machine: machineId, pane: paneId }), () => preferences);
 const integrations = new Integrations(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
 const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label } : undefined; });
@@ -115,6 +121,8 @@ function lastPaneScope() {
     ? JSON.stringify([fleetState.generation, machineContext(machineId), host.connectionGeneration]) : undefined;
 }
 function selectHost(id: string, fulfill = false) {
+  if (!lifecycle.active) return;
+  reconnectSelection = undefined;
   if (!fulfill) { ++selectionIntent; pendingHost = undefined; }
   const restoring = restoration.active; restoration.cancel();
   if (restoring) { workspaceId = ''; tabId = ''; paneId = ''; }
@@ -122,13 +130,15 @@ function selectHost(id: string, fulfill = false) {
   if (machineId === id) { if (restoring) { choose(); renderFleetNavigation(); } return; }
   lastPane.reset(); statusLine.clear();
   pendingPane = undefined; rememberSelection(); const saved = selections.get(id);
-  detach(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
+  clearSurface(); machineId = id; workspaceId = saved?.workspace || ''; tabId = saved?.tab || ''; paneId = saved?.pane || '';
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation(); surface.requestFocus(paneId);
 }
 function selectTarget(machine: string, workspace: string, tab: string, pane: string, waitForSnapshot = false) {
+  if (!lifecycle.active) return;
+  reconnectSelection = undefined;
   restoration.cancel(); ++selectionIntent;
   if (waitForSnapshot) waitForPane(machine, pane, tab); else pendingPane = undefined;
-  if (machineId !== machine) { lastPane.reset(); statusLine.clear(); detach(); }
+  if (machineId !== machine) { lastPane.reset(); statusLine.clear(); clearSurface(); }
   if (waitForSnapshot) surface.waitForSelection();
   machineId = machine; workspaceId = workspace; tabId = tab; paneId = pane;
   snapshot = selectedHost()?.snapshot || emptySnapshot(); closeRail(); if (!pendingPane || snapshot.panes.some(pane => pane.pane_id === pendingPane!.pane && pane.tab_id === pendingPane!.tab)) choose(); renderFleetNavigation();
@@ -155,12 +165,13 @@ function waitForPane(machine: string, pane: string, tab: string, closedNotice = 
   pendingPaneTimer = setTimeout(inspect, 500);
 }
 function applyFleet(state: FleetState, added?: Notice) {
+  if (!lifecycle.active) return;
   const previous = selectedHost()?.connection, previousScope = lastPaneScope(); fleetState = state;
   if (previousScope !== lastPaneScope()) lastPane.reset();
   if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
   if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
   if (!restoration.active && !selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
-    lastPane.reset(); statusLine.clear(); detach(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
+    lastPane.reset(); statusLine.clear(); clearSurface(); machineId = state.hosts.find(host => host.machine.enabled)!.machine.id; workspaceId = ''; tabId = ''; paneId = '';
   }
   snapshot = selectedHost()?.snapshot || emptySnapshot();
   if (closingFocus?.machine === machineId && closingFocus.workspace === workspaceId && closingFocus.tab === tabId) {
@@ -173,6 +184,7 @@ function applyFleet(state: FleetState, added?: Notice) {
   if (previous !== 'online' && selectedHost()?.connection === 'online') surface.recover();
 }
 function renderFleetNavigation() {
+  if (!lifecycle.active) return;
   navigatePreview.reconcile(machineId, snapshot.workspaces.map(item => item.workspace_id), workspaceId);
   const query = shortcuts?.isNavigating ? '' : element<HTMLInputElement>('fleet-search').value.trim().toLowerCase();
   const match = (text: string) => text.toLowerCase().includes(query);
@@ -204,9 +216,11 @@ function renderFleetNavigation() {
 }
 
 async function api(path: string, data?: object): Promise<any> {
-  const res = await fetch(path, data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {});
-  const value = await res.json();
-  if (res.status === 401) { authenticated = false; statusLine.clear(); fleet.stop(); detach(); for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close(); element('settings').hidden = true; element('access-token').hidden = true; element('sessions').hidden = true; element<HTMLDialogElement>('sessions-dialog').close(); element<HTMLDialogElement>('token-dialog').close(); if (path !== '/api/login') boot.requireAuthentication(); }
+  const { res, value } = await lifecycle.request(async signal => {
+    const res = await fetch(path, { ...(data ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) } : {}), signal });
+    return { res, value: await res.json() };
+  }, path === '/api/logout' || path === '/api/login');
+  if (res.status === 401 && path !== '/api/login') { authenticated = false; stopClientWork(); element('settings').hidden = true; element('access-token').hidden = true; element('sessions').hidden = true; boot.requireAuthentication(); }
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
@@ -275,9 +289,10 @@ function navigation(id: string, items: NavigationItem[]) {
   for (const node of existing.values()) { if (node.classList.contains('agent-entry')) forgetAgentRows(node); if (node.parentElement?.classList.contains('workspace-row')) node.parentElement.remove(); else node.remove(); }
 }
 function renderNavigation() {
+  if (!lifecycle.active) return;
   shortcuts?.sync();
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
-  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
+  navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   updateShieldBounds();
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
@@ -290,10 +305,12 @@ function updateShieldBounds() {
 }
 new ResizeObserver(updateShieldBounds).observe(element('terminal'));
 function choose() {
+  if (!lifecycle.active) return;
   if (restoration.active) {
     const restored = restoration.update(selectedHost());
     if (!restored) { surface.waitForSelection(); element('shield').textContent = restoration.message; renderNavigation(); return; }
     ({ machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId } = restored);
+    reconnectSelection = undefined;
   }
   // Connecting hosts have no snapshot yet. Preserve deep links and saved selection
   // until the native server can authoritatively reconcile those IDs.
@@ -312,30 +329,70 @@ function choose() {
   renderNavigation(); rememberSelection();
   surface.sync(machineId, tabId, paneId, snapshot, selectedHost()?.connection === 'online');
   if (restoreFocus) surface.requestFocus(paneId);
-  if (!paneId && selectedHost()?.connection === 'online') { detach(); element('shield').textContent = 'No panes. Create a workspace to start a session.'; }
+  if (!paneId && selectedHost()?.connection === 'online') { clearSurface(); element('shield').textContent = 'No panes. Create a workspace to start a session.'; }
 }
 async function refresh() {
+  if (!lifecycle.active) return;
   if (refreshing) { refreshAgain = true; return; }
-  refreshing = true;
+  refreshing = true; const epoch = lifecycle.generation;
   try {
     const session = await api('/api/session');
+    if (!lifecycle.current(epoch)) return;
     authenticated = true; element('settings').hidden = false; element('sessions').hidden = false; element('access-token').hidden = !session.canGenerateToken;
     await settings.refresh();
+    if (!lifecycle.current(epoch)) return;
+    activity.setActive(true);
     fleet.start();
     const observedVersion = fleet.version;
     const state = await api('/api/fleet');
+    if (!lifecycle.current(epoch)) return;
     fleet.acceptSnapshot(state, observedVersion);
-  } catch (error) { statusLine.update(`[OFFLINE] ${(error as Error).message}`); }
-  finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } }
+    return true;
+  } catch (error) { if (lifecycle.current(epoch)) statusLine.update(`[OFFLINE] ${(error as Error).message}`); }
+  finally { if (lifecycle.current(epoch)) { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh(); } } }
 }
-function detach() { surface.clear(); }
-async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
+function clearSurface() { surface.clear(); }
+const detachedScreen = new DetachedScreen(() => { void resumeClient(); }, () => element('logout').click());
+function detachClient() {
+  if (!lifecycle.active) return;
+  stopClientWork(); element('shield').textContent = 'Detached. Resume to reconnect.'; statusLine.update('[DETACHED] THIS BROWSER'); detachedScreen.show();
+}
+function stopClientWork() {
+  reconnectSelection ||= { selection: { machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId }, identity: { endpoint: machineContext(machineId), terminal: snapshot.panes.find(pane => pane.pane_id === paneId)?.terminal_id } };
+  lifecycle.detach(); ++selectionIntent; refreshing = false; refreshAgain = false;
+  pendingHost = undefined; pendingPane = undefined; closingFocus = undefined; clearTimeout(pendingPaneTimer);
+  restoration.cancel(); lastPane.reset(); returnToEmptySwitcher = false; shortcuts?.reset(); navigatePreview.clear();
+  contextMenu.close(false); closeRail(); activity.setActive(false); fleet.stop(); clearSurface(); statusLine.clear();
+  for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) if (dialog.id !== 'boot') dialog.close();
+}
+function restoreClientSelection() {
+  if (reconnectSelection) restoration = new SelectionRestoration(reconnectSelection.selection, readSelection, selectionRestored, reconnectSelection.identity);
+}
+async function resumeClient() {
+  if (lifecycle.active) return;
+  lifecycle.resume(); const epoch = lifecycle.generation; detachedScreen.busy(true);
+  restoreClientSelection();
+  // Ignore the retained fleet until the new authenticated stream or read arrives.
+  snapshot = emptySnapshot();
+  const refreshed = await refresh();
+  if (!lifecycle.current(epoch)) return;
+  if (!authenticated) { detachedScreen.close(); return; }
+  if (!refreshed) {
+    lifecycle.detach(); refreshing = false; refreshAgain = false; restoration.cancel(); activity.setActive(false); fleet.stop(); clearSurface();
+    detachedScreen.error('Unable to reconnect. Try Resume again.'); return;
+  }
+  detachedScreen.close(); choose(); surface.requestFocus(paneId);
+}
+async function attach(takeover = false) { if (lifecycle.active && selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId, preserveNavigate = false) {
+  if (!lifecycle.active) return;
+  const epoch = lifecycle.generation;
   const interaction = interactionRevision, selection = ++selectionIntent, endpoint = machineContext(selected), source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
   const sourceLabel = fleetState.hosts.find(host => host.machine.id === selected)?.machine.label || selected;
   restoration.supersede();
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
+    if (!lifecycle.current(epoch)) return;
     const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
     if (machineId !== selected) { fleet.resync(); return; }
     // Native events may remove the source before this reply arrives. Only a
@@ -344,18 +401,19 @@ async function action(action: string, id?: string, extra: object = {}, selected 
     if (applySelection && action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
     if (applySelection && created && action !== 'pane.close' && (created.pane_id !== paneId || created.tab_id !== tabId || created.workspace_id !== workspaceId || !snapshot.panes.some(pane => pane.pane_id === created.pane_id))) {
+      reconnectSelection = undefined;
       restoration.cancel(); workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); if (interactionRevision === interaction) surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
     }
     // Layout mutations report the runtime's focus, which may belong to another
     // client. Only an explicit focus action changes this browser's selection.
     if (applySelection && action === 'pane.focus_direction' && result.focused_pane_id) {
-      const focus = () => { paneId = result.focused_pane_id; choose(); if (interactionRevision === interaction) surface.requestFocus(paneId); };
+      const focus = () => { reconnectSelection = undefined; paneId = result.focused_pane_id; choose(); if (interactionRevision === interaction) surface.requestFocus(paneId); };
       if (preserveNavigate && shortcuts?.isNavigating) shortcuts.preserveNavigateFocus(focus); else focus();
     }
-    if (applySelection) closeRail(); await refresh(); surface.refresh(); fleet.resync();
+    if (applySelection) closeRail(); await refresh(); if (!lifecycle.current(epoch)) return; surface.refresh(); fleet.resync();
     if (response.notice) status(`[NOTICE] ${sourceLabel}: ${response.notice}`);
   }
-  catch (error) { status(`[ERROR] ${sourceLabel}: ${(error as Error).message}`); }
+  catch (error) { if (lifecycle.current(epoch) && !(error instanceof ClientCancelled)) status(`[ERROR] ${sourceLabel}: ${(error as Error).message}`); }
 }
 element('refresh').onclick = () => { const label = selectedHost()?.machine.label || machineId; void api('/api/hosts/retry', { id: machineId }).then(refresh).catch(error => status(`[ERROR] ${label}: ${error.message}`)); fleet.resync(); if (paneId) void attach(); };
 element('create').onclick = () => void action('workspace.create', undefined, workspaceId ? { source: workspaceId } : {});
@@ -363,8 +421,8 @@ element('new-tab').onclick = () => void action('tab.create', workspaceId);
 element('split').onclick = () => void action('pane.split', paneId, { direction: 'right' });
 element('takeover').onclick = () => void attach(true);
 element('close').onclick = () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', paneId); };
-element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; statusLine.clear(); fleet.stop(); detach(); boot.requireAuthentication(); } catch (error) { status(String(error)); } };
-initializeAccount(api, refresh);
+element('logout').onclick = async () => { try { await api('/api/logout', {}); authenticated = false; stopClientWork(); boot.requireAuthentication(); } catch (error) { if (!lifecycle.active) detachedScreen.error((error as Error).message); else status(String(error)); } };
+initializeAccount(api, async () => { await refresh(); });
 element('manage-hosts').onclick = () => hostManager.open();
 element('activity').onclick = () => activity.open();
 element('fleet-search').oninput = () => renderFleetNavigation();
@@ -489,6 +547,7 @@ function refreshCommands() {
   const worktreeTarget = { machine, label: selectedHost()?.machine.label || machine, workspace: workspaceAction };
   const online = selectedHost()?.connection === 'online' && !pendingPane && !restoration.active;
   commands = [
+    { id: 'detach', label: 'Detach this browser', run: detachClient },
     { id: 'help', label: 'Keyboard shortcuts and prefix help', run: () => shortcuts?.openHelp() },
     { id: 'settings', label: 'Browser settings', run: () => void settings.open() },
     { id: 'command_palette', label: 'Command palette', run: () => openCommands() },
@@ -610,7 +669,7 @@ function selectKeyboardTarget(target: { workspace: string; tab: string; pane: st
   selectTarget(machineId, target.workspace, target.tab, target.pane); if (paneId) surface.requestFocus(paneId);
 }
 shortcuts = new DesktopShortcuts(preferences.shortcuts,
-  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${(!!pendingPane || restoration.active)}`, attachment: surface.active, available: authenticated, ready: !!surface.active?.ready, navigateIdentity: JSON.stringify([machineContext(machineId), workspaceId, tabId, paneId, selectedHost()?.connection, !!pendingPane || restoration.active]) }),
+  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${(!!pendingPane || restoration.active)}`, attachment: surface.active, available: authenticated && lifecycle.active, ready: !!surface.active?.ready, navigateIdentity: JSON.stringify([machineContext(machineId), workspaceId, tabId, paneId, selectedHost()?.connection, !!pendingPane || restoration.active]) }),
   () => { refreshCommands(); return commands; },
   (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) { if (shortcuts?.isNavigating && action === 'switch_workspace') surface.active?.copyMode.exit(true, false); shortcuts?.reset(); selectKeyboardTarget(target); } },
   () => { if (paneId) surface.requestFocus(paneId); }, event => surface.active?.sendKey(event), {
@@ -668,7 +727,7 @@ document.addEventListener('close', () => {
   queueMicrotask(() => {
     if (document.querySelector('dialog[open]')) return;
     returnToEmptySwitcher = false;
-    if (authenticated && !workspaceId && innerWidth <= 700) shortcuts?.enterNavigate();
+    if (authenticated && lifecycle.active && !workspaceId && innerWidth <= 700) shortcuts?.enterNavigate();
   });
 }, true);
 function closeRail() { app.classList.remove('hosts-open'); element('host-toggle').setAttribute('aria-expanded', 'false'); }
@@ -682,7 +741,7 @@ function viewport() {
 }
 window.addEventListener('resize', viewport);
 visualViewport?.addEventListener('resize', viewport); viewport();
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh(); });
-window.addEventListener('online', () => { void refresh(); if (paneId) void attach(); });
-setInterval(() => { if (authenticated && !document.hidden) void refresh(); }, 30_000);
+document.addEventListener('visibilitychange', () => { if (lifecycle.active && !document.hidden) void refresh(); });
+window.addEventListener('online', () => { if (!lifecycle.active) return; void refresh(); if (paneId) void attach(); });
+setInterval(() => { if (authenticated && lifecycle.active && !document.hidden) void refresh(); }, 30_000);
 void start();

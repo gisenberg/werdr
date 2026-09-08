@@ -3,9 +3,14 @@ import { defaults, validatePreferences, type SettingsState } from '../shared/set
 export class SettingsConflict extends Error {}
 export async function settingsStore(path: string) {
   const stored = await readPrivateJson(path) as any;
-  if (stored !== undefined && (!stored || typeof stored !== 'object' || stored.preferences === undefined || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(stored.version) || !Number.isSafeInteger(stored.revision) || stored.revision < 0)) throw new Error('Invalid or unsupported browser settings store');
+  if (stored !== undefined && (!stored || typeof stored !== 'object' || stored.preferences === undefined || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(stored.version) || !Number.isSafeInteger(stored.revision) || stored.revision < 0)) throw new Error('Invalid or unsupported browser settings store');
+  if (stored && stored.version < 11 && stored.preferences?.shortcuts?.bindings && !Object.hasOwn(stored.preferences.shortcuts.bindings, 'detach')) {
+    // A newly introduced default must not steal a user's existing custom key.
+    try { validatePreferences(stored.preferences); }
+    catch { stored.preferences.shortcuts.bindings.detach = []; }
+  }
   let state: SettingsState = { revision: stored?.revision || 0, preferences: validatePreferences(stored === undefined ? defaults : stored.version === 1 ? { ...validatePreferences(stored.preferences), sidebarSectionPercent: defaults.sidebarSectionPercent } : stored.preferences) };
-  if (stored && stored.version < 10) await writePrivateJson(path, { version: 10, ...state });
+  if (stored && stored.version < 11) await writePrivateJson(path, { version: 11, ...state });
   let queue: Promise<unknown> = Promise.resolve();
   return {
     read(): SettingsState { return structuredClone(state); },
@@ -14,7 +19,7 @@ export async function settingsStore(path: string) {
       const task = queue.then(async () => {
         if (revision !== state.revision) throw new SettingsConflict('Settings changed in another browser. Reload settings before saving.');
         const next = { revision: state.revision + 1, preferences: validated };
-        await writePrivateJson(path, { version: 10, ...next }); state = next; return structuredClone(state);
+        await writePrivateJson(path, { version: 11, ...next }); state = next; return structuredClone(state);
       });
       queue = task.catch(() => {}); return task;
     },

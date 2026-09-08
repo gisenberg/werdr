@@ -1,6 +1,7 @@
 import type { HostView, Snapshot } from '../shared/fleet';
 
 export interface Selection { machine: string; workspace: string; tab: string; pane: string }
+export interface SelectionIdentity { endpoint?: string; terminal?: string }
 type ResolvedSelection = { selection: Selection; terminal?: string };
 const coordinates = ['machine', 'workspace', 'tab', 'pane'] as const;
 
@@ -38,7 +39,7 @@ export class SelectionRestoration {
   private pending?: { request: Selection; endpoint?: string; result?: ResolvedSelection; loading?: boolean; rejected?: boolean; retryAt?: number; checkedAt?: number; attempt: number };
   private timer?: ReturnType<typeof setTimeout>;
   message = 'Checking requested selection...';
-  constructor(selection: Selection | undefined, private readonly read: (machine: string) => Promise<Snapshot>, private readonly changed: () => void) {
+  constructor(selection: Selection | undefined, private readonly read: (machine: string) => Promise<Snapshot>, private readonly changed: () => void, private readonly identity?: SelectionIdentity) {
     if (selection) this.pending = { request: selection, attempt: 0 };
   }
   get active() { return !!this.pending; }
@@ -48,6 +49,7 @@ export class SelectionRestoration {
     const pending = this.pending; if (!pending) return;
     if (!host || host.machine.id !== pending.request.machine) { this.message = 'Requested host is unavailable. Choose a host or workspace.'; return; }
     const endpoint = JSON.stringify([host.machine.id, host.machine.target || '', host.machine.session || '']);
+    if (this.identity?.endpoint && this.identity.endpoint !== endpoint) { pending.rejected = true; this.message = 'Requested host endpoint changed. Choose the host again.'; return; }
     if (pending.endpoint && pending.endpoint !== endpoint) { pending.rejected = true; pending.result = undefined; this.message = 'Requested host endpoint changed. Choose the host again.'; return; }
     if (pending.rejected) return;
     if (!host.machine.enabled || host.connection !== 'online') { this.message = host.detail || 'Requested host is offline. Waiting for reconnect, or choose another host.'; return; }
@@ -63,6 +65,7 @@ export class SelectionRestoration {
     void this.read(pending.request.machine).then(snapshot => {
       if (this.pending !== pending || pending.rejected) return;
       pending.result = resolveSelection(pending.request, snapshot);
+      if (this.identity?.terminal && pending.result?.terminal !== this.identity.terminal) pending.result = undefined;
       if (!pending.result) { pending.rejected = true; this.message = 'Requested workspace, tab, or pane is unavailable. Choose a workspace or host.'; }
       else {
         this.message = 'Waiting for native workspace update...'; pending.checkedAt = Date.now();

@@ -46,7 +46,10 @@ test('stream snapshots and deltas remain tied to their generation across concurr
     assert.equal(socket.readyState, Socket.CLOSING);
     socket.receive({ type: 'fleet.notices', revision: 2, notices: [] });
     assert.deepEqual(client.state, state('restarted', 1));
-    client.stop(); client.start(); const replacement = Socket.instances[1];
+    client.stop(); client.resync(); assert.equal(Socket.instances.length, 1);
+    socket.receive({ type: 'fleet.snapshot', state: state('stale', 100) });
+    assert.deepEqual(client.state, state('restarted', 1));
+    client.start(); const replacement = Socket.instances[1];
     client.acceptSnapshot(state('restarted', 3));
     replacement.receive({ type: 'fleet.snapshot', state: state('ambiguous', 1) });
     assert.equal(replacement.readyState, Socket.CLOSING); assert.deepEqual(client.state, state('restarted', 3));

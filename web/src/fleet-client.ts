@@ -57,6 +57,7 @@ export class FleetClient {
     ws.onerror = () => ws.close();
   }
   resync() {
+    if (this.stopped) return;
     if (this.socket?.readyState === WebSocket.OPEN) { this.waiting = true; this.socket.send(JSON.stringify({ type: 'fleet.resync' })); }
     else this.start();
   }

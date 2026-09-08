@@ -65,7 +65,7 @@ test('version-seven preferences migrate keybindings privately without resetting 
     const { shortcuts, ...previous } = { ...defaults, theme: 'nord', collapsedWorkspaceGroups: ['saved'] };
     await writeFile(path, JSON.stringify({ version: 7, revision: 31, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path); assert.deepEqual(store.read(), { revision: 31, preferences: { ...previous, shortcuts } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 10);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 11);
     const changed = structuredClone(store.read()); changed.preferences.shortcuts.prefix = 'ctrl+a';
     await store.update(31, changed.preferences); changed.preferences.shortcuts.bindings.help.length = 0;
     assert.deepEqual((await settingsStore(path)).read().preferences.shortcuts.bindings.help, ['prefix+?']);
@@ -107,7 +107,7 @@ test('Navigate owns its separate keys and resolves prefix commands without steal
   assert.equal(press(mode, 'h').action, 'navigate_pane_left');
   assert.equal(press(mode, 'ArrowRight').action, 'navigate_pane_right');
   assert.equal(mode.mode, 'navigate');
-  assert.equal(press(mode, 'q').consume, true); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'f').consume, true); assert.equal(mode.mode, 'navigate');
   assert.equal(press(mode, '9').index, 8); assert.equal(mode.mode, 'navigate');
   assert.equal(press(mode, 'Enter').navigate, 'confirm'); assert.equal(mode.mode, 'navigate');
   assert.equal(press(mode, 'Tab', { shiftKey: true }).action, 'cycle_pane_previous'); assert.equal(mode.mode, 'terminal');
@@ -150,7 +150,7 @@ test('version-eight keybindings migrate Navigate defaults while retaining remaps
     assert.deepEqual(settings.preferences.shortcuts.bindings.help, ['prefix+f1']);
     assert.deepEqual(settings.preferences.shortcuts.bindings.close_pane, []);
     assert.deepEqual(settings.preferences.shortcuts.bindings.navigate_workspace_down, ['down']);
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 10);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 11);
     assert.deepEqual((await settingsStore(path)).read(), settings);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
