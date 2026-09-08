@@ -7,6 +7,7 @@ import { NativeMouse } from './native-mouse';
 import { NativeLinks } from './native-links';
 import { NativeScrollbar } from './native-scrollbar';
 import { NativeCopyMode } from './native-copy-mode';
+import { TerminalImagePaste } from './terminal-image-paste';
 import { NativeSelection } from './native-selection';
 import { terminalSelectionColors } from './terminal-selection';
 type Colors = ReturnType<typeof palette>;
@@ -23,6 +24,7 @@ export class TerminalController {
   private readonly selectionMode: NativeSelection;
   private terminal?: Terminal;
   private socket?: WebSocket;
+  private imagePaste?: TerminalImagePaste;
   private cleanup?: () => void;
   private fit?: () => void;
   private epoch = 0;
@@ -35,7 +37,7 @@ export class TerminalController {
   ready = false;
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   readSelection() { return this.copyMode.active ? this.copyMode.readText() : this.selectionMode.hasSelection ? this.selectionMode.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
-  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, report: (message: string, failed?: boolean) => void) {
+  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
     this.title.append(this.titleLabel);
@@ -43,13 +45,13 @@ export class TerminalController {
     this.element.append(this.title, this.content, this.shield);
     this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report, () => { this.selectionMode.clear(); this.links.cancel(); this.mouse.release(); });
     this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
-    this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, text => { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: 'terminal.input', text })); });
+    this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, text => this.imagePaste?.send({ type: 'terminal.input', text }));
     this.selectionMode = new NativeSelection(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active && !this.mouse.reporting, () => this.preferences.copyOnSelect, () => this.preferences.scrollLines, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.scrollbar = new NativeScrollbar(this.element, this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode.active, () => { select(); this.links.cancel(); this.mouse.release(); this.selectionMode.clear(); }, offset_from_bottom => api('/api/action', { machine, id: pane, action: 'pane.scroll', offset_from_bottom }), report);
     this.scrollbar.preference(preferences.paneScrollbars);
     this.element.addEventListener('pointerdown', select); this.element.addEventListener('focusin', select);
   }
-  activate(active: boolean) { if (!active) { this.scrollbar.suspend(); this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); this.selectionMode.clear(); } if (this.element.classList.contains('pane-active') !== active) { this.element.classList.toggle('pane-active', active); this.scrollbar.sync(); } }
+  activate(active: boolean) { if (!active) { this.imagePaste?.cancel(); this.scrollbar.suspend(); this.mouse.release(); this.copyMode.exit(true, false); this.links.cancel(); this.selectionMode.clear(); } if (this.element.classList.contains('pane-active') !== active) { this.element.classList.toggle('pane-active', active); this.scrollbar.sync(); } }
   chrome(chrome: PaneChrome, label: string, description: string, active: boolean) {
     const mask = Number(chrome.top) | Number(chrome.right) << 1 | Number(chrome.bottom) << 2 | Number(chrome.left) << 3;
     if (mask !== this.chromeMask) {
@@ -65,7 +67,7 @@ export class TerminalController {
     this.activate(active);
   }
   show(visible: boolean) {
-    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.scrollbar.suspend(); this.links.cancel(); this.mouse.release(); this.selectionMode.clear(); }
+    const changed = this.visible !== visible; this.visible = visible; this.element.hidden = !visible; if (!visible) { this.imagePaste?.cancel(); this.scrollbar.suspend(); this.links.cancel(); this.mouse.release(); this.selectionMode.clear(); }
     if (visible) { if (changed) { this.fit?.(); this.recover(); } if (!this.terminal && !this.cleanup) void this.connect(); }
   }
   update(preferences: Preferences, colors: Colors) {
@@ -82,7 +84,9 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
+    this.imagePaste?.cancel();
     this.scrollbar.reset(); this.mouse.setEnabled(false); this.copyMode.exit(true, false); this.links.cancel(); this.selectionMode.clear();
+    this.imagePaste?.dispose(); this.imagePaste = undefined;
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
@@ -103,7 +107,9 @@ export class TerminalController {
     this.fit = fitVisible; fitVisible();
     const params = new URLSearchParams({ machine: this.machine, pane: this.pane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0' });
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); this.socket = ws;
-    const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
+    const images = new TerminalImagePaste(this.content, term.textarea!, () => epoch === this.epoch && this.ready && this.visible && this.element.classList.contains('pane-active') && !this.copyMode.active, data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); else if (typeof data !== 'string') throw new Error('Terminal disconnected before image transfer.'); }, this.report);
+    this.imagePaste = images;
+    const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) images.send(value); };
     let forwarded = { ...desired };
     const sendSize = () => {
       if (ws.readyState !== WebSocket.OPEN || desired.cols === forwarded.cols && desired.rows === forwarded.rows) return;
@@ -151,6 +157,8 @@ export class TerminalController {
       if (epoch !== this.epoch) return;
       try {
         const frame = JSON.parse(event.data);
+        if (frame.type === 'terminal.capabilities') { images.capabilities(frame.clipboard_image_max_bytes); return; }
+        if (frame.type === 'terminal.image') { images.result(frame.status, frame.message); return; }
         if (frame.type === 'terminal.scroll-state') { this.scrollbar.update(frame.scroll); scrollReady = frame.ready !== false; if (scrollReady) { clearTimeout(scrollTimeout); fitVisible(); reveal(); } return; }
         if (frame.type === 'terminal.keyboard') { keyboard.update(frame.flags, frame.modify_other_keys_level); return; }
         if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { if (frame.enabled) this.selectionMode.clear(); this.mouse.setEnabled(frame.enabled); return; }
@@ -167,6 +175,7 @@ export class TerminalController {
     ws.onclose = () => {
       if (epoch !== this.epoch) return;
       this.scrollbar.reset(); this.mouse.setEnabled(false); this.copyMode.exit(false, false); this.links.cancel(); this.selectionMode.clear();
+      images.dispose();
       this.ready = false; this.shield.hidden = false;
       if (this.attempt >= 5) { this.shield.textContent = this.failure || 'Terminal unavailable or already controlled. Retry or use TAKE CONTROL.'; this.changed(); return; }
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();

@@ -8,7 +8,7 @@ use tracing::info;
 use crate::ipc::LocalStream;
 use crate::protocol::{
     self, AttachScrollDirection, AttachScrollSource, ClientMessage, RenderEncoding, ServerMessage,
-    MAX_GRAPHICS_FRAME_SIZE,
+    MAX_CLIPBOARD_IMAGE_PAYLOAD, MAX_GRAPHICS_FRAME_SIZE,
 };
 use crate::server::socket_paths::client_socket_path;
 
@@ -19,7 +19,7 @@ pub fn run_terminal_session_observe(target: String, cols: u16, rows: u16) -> io:
     let mut stream =
         connect_terminal_session_stream(target.clone(), cols, rows, "observing terminal session")?;
     write_to_server(&mut stream, &ClientMessage::ObserveTerminal { target })?;
-    write_terminal_session_output(stream)
+    write_terminal_session_output(stream, false)
 }
 
 /// Runs a writable terminal session controller.
@@ -66,7 +66,7 @@ pub fn run_terminal_session_control(
         let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
     });
 
-    write_terminal_session_output(stream)
+    write_terminal_session_output(stream, true)
 }
 
 fn connect_terminal_session_stream(
@@ -119,8 +119,19 @@ fn connect_terminal_session_stream(
     Ok(stream)
 }
 
-fn write_terminal_session_output(mut stream: LocalStream) -> io::Result<()> {
+fn write_terminal_session_output(mut stream: LocalStream, controlling: bool) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
+    if controlling {
+        serde_json::to_writer(
+            &mut stdout,
+            &serde_json::json!({
+                "type": "terminal.capabilities",
+                "clipboard_image_max_bytes": MAX_CLIPBOARD_IMAGE_PAYLOAD,
+            }),
+        )?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
     loop {
         match protocol::read_message(&mut stream, MAX_GRAPHICS_FRAME_SIZE) {
             Ok(message) => {
@@ -185,6 +196,8 @@ enum TerminalControlCommand {
         text: Option<String>,
         bytes: Option<String>,
     },
+    #[serde(rename = "terminal.image")]
+    Image { extension: String, bytes: String },
     #[serde(rename = "terminal.resize")]
     Resize {
         cols: u16,
@@ -243,6 +256,25 @@ pub(super) fn terminal_control_command_from_json(raw: &str) -> Result<ClientMess
             };
             Ok(ClientMessage::Input { data })
         }
+        TerminalControlCommand::Image { extension, bytes } => {
+            if !matches!(extension.as_str(), "png" | "jpg" | "gif" | "webp" | "bmp") {
+                return Err("unsupported terminal.image extension".into());
+            }
+            if bytes.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD.div_ceil(3) * 4 {
+                return Err("terminal.image exceeds the native size limit".into());
+            }
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(bytes)
+                .map_err(|err| format!("invalid terminal.image bytes: {err}"))?;
+            if data.is_empty() || data.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD {
+                return Err("terminal.image must contain 1 to 16777216 bytes".into());
+            }
+            Ok(ClientMessage::ClipboardImage {
+                target: protocol::ClientClipboardImageTarget::DirectTerminal,
+                extension,
+                data,
+            })
+        }
         TerminalControlCommand::Resize {
             cols,
             rows,
@@ -300,6 +332,30 @@ pub(super) fn terminal_control_command_from_json(raw: &str) -> Result<ClientMess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_image_commands_use_only_the_attached_terminal() {
+        let message = terminal_control_command_from_json(
+            r#"{"type":"terminal.image","extension":"png","bytes":"AAH/","target":"other"}"#,
+        )
+        .unwrap();
+        assert!(matches!(message, ClientMessage::ClipboardImage {
+            target: protocol::ClientClipboardImageTarget::DirectTerminal,
+            extension, data,
+        } if extension == "png" && data == [0, 1, 255]));
+        for raw in [
+            r#"{"type":"terminal.image","extension":"sh","bytes":"AA=="}"#,
+            r#"{"type":"terminal.image","extension":"png","bytes":""}"#,
+            r#"{"type":"terminal.image","extension":"png","bytes":"invalid!"}"#,
+        ] {
+            assert!(terminal_control_command_from_json(raw).is_err());
+        }
+        let oversized = serde_json::json!({
+            "type": "terminal.image", "extension": "png",
+            "bytes": "A".repeat(MAX_CLIPBOARD_IMAGE_PAYLOAD.div_ceil(3) * 4 + 4),
+        });
+        assert!(terminal_control_command_from_json(&oversized.to_string()).is_err());
+    }
 
     #[test]
     fn terminal_session_preserves_frame_bytes_and_shutdown() {

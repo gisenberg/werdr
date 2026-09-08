@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { command, companionCommand, CompanionCommandError, publicId, resolveMachine, terminalProcess } from './herdr.ts';
 import { allowedBind, allowedHttpOrigins, requestOrigin, dimension, terminalInput } from './policy.ts';
+import { TerminalInputWriter } from './terminal-input-writer.ts';
+import { MAX_CLIPBOARD_IMAGE_BYTES } from '../shared/clipboard-image.ts';
 import { NdjsonDecoder } from './ndjson.ts';
 import { authentication, LoginLimiter } from './auth.ts';
 import { bootArtwork } from './boot-artwork.ts';
@@ -60,6 +62,7 @@ function disconnectSessions(ids: string[], reason: string) {
   for (const [ws, owner] of sockets) if (ids.includes(owner)) closeSocket(ws, 1008, reason);
 }
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
+const terminalWsServer = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIPBOARD_IMAGE_BYTES, perMessageDeflate: false });
 function session(req: IncomingMessage) {
   const id = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6);
   return sessions.get(id, auth.tokenVersion);
@@ -266,19 +269,21 @@ server.on('upgrade', async (req, socket, head) => {
     const pane = publicId(url.searchParams.get('pane'));
     const cols = dimension(Number(url.searchParams.get('cols'))), rows = dimension(Number(url.searchParams.get('rows')));
     if (socket.destroyed || !session(req) || terminalMachines.size >= 16) { socket.destroy(); return; }
-    wsServer.handleUpgrade(req, socket, head, ws => {
+    terminalWsServer.handleUpgrade(req, socket, head, ws => {
       sockets.set(ws, id.id);
       terminalMachines.set(ws, { id: machine.id, target: machine.target, session: machine.session });
       sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
       const decoder = new NdjsonDecoder();
+      const input = new TerminalInputWriter(child.stdin);
+      let imageLimit = 0, terminalReady = false;
       let ended = false, released = false, terminalClosedSent = false;
       const startup = setTimeout(() => closeSocket(ws, 1011, 'Terminal controller timed out'), 15000);
       startup.unref();
       controllers.set(ws, () => {
         if (ended || released) return;
-        released = true; clearTimeout(startup);
+        released = true; clearTimeout(startup); input.dispose();
         child.stdin.end('{"type":"terminal.release"}\n');
         const terminate = setTimeout(() => { if (!ended) child.kill(); }, 1000);
         const kill = setTimeout(() => { if (!ended) child.kill('SIGKILL'); }, 2000);
@@ -295,7 +300,12 @@ server.on('upgrade', async (req, socket, head) => {
         if (released || ended) return;
         try {
           decoder.push(chunk, frame => {
-            if (frame.type === 'terminal.frame') clearTimeout(startup);
+            if (frame.type === 'terminal.capabilities') {
+              imageLimit = Number.isInteger(frame.clipboard_image_max_bytes) && frame.clipboard_image_max_bytes > 0 ? Math.min(frame.clipboard_image_max_bytes, MAX_CLIPBOARD_IMAGE_BYTES) : 0;
+              send({ type: 'terminal.capabilities', clipboard_image_max_bytes: imageLimit }); return;
+            }
+            if (frame.type === 'terminal.closed') terminalReady = false;
+            if (frame.type === 'terminal.frame') { terminalReady = true; clearTimeout(startup); }
             send(frame);
           });
         } catch { closeSocket(ws, 1011, 'Invalid or oversized Herdr frame'); }
@@ -307,15 +317,22 @@ server.on('upgrade', async (req, socket, head) => {
       child.on('exit', code => { ended = true; clearTimeout(startup); send({ type: 'terminal.closed', reason: code ? 'Controller unavailable or terminal already owned. Use Take control to replace its owner.' : 'Terminal detached' }); closeSocket(ws, 1000); });
       ws.on('message', (data, binary) => {
         try {
-          if (!session(req) || binary || released || ended) throw new Error('Invalid input');
+          if (!session(req) || released || ended) throw new Error('Invalid input');
+          if (binary) {
+            if (!terminalReady) { send({ type: 'terminal.image', status: 'error', message: 'Terminal is not ready for image paste.' }); return; }
+            const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+            const deadline = setTimeout(() => closeSocket(ws, 1011, 'Image transfer timed out'), 60000); deadline.unref();
+            void input.image(bytes, imageLimit).then(() => send({ type: 'terminal.image', status: 'sent' })).catch(error => send({ type: 'terminal.image', status: 'error', message: error.message })).finally(() => clearTimeout(deadline));
+            return;
+          }
+          if (Buffer.byteLength(data as Buffer) > 65536) throw new Error('Command too large');
           const value = terminalInput(JSON.parse(data.toString()));
-          if (child.stdin.writableLength > 65536) throw new Error('Input queue full');
-          child.stdin.write(JSON.stringify(value) + '\n');
+          input.write(JSON.stringify(value) + '\n');
         } catch { closeSocket(ws, 1008, 'Invalid terminal command'); }
       });
       ws.on('error', () => ws.terminate());
       ws.on('close', () => {
-        stopScroll();
+        stopScroll(); input.dispose();
         sockets.delete(ws); terminalMachines.delete(ws);
         if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id);
         controllers.get(ws)?.(); controllers.delete(ws);
