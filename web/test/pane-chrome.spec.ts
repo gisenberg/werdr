@@ -14,7 +14,7 @@ test('native pane borders, shared dividers and bottom tabs preserve terminal inp
     await expect(firstPane.locator('.pane-title')).toBeHidden();
     await expect(firstPane).toHaveCSS('border-left-width', '0px');
     const run = async (label: string) => { await page.locator('#commands').click(); await page.locator('#command-list').getByRole('button', { name: label, exact: true }).click(); };
-    await run('Split right (Ctrl/Cmd+D)'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await run('Split right'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
     await expect(page.locator('#shield')).toBeHidden();
     const second = new URL(page.url()).searchParams.get('pane')!;
     const secondPane = page.locator(`.terminal-pane[data-pane="${second}"]`);

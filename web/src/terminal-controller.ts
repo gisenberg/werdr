@@ -24,6 +24,7 @@ export class TerminalController {
   private readonly selectionMode: NativeSelection;
   private terminal?: Terminal;
   private socket?: WebSocket;
+  private keyboard?: NativeKeyboard;
   private imagePaste?: TerminalImagePaste;
   private cleanup?: () => void;
   private fit?: () => void;
@@ -35,7 +36,9 @@ export class TerminalController {
   private chromeMask = -1;
   private description = '';
   ready = false;
+  get attachmentGeneration() { return this.epoch; }
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
+  sendKey(event: KeyboardEvent) { if (this.ready && this.visible) this.keyboard?.sendKey(event); }
   readSelection() { return this.copyMode.active ? this.copyMode.readText() : this.selectionMode.hasSelection ? this.selectionMode.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
   constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
@@ -88,7 +91,7 @@ export class TerminalController {
     this.scrollbar.reset(); this.mouse.setEnabled(false); this.copyMode.exit(true, false); this.links.cancel(); this.selectionMode.clear();
     this.imagePaste?.dispose(); this.imagePaste = undefined;
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
-    this.cleanup?.(); this.cleanup = undefined; this.fit = undefined; this.terminal = undefined;
+    this.cleanup?.(); this.cleanup = undefined; this.keyboard = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
   dispose() { this.reset(); this.scrollbar.dispose(); this.mouse.dispose(); this.links.dispose(); this.selectionMode.dispose(); this.element.remove(); }
@@ -119,6 +122,7 @@ export class TerminalController {
     // recent dimensions rather than losing the resize before the socket opens.
     ws.onopen = sendSize;
     const keyboard = new NativeKeyboard(this.content, term, term.createInputEncoder(), library, () => this.ready && this.visible && !this.copyMode.active, text => send({ type: 'terminal.input', text }));
+    this.keyboard = keyboard;
     let applyingFrame = false, scrollReady = false, settled = false;
     let paintedSize: { width: number; height: number } | undefined;
     const boot = document.querySelector<HTMLDialogElement>('#boot')!;

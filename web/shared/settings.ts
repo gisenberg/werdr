@@ -1,3 +1,4 @@
+import { defaultShortcuts, validateShortcuts, type Shortcuts } from './shortcuts';
 import nativeThemes from './native-themes.json';
 import { defaultAgentRows, validateAgentRows, type AgentRows } from './agent-rows';
 export const themeNames = Object.keys(nativeThemes);
@@ -9,6 +10,7 @@ export interface Preferences {
   sidebarWidth: number; sidebarSectionPercent: number; compact: boolean; indicators: 'text' | 'dots' | 'symbols';
   collapsedWorkspaceGroups: string[];
   agentRows: AgentRows;
+  shortcuts: Shortcuts;
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
   paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
   notificationAttention: boolean; notificationFinished: boolean; notificationSound: boolean;
@@ -20,6 +22,7 @@ export const defaults: Preferences = {
   indicators: 'text', agentSort: 'priority', confirmClose: true, hideSingleTab: false, tabBarPosition: 'top',
   collapsedWorkspaceGroups: [],
   agentRows: defaultAgentRows,
+  shortcuts: defaultShortcuts,
   paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
   notificationAttention: true, notificationFinished: true, notificationSound: false,
   toastSeconds: 5, toastPosition: 'top-right', scrollLines: 3,
@@ -32,6 +35,8 @@ export function validatePreferences(value: unknown): Preferences {
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.hasOwn(defaults, key))) fail('unknown field');
   const out = { ...defaults, ...input };
+  try { out.shortcuts = validateShortcuts(out.shortcuts); }
+  catch (error) { throw new SettingsValidationError(`Keybindings: ${(error as Error).message}`); }
   try { out.agentRows = validateAgentRows(out.agentRows); }
   catch (error) { throw new SettingsValidationError(`Agent rows: ${(error as Error).message}`); }
   if (!Array.isArray(out.collapsedWorkspaceGroups) || out.collapsedWorkspaceGroups.length > 256 || out.collapsedWorkspaceGroups.some(key => typeof key !== 'string' || !key || key.length > 8192 || /[\x00-\x1f]/.test(key)) || new Set(out.collapsedWorkspaceGroups).size !== out.collapsedWorkspaceGroups.length || new TextEncoder().encode(JSON.stringify(out.collapsedWorkspaceGroups)).length > 32768) fail('collapsedWorkspaceGroups');

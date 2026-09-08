@@ -1,3 +1,5 @@
+import { DesktopShortcuts, type ShortcutCommand } from './desktop-shortcuts';
+import type { ShortcutAction } from '../shared/shortcuts';
 import { forgetAgentRows, renderAgentRows, resolveAgentRows, type RowToken } from './agent-row-renderer';
 import { agentEntries } from './agent-entries';
 import { SidebarSplit } from './sidebar-split';
@@ -46,10 +48,10 @@ try {
   const query = new URLSearchParams(location.search);
   machineId = query.get('machine') || saved.machine || 'local'; workspaceId = query.get('workspace') || saved.workspace || ''; tabId = query.get('tab') || saved.tab || ''; paneId = query.get('pane') || saved.pane || '';
 } catch {}
-let remembered = '';
+let remembered = '', selectionRevision = 0;
 function rememberSelection() {
   const value = { machine: machineId, workspace: workspaceId, tab: tabId, pane: paneId }; const encoded = JSON.stringify(value);
-  if (remembered === encoded) return; remembered = encoded; selections.set(machineId, value);
+  if (remembered === encoded) return; ++selectionRevision; remembered = encoded; selections.set(machineId, value);
   try { localStorage.setItem('werdr-selection', encoded); } catch {}
   const url = new URL(location.href); for (const [key, item] of Object.entries(value)) { if (item) url.searchParams.set(key, item); else url.searchParams.delete(key); }
   history.replaceState(null, '', url);
@@ -77,7 +79,9 @@ const runtimeSettings = new RuntimeSettings(api, () => { const host = selectedHo
 const plugins = new Plugins(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId || undefined, pane: paneId || undefined, selectedText: surface.active?.readSelection() } : undefined; }, (machine, pane) => selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true), () => { fleet.resync(); void refresh(); });
 const worktrees = new Worktrees(api, () => { const host = selectedHost(); return host?.connection === 'online' ? { machine: machineId, label: host.machine.label, workspace: workspaceId, cwd: snapshot.panes.find(pane => pane.pane_id === paneId)?.cwd } : undefined; }, (machine, pane) => { if (!pane) return; selectTarget(machine, pane.workspace_id, pane.tab_id, pane.pane_id, true); }, () => { fleet.resync(); void refresh(); });
 const sidebarSplit = new SidebarSplit(element('rail-sections'), element('rail-divider'), value => settings.saveSidebarSplit(value));
+let shortcuts: DesktopShortcuts | undefined;
 const settings = new Settings(api, (value, nextColors) => {
+  shortcuts?.update(value.shortcuts);
   preferences = value; colors = nextColors; sidebarSplit.update(value.sidebarSectionPercent);
   surface.updatePreferences(value, nextColors);
   renderNavigation(); renderFleetNavigation();
@@ -237,6 +241,7 @@ function navigation(id: string, items: NavigationItem[]) {
   for (const node of existing.values()) { if (node.classList.contains('agent-entry')) forgetAgentRows(node); if (node.parentElement?.classList.contains('workspace-row')) node.parentElement.remove(); else node.remove(); }
 }
 function renderNavigation() {
+  shortcuts?.sync();
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { tabId = t.tab_id; paneId = ''; choose(); } })));
   navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
@@ -285,18 +290,21 @@ async function refresh() {
 function detach() { surface.clear(); }
 async function attach(takeover = false) { if (selectedHost()?.connection === 'online') { choose(); await surface.active?.connect(takeover); } }
 async function action(action: string, id?: string, extra: object = {}, selected = machineId) {
-  const interaction = interactionRevision, source = { machine: selected, workspace: workspaceId, tab: tabId };
+  const interaction = interactionRevision, selection = selectionRevision, source = { machine: selected, workspace: workspaceId, tab: tabId, pane: paneId };
   try {
     const response = await api('/api/action', { machine: selected, action, id, ...extra });
     const result = response.move_result || response.focus || response.swap || response.zoom || response.resize || response;
-    if (machineId !== selected) return;
-    if (action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
+    if (machineId !== selected) { fleet.resync(); return; }
+    const applySelection = selectionRevision === selection && workspaceId === source.workspace && tabId === source.tab && paneId === source.pane;
+    if (applySelection && action === 'pane.close' && interactionRevision === interaction && workspaceId === source.workspace && tabId === source.tab) closingFocus = source;
     const created = result.root_pane || result.pane;
-    if (created && action !== 'pane.close') {
+    if (applySelection && created && action !== 'pane.close' && (created.pane_id !== paneId || created.tab_id !== tabId || created.workspace_id !== workspaceId || !snapshot.panes.some(pane => pane.pane_id === created.pane_id))) {
       workspaceId = created.workspace_id; tabId = created.tab_id; paneId = created.pane_id; waitForPane(selected, paneId, tabId, action === 'pane.edit_scrollback' ? 'The editor terminal closed before it could attach. Graphical editors may continue on the host.' : undefined); surface.waitForSelection(); if (interactionRevision === interaction) surface.requestFocus(paneId); renderNavigation(); renderFleetNavigation();
     }
-    if (result.focused_pane_id) { paneId = result.focused_pane_id; if (interactionRevision === interaction) surface.requestFocus(paneId); }
-    closeRail(); await refresh(); surface.refresh(); fleet.resync();
+    // Layout mutations report the runtime's focus, which may belong to another
+    // client. Only an explicit focus action changes this browser's selection.
+    if (applySelection && action === 'pane.focus_direction' && result.focused_pane_id) { paneId = result.focused_pane_id; if (interactionRevision === interaction) surface.requestFocus(paneId); }
+    if (applySelection) closeRail(); await refresh(); surface.refresh(); fleet.resync();
     if (response.notice) status(`[NOTICE] ${response.notice}`);
   }
   catch (error) { status(`[ERROR] ${(error as Error).message}`); }
@@ -385,7 +393,7 @@ for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addE
   const id = origin.closest<HTMLElement>('.terminal-pane')?.dataset.pane; if (!id) return;
   event.preventDefault(); openNavigationMenu(origin, { kind: 'pane', machine: machineId, id }, event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : undefined);
 });
-interface Command { label: string; disabled?: boolean; run(): void }
+type Command = ShortcutCommand;
 let commands: Command[] = [];
 let renameTarget: { machine: string; action: string; id: string } | undefined;
 function rename(action: string, id: string, label: string, machine = machineId) {
@@ -431,6 +439,22 @@ function refreshCommands() {
   const machine = machineId, workspace = workspaceId, tab = tabId, pane = paneId;
   const online = selectedHost()?.connection === 'online' && !pendingPane;
   commands = [
+    { id: 'help', label: 'Keyboard shortcuts and prefix help', run: () => shortcuts?.openHelp() },
+    { id: 'settings', label: 'Browser settings', run: () => void settings.open() },
+    { id: 'command_palette', label: 'Command palette', run: () => openCommands() },
+    { id: 'workspace_picker', label: 'Workspace picker', run: () => openCommands('Workspace:') },
+    { id: 'goto', label: 'Go to workspace, tab or pane', run: () => openCommands('', true) },
+    { id: 'new_worktree', label: 'Create worktree', disabled: !online || !workspace, run: () => worktrees.open(undefined, 'create') },
+    { id: 'open_worktree', label: 'Open worktree', disabled: !online || !workspace, run: () => worktrees.open(undefined, 'open') },
+    { id: 'remove_worktree', label: 'Remove worktree checkout', disabled: !online || !snapshot.workspaces.find(item => item.workspace_id === workspace)?.worktree?.is_linked_worktree, run: () => worktrees.open(undefined, 'remove') },
+    { id: 'resize_mode', label: 'Resize mode', disabled: !online || !pane || !surface.active?.ready, run: () => shortcuts?.enterResize() },
+    { id: 'toggle_sidebar', label: 'Toggle sidebar', run: () => { if (innerWidth <= 700) element('host-toggle').click(); else app.classList.toggle('sidebar-hidden'); } },
+    ...(['workspace', 'tab', 'pane', 'agent'] as const).flatMap(kind => ([1, -1] as const).map(direction => ({
+      id: (kind === 'pane' ? `cycle_pane_${direction === 1 ? 'next' : 'previous'}` : `${direction === 1 ? 'next' : 'previous'}_${kind}`) as ShortcutAction,
+      label: `${direction === 1 ? 'Next' : 'Previous'} ${kind}`, disabled: !online || !keyboardTargets(kind).length,
+      run: () => { const targets = keyboardTargets(kind), current = kind === 'workspace' ? workspace : kind === 'tab' ? tab : pane; const index = targets.findIndex(target => target.id === current); const target = targets[index < 0 ? direction === 1 ? 0 : targets.length - 1 : (index + direction + targets.length) % targets.length]; if (target) selectKeyboardTarget(target); },
+    }))),
+    ...(['tab', 'workspace', 'agent'] as const).map(kind => ({ id: (kind === 'agent' ? 'focus_agent' : `switch_${kind}`) as ShortcutAction, label: `Switch ${kind} 1 through 9`, palette: false, disabled: !online || !keyboardTargets(kind).length, run: () => {} })),
     { label: 'Manage hosts / add an SSH host', run: () => hostManager.open() },
     { label: 'Fleet activity and notifications', run: () => activity.open() },
     ...([1, -1] as const).map(direction => ({ label: `${direction === 1 ? 'Next' : 'Previous'} agent needing attention`, disabled: !attentionTarget(fleetState, machine, pane, direction), run: () => {
@@ -440,19 +464,19 @@ function refreshCommands() {
     { label: 'Host: runtime settings', disabled: !online, run: () => runtimeSettings.open() },
     { label: 'Integrations: agent hooks and readiness', disabled: !online, run: () => integrations.open() },
     { label: 'Plugins: management, actions, panes and logs', disabled: !online, run: () => plugins.open() },
-    { label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(); } },
+    { id: 'copy_mode', label: 'Terminal: copy mode (native scrollback)', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(); } },
     { label: 'Terminal: search native scrollback', disabled: !online || !surface.active?.ready, run: () => { void surface.active?.copyMode.start(true); } },
-    { label: 'Terminal: open scrollback in host editor', disabled: !online || !pane, run: () => { void action('pane.edit_scrollback', pane, {}, machine); } },
+    { id: 'edit_scrollback', label: 'Terminal: open scrollback in host editor', disabled: !online || !pane, run: () => { void action('pane.edit_scrollback', pane, {}, machine); } },
     { label: 'Worktrees: list, create, open or remove', disabled: !online, run: () => worktrees.open() },
-    { label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
-    { label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
-    { label: 'Split right (Ctrl/Cmd+D)', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'right' }, machine); } },
-    { label: 'Split down (Ctrl/Cmd+Shift+D)', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'down' }, machine); } },
-    { label: 'Zoom / restore pane', disabled: !pane || !online, run: () => { void action('pane.zoom', pane, { mode: 'toggle' }, machine); } },
+    { id: 'new_workspace', label: 'Create workspace', disabled: !online, run: () => { void action('workspace.create', undefined, workspace ? { source: workspace } : {}, machine); } },
+    { id: 'new_tab', label: 'Create tab', disabled: !workspace || !online, run: () => { void action('tab.create', workspace, {}, machine); } },
+    { id: 'split_vertical', label: 'Split right', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'right' }, machine); } },
+    { id: 'split_horizontal', label: 'Split down', disabled: !pane || !online, run: () => { void action('pane.split', pane, { direction: 'down' }, machine); } },
+    { id: 'zoom', label: 'Zoom / restore pane', disabled: !pane || !online, run: () => { void action('pane.zoom', pane, { mode: 'toggle' }, machine); } },
     ...(['left', 'right', 'up', 'down'] as const).flatMap(direction => [
-      { label: `Focus pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.focus_direction', pane, { direction }, machine); } },
-      { label: `Swap pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.swap', pane, { direction }, machine); } },
-      { label: `Resize pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.resize', pane, { direction }, machine); } },
+      { id: `focus_pane_${direction}` as ShortcutAction, label: `Focus pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.focus_direction', pane, { direction }, machine); } },
+      { id: `swap_pane_${direction}` as ShortcutAction, label: `Swap pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.swap', pane, { direction }, machine); } },
+      { id: `resize_pane_${direction}` as ShortcutAction, label: `Resize pane ${direction}`, disabled: !pane || !online, run: () => { void action('pane.resize', pane, { direction }, machine); } },
     ]),
     { label: 'Move pane to new tab', disabled: !pane || !online, run: () => { void action('pane.move', pane, { destination: 'new_tab' }, machine); } },
     { label: 'Move pane to new workspace', disabled: !pane || !online, run: () => { void action('pane.move', pane, { destination: 'new_workspace' }, machine); } },
@@ -460,19 +484,19 @@ function refreshCommands() {
     ...(['earlier', 'later'] as const).flatMap((direction, index) => {
       const tabs = snapshot.tabs.filter(item => item.workspace_id === workspace), tabIndex = tabs.findIndex(item => item.tab_id === tab), workspaceIndex = snapshot.workspaces.findIndex(item => item.workspace_id === workspace);
       return [
-        { label: `Move tab ${direction}`, disabled: !online || (index === 0 ? tabIndex <= 0 : tabIndex >= tabs.length - 1), run: () => { void action('tab.move', tab, { index: tabIndex + (index === 0 ? -1 : 2) }, machine); } },
+        { id: index === 0 ? 'move_tab_previous' : 'move_tab_next', label: `Move tab ${direction}`, disabled: !online || (index === 0 ? tabIndex <= 0 : tabIndex >= tabs.length - 1), run: () => { void action('tab.move', tab, { index: tabIndex + (index === 0 ? -1 : 2) }, machine); } },
         { label: `Move workspace ${direction}`, disabled: !online || (index === 0 ? workspaceIndex <= 0 : workspaceIndex >= snapshot.workspaces.length - 1), run: () => { void action('workspace.move', workspace, { index: workspaceIndex + (index === 0 ? -1 : 2) }, machine); } },
       ];
     }),
     { label: 'Start or prompt agent', disabled: !pane || !online, run: () => openAgent(machine, pane) },
-    { label: 'Rename workspace', disabled: !workspace || !online, run: () => rename('workspace.rename', workspace, snapshot.workspaces.find(item => item.workspace_id === workspace)?.label || '', machine) },
-    { label: 'Rename tab', disabled: !tab || !online, run: () => rename('tab.rename', tab, snapshot.tabs.find(item => item.tab_id === tab)?.label || '', machine) },
-    { label: 'Rename pane', disabled: !pane || !online, run: () => rename('pane.rename', pane, snapshot.panes.find(item => item.pane_id === pane)?.label || '', machine) },
+    { id: 'rename_workspace', label: 'Rename workspace', disabled: !workspace || !online, run: () => rename('workspace.rename', workspace, snapshot.workspaces.find(item => item.workspace_id === workspace)?.label || '', machine) },
+    { id: 'rename_tab', label: 'Rename tab', disabled: !tab || !online, run: () => rename('tab.rename', tab, snapshot.tabs.find(item => item.tab_id === tab)?.label || '', machine) },
+    { id: 'rename_pane', label: 'Rename pane', disabled: !pane || !online, run: () => rename('pane.rename', pane, snapshot.panes.find(item => item.pane_id === pane)?.label || '', machine) },
     { label: 'Clear pane name', disabled: !pane || !online || !snapshot.panes.find(item => item.pane_id === pane)?.label, run: () => { void action('pane.rename', pane, { label: null }, machine); } },
     { label: 'Rename agent', disabled: !pane || !online || !snapshot.agents.some(agent => agent.pane_id === pane && agent.agent), run: () => rename('agent.rename', pane, snapshot.agents.find(agent => agent.pane_id === pane)?.name || '', machine) },
-    { label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
-    { label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
-    { label: workspaceGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspace)) ? 'Close worktree group and end its processes' : 'Close workspace and end its processes', disabled: !workspace || !online, run: () => closeWorkspace(machine, workspace) },
+    { id: 'close_pane', label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
+    { id: 'close_tab', label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
+    { id: 'close_workspace', label: workspaceGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspace)) ? 'Close worktree group and end its processes' : 'Close workspace and end its processes', disabled: !workspace || !online, run: () => closeWorkspace(machine, workspace) },
     ...navigationTargets(fleetState).map(target => ({ label: target.label, disabled: target.disabled, run: () => {
       const current = resolveNavigationTarget(fleetState, target);
       if (!current) { status('[WARN] Navigation target is no longer available.'); return; }
@@ -482,15 +506,16 @@ function refreshCommands() {
     ...fleetState.hosts.map(host => ({ label: `Host: ${host.machine.label} [${host.connection}]`, disabled: !host.machine.enabled, run: () => selectHost(host.machine.id) })),
     ...fleetState.hosts.flatMap(host => (host.snapshot?.agents || []).filter(agent => agent.agent || agent.name).map(agent => ({ label: `Agent: ${host.machine.label} / ${agent.name || agent.agent} [${agent.agent_status}]`, disabled: !host.machine.enabled, run: () => selectTarget(host.machine.id, agent.workspace_id, agent.tab_id, agent.pane_id) }))),
   ];
-  renderCommands();
+  if (element<HTMLDialogElement>('command-dialog').open) renderCommands();
 }
-function openCommands() {
-  element<HTMLInputElement>('command-search').value = ''; refreshCommands(); element<HTMLDialogElement>('command-dialog').showModal(); element('command-search').focus();
+let destinationsOnly = false;
+function openCommands(query = '', destinations = false) {
+  destinationsOnly = destinations; element<HTMLInputElement>('command-search').value = query; refreshCommands(); renderCommands(); element<HTMLDialogElement>('command-dialog').showModal(); element('command-search').focus();
 }
 function renderCommands() {
   const query = element<HTMLInputElement>('command-search').value.toLowerCase(); const parent = element('command-list');
   const focused = parent.contains(document.activeElement) ? document.activeElement?.textContent : undefined; const scroll = parent.scrollTop; parent.replaceChildren();
-  for (const command of commands.filter(command => command.label.toLowerCase().includes(query))) {
+  for (const command of commands.filter(command => command.palette !== false && (!destinationsOnly || /^(Workspace|Tab|Pane):/.test(command.label)) && command.label.toLowerCase().includes(query))) {
     const button = document.createElement('button'); button.textContent = command.label; button.disabled = !!command.disabled;
     button.onclick = () => { element<HTMLDialogElement>('command-dialog').close(); command.run(); }; parent.append(button);
     if (focused && command.label === focused) button.focus({ preventScroll: true });
@@ -499,7 +524,7 @@ function renderCommands() {
   if (focused && !parent.contains(document.activeElement)) element('command-search').focus({ preventScroll: true });
   parent.scrollTop = scroll;
 }
-element('commands').onclick = openCommands; element('pane-actions').onclick = openCommands;
+element('commands').onclick = () => openCommands(); element('pane-actions').onclick = () => openCommands();
 element('command-done').onclick = () => element<HTMLDialogElement>('command-dialog').close();
 element('command-search').oninput = renderCommands;
 element('command-search').onkeydown = event => {
@@ -519,12 +544,20 @@ element('command-list').onkeydown = event => {
   event.preventDefault();
   if (next < 0) element('command-search').focus(); else buttons[next]?.focus();
 };
-document.addEventListener('keydown', event => {
-  if (event.target instanceof Element && event.target.closest('.copy-layer, .copy-toolbar') && event.key.toLowerCase() !== 'k') return;
-  if (!authenticated || !(event.ctrlKey || event.metaKey)) return;
-  if (event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); if (!document.querySelector('dialog[open]')) openCommands(); }
-  else if (event.key.toLowerCase() === 'd' && !document.querySelector('dialog[open], .context-menu:not([hidden])') && paneId && selectedHost()?.connection === 'online') { event.preventDefault(); event.stopPropagation(); if (!pendingPane) void action('pane.split', paneId, { direction: event.shiftKey ? 'down' : 'right' }); }
-}, true);
+function keyboardTargets(kind: 'workspace' | 'tab' | 'pane' | 'agent') {
+  if (kind === 'workspace') return (selectedHost() ? workspaceEntries(selectedHost()!.machine, snapshot.workspaces, new Set(preferences.collapsedWorkspaceGroups), workspaceId, '').map(entry => entry.workspace) : []).map(item => ({ id: item.workspace_id, workspace: item.workspace_id, tab: '', pane: '' }));
+  if (kind === 'tab') return snapshot.tabs.filter(item => item.workspace_id === workspaceId).map(item => ({ id: item.tab_id, workspace: item.workspace_id, tab: item.tab_id, pane: '' }));
+  if (kind === 'agent') return agentEntries(fleetState.hosts.filter(host => host.machine.id === machineId), preferences.agentSort, 'all', '').map(({ agent }) => ({ id: agent.pane_id, workspace: agent.workspace_id, tab: agent.tab_id, pane: agent.pane_id }));
+  return snapshot.panes.filter(item => item.tab_id === tabId).map(item => ({ id: item.pane_id, workspace: item.workspace_id, tab: item.tab_id, pane: item.pane_id }));
+}
+function selectKeyboardTarget(target: { workspace: string; tab: string; pane: string }) {
+  selectTarget(machineId, target.workspace, target.tab, target.pane); if (paneId) surface.requestFocus(paneId);
+}
+shortcuts = new DesktopShortcuts(preferences.shortcuts,
+  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${!!pendingPane}`, attachment: surface.active, available: authenticated }),
+  () => { refreshCommands(); return commands; },
+  (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) selectKeyboardTarget(target); },
+  () => { if (paneId) surface.requestFocus(paneId); }, event => surface.active?.sendKey(event));
 async function start() {
   const config = fetch('/api/auth').then(response => { if (!response.ok) throw new Error('Sign-in unavailable'); return response.json(); });
   const configured = config.then(value => ({ value }), () => ({ value: { passwordEnabled: false } }));

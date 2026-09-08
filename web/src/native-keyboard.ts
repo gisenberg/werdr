@@ -41,10 +41,14 @@ export class NativeKeyboard {
     return (event.shiftKey ? Mods.SHIFT : 0) | (event.ctrlKey ? Mods.CTRL : 0) | (event.altKey ? Mods.ALT : 0) | (event.metaKey ? Mods.SUPER : 0)
       | (event.getModifierState('CapsLock') ? Mods.CAPSLOCK : 0) | (event.getModifierState('NumLock') ? Mods.NUMLOCK : 0);
   }
-  private down = (event: KeyboardEvent) => {
-    if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === 'Dead') return;
-    // Let the browser and existing clipboard handler complete paste/copy gestures.
-    if (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC')) return;
+  // A literal prefix from copy mode is a complete tap, encoded by the same
+  // terminal protocol and sent through the image-paste ordering queue.
+  sendKey(event: KeyboardEvent) {
+    const input = this.encodeInput(event); if (!input) return;
+    this.emit({ ...input, action: this.library.KeyAction.PRESS });
+    this.emit({ ...input, action: this.library.KeyAction.RELEASE });
+  }
+  private encodeInput(event: KeyboardEvent) {
     const key = this.key(event.code); if (key === undefined) return;
     const { KeyAction, KeyEncoderOption } = this.library;
     const mods = this.modifiers(event);
@@ -52,6 +56,13 @@ export class NativeKeyboard {
     const input: KeyEvent = { key, mods, action: event.repeat ? KeyAction.REPEAT : KeyAction.PRESS, utf8, unshiftedCodepoint: utf8?.toLowerCase().codePointAt(0) };
     this.encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, this.terminal.getMode(1));
     this.encoder.setOption(KeyEncoderOption.KEYPAD_KEY_APPLICATION, this.terminal.getMode(66));
+    return input;
+  }
+  private down = (event: KeyboardEvent) => {
+    if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === 'Dead') return;
+    // Let the browser and existing clipboard handler complete paste/copy gestures.
+    if (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC')) return;
+    const input = this.encodeInput(event); if (!input) return;
     event.preventDefault(); event.stopImmediatePropagation(); this.held.set(event.code, input); this.emit(input);
   };
   private up = (event: KeyboardEvent) => {

@@ -24,6 +24,11 @@ Browser cookies last 90 days and survive gateway restarts through an atomic owne
 Browser-session revocation removes persisted authority and closes the matching terminal controllers immediately while herdr retains the shells.
 Token replacement or explicit access-token revocation invalidates token-authenticated sessions; their persisted token fingerprint also prevents resurrection if shutdown interrupts rotation.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
+`ShortcutMode` owns prefix and resize state, while `DesktopShortcuts` resolves configured commands before terminal keyboard encoding.
+Bindings and prefix preferences live in the version-eight browser settings store, with migration and revision-checked saves.
+Command key ownership suppresses repeats across dialogs and selection changes without consuming releases that belong to terminal input.
+Literal prefixes from copy mode use the same native encoder and image-paste ordering queue as ordinary terminal input.
+Layout results do not import another native client's focus; explicit browser focus actions and context-matched creation results control browser selection.
 Startup and authentication are browser presentation: `BootConsole` owns credential stages and fixed display geometry, while the retained wmux React artwork and desktop components provide the historical visuals.
 Text profiles use one Ghostty terminal throughout login; graphical profiles use a DOM input with the same credential stages and matching desktop fields.
 The gateway serves only explicitly provisioned private font and screenshot paths; redistributable artwork remains in the web build with its license provenance.
@@ -79,7 +84,7 @@ Workspace grouping consumes native `WorkspaceInfo.worktree` repository membershi
 Groups keep the native parent-first ordering, retain the selected child when collapsed, and aggregate collapsed status using native attention priority.
 Search can reveal matching hidden children without changing the saved collapse preference.
 Selecting a workspace reveals its row within the desktop workspace section or phone drawer, while ordinary metadata updates preserve manual scrolling.
-Collapse state is browser chrome stored in version-six preferences, keyed by machine ID, SSH target, named session, and repository key.
+Collapse state is browser chrome stored in version-eight preferences, keyed by machine ID, SSH target, named session, and repository key.
 Navigation saves preserve other preferences through revision checks and recover the authoritative state after a conflict.
 Contextual worktree actions retain the clicked workspace and host even when another pane is active.
 Group closure passes the native explicit `close_group` flag after the configured confirmation and retains the Git checkouts; deleting a linked checkout uses the separate native worktree-removal flow.

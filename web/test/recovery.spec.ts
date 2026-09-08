@@ -8,7 +8,7 @@ test('all desktop panes recover after exhausting attachment retries during a gat
   try {
     await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
     await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
-    await page.locator('#commands').click(); await page.locator('#command-list').getByRole('button', { name: 'Split right (Ctrl/Cmd+D)', exact: true }).click();
+    await page.locator('#commands').click(); await page.locator('#command-list').getByRole('button', { name: 'Split right', exact: true }).click();
     await expect(page.locator('.terminal-pane')).toHaveCount(2); await expect(page.locator('.pane-shield:not([hidden])')).toHaveCount(0);
     const panes = await page.locator('.terminal-pane').elementHandles();
     for (const pane of panes) {

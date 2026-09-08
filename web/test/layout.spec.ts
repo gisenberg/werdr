@@ -13,11 +13,11 @@ test('native desktop splits preserve terminal identity, input, ratios, zoom and 
   const first = await page.locator('.pane-active').getAttribute('data-pane');
   const original = await page.locator('.pane-active textarea').elementHandle();
   const run = async (label: string) => { await page.locator('#commands').click(); await page.locator('#command-list').getByRole('button', { name: label, exact: true }).click(); };
-  await run('Split right (Ctrl/Cmd+D)');
+  await run('Split right');
   await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('#shield')).toBeHidden();
   expect(await original!.evaluate(node => node.isConnected)).toBe(true);
   const second = await page.locator('.pane-active').getAttribute('data-pane'); expect(second).not.toBe(first);
-  await run('Split down (Ctrl/Cmd+Shift+D)');
+  await run('Split down');
   await expect(page.locator('.terminal-pane:visible')).toHaveCount(3); await expect(page.locator('#shield')).toBeHidden();
   const third = await page.locator('.pane-active').getAttribute('data-pane');
   const layout = () => page.request.get(runtime.url + '/api/layout?' + new URLSearchParams({ machine: 'local', tab: new URL(page.url()).searchParams.get('tab')! })).then(response => response.json());

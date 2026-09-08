@@ -1,3 +1,4 @@
+import { shortcutActions } from '../shared/shortcuts';
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
 import { agentRowTokens, canonicalAgents, defaultAgentRows, detailedAgentRows } from '../shared/agent-rows';
@@ -122,6 +123,16 @@ export class Settings {
     const help = document.createElement('p'); help.textContent = `Fields: ${agentRowTokens.join(', ')}. Set row_gap to the number of blank lines between agents. rows_by_agent accepts layouts for: ${canonicalAgents.join(', ')}.`; rows.append(help);
     const rules = document.createElement('p'); rules.textContent = 'A styled field uses {"token":"$load","fg":"#abc","bold":true,"rules":[{"gt":80,"fg":"#f44"}]}. Rules use equals, contains, starts_with, gt, or lt. Text rules may set ignore_case. The first matching rule wins; bold and dim accept true or false.'; rows.append(rules);
     parent.append(rows);
+    const keys = document.createElement('details'); keys.id = 'settings-keybindings'; keys.className = 'shortcut-settings';
+    const legend = document.createElement('summary'); legend.textContent = 'KEYBINDINGS'; keys.append(legend);
+    const keyHint = document.createElement('p'); keyHint.textContent = 'Browser bindings are shared across your devices. Use native syntax such as prefix+shift+n or ctrl+alt+n. Separate alternatives with a comma; an empty field disables an action. Use comma or plus for those literal keys. Super means Command on macOS or the Windows key. Browser and OS reserved shortcuts may be unavailable; prefer prefix bindings.'; keys.append(keyHint);
+    const prefixLabel = document.createElement('label'); prefixLabel.textContent = 'PREFIX';
+    const prefix = document.createElement('input'); prefix.id = 'settings-prefix'; prefix.value = preferences.shortcuts.prefix; prefix.maxLength = 80; prefixLabel.append(prefix); keys.append(prefixLabel);
+    for (const action of shortcutActions) {
+      const label = document.createElement('label'); label.textContent = action.replaceAll('_', ' ').toUpperCase();
+      const input = document.createElement('input'); input.dataset.shortcut = action; input.value = preferences.shortcuts.bindings[action].join(', '); input.maxLength = 648; input.spellcheck = false; input.autocomplete = 'off'; label.append(input); keys.append(label);
+    }
+    parent.append(keys);
     for (const key of Object.keys(palette(defaults, false))) {
       const label = document.createElement('label'); label.textContent = key.replaceAll('_', ' ').toUpperCase();
       const input = document.createElement('input'); input.dataset.color = key; input.value = preferences.customColors[key] || ''; input.placeholder = 'Theme default'; input.maxLength = 7; label.append(input); colors.append(label);
@@ -131,6 +142,7 @@ export class Settings {
   }
   private read() {
     const value: Record<string, unknown> = { ...this.state.preferences, customColors: {} };
+    value.shortcuts = { prefix: element<HTMLInputElement>('settings-prefix').value, bindings: Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLInputElement>('[data-shortcut]')].map(input => [input.dataset.shortcut, input.value.trim() ? input.value.split(',').map(value => value.trim()) : []])) };
     try { value.agentRows = JSON.parse(element<HTMLTextAreaElement>('settings-agent-row-config').value); }
     catch { throw new Error('Agent rows: enter valid JSON.'); }
     for (const input of element('settings-fields').querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-setting]')) value[input.dataset.setting!] = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input instanceof HTMLInputElement && input.type === 'number' ? input.valueAsNumber : input.value;

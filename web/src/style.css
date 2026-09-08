@@ -304,3 +304,15 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 #plugin-install-output { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 40vh; min-height: 120px; border: 1px solid var(--herdr-surface1); padding: 12px; }
 #plugin-install-status, #plugin-install-error, #plugin-install-jobs { overflow-wrap: anywhere; }
 #plugin-install-input-form[hidden], #plugin-install-cancel[hidden] { display: none; }
+
+#shortcut-status { position: fixed; bottom: 40px; left: 0; right: 0; z-index: 12; padding: 6px 10px; border: 1px solid var(--herdr-accent); background: var(--herdr-panel-bg); color: var(--herdr-text); font: inherit; }
+#shortcut-help dl { display: grid; grid-template-columns: minmax(8ch, 1fr) minmax(12ch, 1fr); gap: 6px 16px; }
+#shortcut-help dt, #shortcut-help dd { margin: 0; overflow-wrap: anywhere; }
+@media (min-width: 701px) { #app.sidebar-hidden #rail { display: none; } }
+
+#shortcut-help { width: min(820px, calc(100vw - 24px)); }
+.shortcut-help-header { position: sticky; top: -1px; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--herdr-surface1); background: var(--herdr-panel-bg); }
+#shortcut-help .shortcut-help-header h1 { flex: 1; margin: 0; font-size: 18px; }
+#shortcut-help .shortcut-help-header button { width: auto; }
+
+#shortcut-help .shortcut-help-header h1:focus { outline: none; }

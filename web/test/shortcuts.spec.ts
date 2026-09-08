@@ -1,0 +1,109 @@
+import { test, expect, type Page } from '@playwright/test';
+import { fixture } from './fixture.ts';
+import { consoleInput } from './console-helpers.ts';
+const focus = (page: Page) => page.locator('.pane-active .pane-content textarea').focus();
+async function prefix(page: Page, suffix?: string, chord = 'Control+b') { await page.keyboard.press(chord); if (suffix) await page.keyboard.press(suffix); }
+async function login(page: Page, runtime: Awaited<ReturnType<typeof fixture>>) {
+  await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+}
+async function capture(page: Page, inputs: string[]) {
+  await page.routeWebSocket('**/ws/terminal?*', socket => {
+    const server = socket.connectToServer();
+    socket.onMessage(message => { const record = JSON.parse(String(message)); if (record.type === 'terminal.input') inputs.push(record.text); else server.send(message); });
+  });
+}
+test('native prefix, resize, held-key leases and browser aliases control real panes', async ({ page }) => {
+  test.setTimeout(120_000); const runtime = await fixture(); const inputs: string[] = [];
+  try {
+    await capture(page, inputs); await login(page, runtime);
+    const originalInput = await page.locator('.pane-active .pane-content textarea').elementHandle();
+    await prefix(page); await expect(page.locator('#shortcut-status')).toContainText('[PREFIX');
+    await page.keyboard.press('f'); await expect(page.locator('#shortcut-status')).toBeHidden(); expect(inputs).toEqual([]);
+    await prefix(page); await prefix(page); await expect.poll(() => inputs.join('')).toBe('\x02'); inputs.length = 0;
+    await prefix(page, 'Shift+?'); await expect(page.locator('#shortcut-help')).toBeVisible();
+    await expect(page.locator('#shortcut-help h1')).toBeInViewport(); await expect(page.locator('#shortcut-help')).toContainText('prefix+shift+n'); await page.screenshot({ path: 'test-results/shortcuts-help-desktop.png' });
+    await page.locator('#shortcut-help button').click(); await expect(page.locator('.pane-active .pane-content textarea')).toBeFocused();
+    expect(await originalInput!.evaluate(node => node.isConnected)).toBe(true);
+    await prefix(page); await page.keyboard.down('v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await page.keyboard.down('v'); await page.keyboard.up('v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const before = await page.locator('.pane-active').boundingBox();
+    await prefix(page, 'r'); await expect(page.locator('#shortcut-status')).toContainText('[RESIZE]');
+    await page.keyboard.press('ArrowLeft'); await expect.poll(async () => (await page.locator('.pane-active').boundingBox())!.width).not.toBe(before!.width);
+    await expect(page.locator('#shortcut-status')).toContainText('[RESIZE]'); await page.keyboard.press('Enter'); await expect(page.locator('#shortcut-status')).toBeHidden();
+    await prefix(page); await page.locator('#panes > button.active').focus(); await expect(page.locator('#shortcut-status')).toBeHidden();
+    await focus(page); await page.keyboard.press('v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); expect(inputs.at(-1)).toBe('v');
+    await prefix(page); await page.locator('.pane-active .pane-content textarea').evaluate(node => node.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', isComposing: true, bubbles: true, cancelable: true })));
+    await expect(page.locator('#shortcut-status')).toBeHidden(); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('Resize mode'); await page.locator('#command-list button').click();
+    await expect(page.locator('#shortcut-status')).toContainText('[RESIZE]'); await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+d'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(3);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'c'); await expect(page.locator('#tabs button')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page); const second = new URL(page.url()).searchParams.get('tab');
+    await prefix(page, '1'); await expect.poll(() => new URL(page.url()).searchParams.get('tab')).not.toBe(second);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'n'); await expect.poll(() => new URL(page.url()).searchParams.get('tab')).toBe(second);
+  } finally { await runtime.close(); }
+});
+test('copy controls, double prefix forwarding and editable text keep their input scope', async ({ page }) => {
+  const runtime = await fixture(); const inputs: string[] = [];
+  try {
+    await capture(page, inputs); await login(page, runtime); const pane = new URL(page.url()).searchParams.get('pane')!;
+    await runtime.cli('pane', 'send-text', pane, "for i in $(seq 1 100); do printf 'KEY_COPY_%s\\n' $i; done\n");
+    await expect.poll(() => runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('KEY_COPY_100');
+    await prefix(page, '['); await expect(page.locator('.copy-layer')).toBeVisible(); await expect(page.locator('.copy-layer')).toHaveAttribute('data-row', /[0-9]+/); await page.keyboard.press('g'); await expect(page.locator('.copy-layer')).toHaveAttribute('data-row', '0');
+    const before = await page.locator('.copy-layer').getAttribute('data-row'); await page.keyboard.press('Control+d');
+    await expect(page.locator('.copy-layer')).not.toHaveAttribute('data-row', before!); await expect(page.locator('.terminal-pane')).toHaveCount(1);
+    inputs.length = 0; await prefix(page); await prefix(page); await expect.poll(() => inputs.join('')).toBe('\x02'); await expect(page.locator('.copy-layer')).toBeVisible();
+    await page.keyboard.press('/'); await page.locator('.copy-search input').fill('edited'); await page.keyboard.press('Control+b');
+    await expect(page.locator('#shortcut-status')).toBeHidden(); await page.keyboard.press('Escape'); await page.keyboard.press('q');
+    await expect(page.locator('.copy-layer')).toHaveCount(0); await focus(page); await prefix(page, 's'); await expect(page.locator('#settings-dialog')).toBeVisible();
+    await page.locator('#settings-keybindings summary').click(); await page.locator('#settings-prefix').focus(); await page.keyboard.press('Control+d'); await expect(page.locator('.terminal-pane')).toHaveCount(1);
+    await page.locator('#settings-cancel').click();
+  } finally { await runtime.close(); }
+});
+test('keybinding remaps persist through restart with validation, preview cancellation and responsive help', async ({ page }) => {
+  test.setTimeout(120_000); const runtime = await fixture();
+  try {
+    await login(page, runtime); await prefix(page, 's'); await expect(page.locator('#settings-dialog')).toBeVisible(); await page.locator('#settings-keybindings summary').click();
+    await page.locator('[data-shortcut=close_pane]').fill('x'); await expect(page.locator('#settings-error')).toContainText('intercept terminal typing');
+    await page.locator('[data-shortcut=close_pane]').fill('prefix+x'); await page.locator('#settings-prefix').fill('ctrl+a');
+    await page.locator('#settings-cancel').click(); await focus(page); await prefix(page); await expect(page.locator('#shortcut-status')).toContainText('ctrl+b'); await page.keyboard.press('Escape');
+    await prefix(page, 's'); await page.locator('#settings-keybindings summary').click(); await page.locator('#settings-prefix').fill('ctrl+a'); await page.locator('[data-shortcut=help]').fill('prefix+f1');
+    await page.locator('[data-shortcut=split_vertical]').fill('prefix+v'); await page.locator('#settings-form button[type=submit]').click(); await expect(page.locator('#settings-dialog')).toBeHidden();
+    await runtime.restartGateway(); await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    await prefix(page, 'F1', 'Control+a'); await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(page.locator('#shortcut-help')).toContainText('Prefix: ctrl+a');
+    await expect(page.locator('#shortcut-help')).not.toContainText('Ctrl/Cmd+D');
+    await page.setViewportSize({ width: 390, height: 844 }); await expect(page.locator('#shortcut-help h1')).toBeInViewport(); await page.screenshot({ path: 'test-results/shortcuts-help-mobile.png' });
+    const bounds = await page.locator('#shortcut-help').boundingBox(); expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally { await runtime.close(); }
+});
+
+test('late layout replies preserve selection and held commands cannot type into a newly opened dialog', async ({ page }) => {
+  test.setTimeout(90_000); const runtime = await fixture(); let release = () => {};
+  try {
+    await login(page, runtime); await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2); await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const source = new URL(page.url()).searchParams.get('pane')!;
+    const other = await page.locator('#panes > button:not(.active)').getAttribute('data-id');
+    let started = () => {}; const requestStarted = new Promise<void>(resolve => { started = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/action', async route => {
+      if (route.request().postDataJSON().action !== 'pane.resize') { await route.continue(); return; }
+      const response = await route.fetch(); started(); await gate; await route.fulfill({ response });
+    });
+    await prefix(page, 'r'); await page.keyboard.press('ArrowLeft'); await requestStarted;
+    await page.locator(`#panes > button[data-id="${other}"]`).click(); await expect(page.locator('#shortcut-status')).toBeHidden();
+    const refreshed = page.waitForResponse(response => response.url().endsWith('/api/fleet') && response.request().method() === 'GET'); release(); await (await refreshed).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(new URL(page.url()).searchParams.get('pane')).toBe(other); expect(other).not.toBe(source);
+    await focus(page); await prefix(page); await page.keyboard.down('s'); await expect(page.locator('#settings-dialog')).toBeVisible();
+    await page.locator('#settings-keybindings summary').click(); await page.locator('#settings-prefix').focus();
+    await page.keyboard.down('s'); await page.keyboard.up('s'); await expect(page.locator('#settings-prefix')).toHaveValue('ctrl+b');
+    await page.locator('#settings-cancel').click();
+    await runtime.cli('server', 'stop'); await page.locator('#refresh').click();
+    await expect.poll(async () => (await (await page.request.get(runtime.url + '/api/fleet')).json()).hosts.find((host: any) => host.machine.id === 'local').connection).not.toBe('online');
+    await page.locator('#panes').focus(); await page.keyboard.press('Control+k'); await expect(page.locator('#command-dialog')).toBeVisible();
+    await page.locator('#command-search').fill('Keyboard shortcuts'); await page.locator('#command-list button').click();
+    await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(page.locator('#shortcut-help')).toContainText('Resize mode [UNAVAILABLE]');
+  } finally { release(); await runtime.close(); }
+});
