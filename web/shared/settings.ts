@@ -1,6 +1,7 @@
 import { defaultShortcuts, validateShortcuts, type Shortcuts } from './shortcuts';
 import nativeThemes from './native-themes.json';
 import { defaultAgentRows, validateAgentRows, type AgentRows } from './agent-rows';
+import { defaultWorkspaceRows, validateWorkspaceRows, type WorkspaceRows } from './workspace-rows';
 export const themeNames = Object.keys(nativeThemes);
 export const fonts = ['monospace', 'system', 'consolas', 'menlo'] as const;
 export interface Preferences {
@@ -10,6 +11,7 @@ export interface Preferences {
   sidebarWidth: number; sidebarSectionPercent: number; compact: boolean; indicators: 'text' | 'dots' | 'symbols';
   collapsedWorkspaceGroups: string[];
   agentRows: AgentRows;
+  workspaceRows: WorkspaceRows;
   shortcuts: Shortcuts;
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
   paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
@@ -23,6 +25,7 @@ export const defaults: Preferences = {
   indicators: 'text', agentSort: 'priority', confirmClose: true, hideSingleTab: false, tabBarPosition: 'top',
   collapsedWorkspaceGroups: [],
   agentRows: defaultAgentRows,
+  workspaceRows: defaultWorkspaceRows,
   shortcuts: defaultShortcuts,
   paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
   notificationAttention: true, notificationFinished: true, notificationSound: false,
@@ -40,6 +43,8 @@ export function validatePreferences(value: unknown): Preferences {
   catch (error) { throw new SettingsValidationError(`Keybindings: ${(error as Error).message}`); }
   try { out.agentRows = validateAgentRows(out.agentRows); }
   catch (error) { throw new SettingsValidationError(`Agent rows: ${(error as Error).message}`); }
+  try { out.workspaceRows = validateWorkspaceRows(out.workspaceRows); }
+  catch (error) { throw new SettingsValidationError(`Workspace rows: ${(error as Error).message}`); }
   if (!Array.isArray(out.collapsedWorkspaceGroups) || out.collapsedWorkspaceGroups.length > 256 || out.collapsedWorkspaceGroups.some(key => typeof key !== 'string' || !key || key.length > 8192 || /[\x00-\x1f]/.test(key)) || new Set(out.collapsedWorkspaceGroups).size !== out.collapsedWorkspaceGroups.length || new TextEncoder().encode(JSON.stringify(out.collapsedWorkspaceGroups)).length > 32768) fail('collapsedWorkspaceGroups');
   for (const key of ['theme', 'darkTheme', 'lightTheme'] as const) if (typeof out[key] !== 'string' || !themeNames.includes(out[key])) fail(key);
   for (const [key, values] of Object.entries({ appearance: ['theme', 'dark', 'light', 'system'], font: fonts, indicators: ['text', 'dots', 'symbols'], agentSort: ['priority', 'native'], tabBarPosition: ['top', 'bottom'], toastPosition: ['top-left', 'top-right', 'bottom-left', 'bottom-right'], toastDelivery: ['off', 'browser', 'desktop', 'both'] })) if (!values.includes(out[key as keyof Preferences] as never)) fail(key);

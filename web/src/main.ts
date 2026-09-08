@@ -9,7 +9,9 @@ import { NavigatePreview } from './navigate-preview';
 import { initialSelection, SelectionRestoration, type Selection, type SelectionIdentity } from './selection-restoration';
 import { DesktopShortcuts, type ShortcutCommand } from './desktop-shortcuts';
 import type { ShortcutAction } from '../shared/shortcuts';
-import { forgetAgentRows, renderAgentRows, resolveAgentRows, type RowToken } from './agent-row-renderer';
+import { resolveAgentRows } from './agent-row-renderer';
+import { forgetSidebarRows, renderSidebarRows, type RowToken } from './sidebar-row-renderer';
+import { resolveWorkspaceRows } from './workspace-row-renderer';
 import { agentEntries } from './agent-entries';
 import { SidebarSplit } from './sidebar-split';
 import { workspaceEntries, workspaceGroup, workspaceGroupKey } from './workspace-groups';
@@ -195,7 +197,8 @@ function renderFleetNavigation() {
   const collapsed = new Set(preferences.collapsedWorkspaceGroups);
   navigation('workspaces', fleetState.hosts.flatMap(host => workspaceEntries(host.machine, host.snapshot?.workspaces || [], collapsed, host.machine.id === machineId ? workspaceId : '', query).map((entry, index) => {
     const workspace = entry.workspace;
-    return { shortcut: shortcuts?.isNavigating && host.machine.id === machineId && index < 9 ? index + 1 : undefined, id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace' as const, machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, prefix: entry.indented ? entry.lastChild ? '└─ ' : '├─ ' : '', group: entry.group, badge: host.connection === 'online' ? entry.status.toUpperCase() : host.connection.toUpperCase(), preview: navigatePreview.target?.machine === host.machine.id && navigatePreview.target.workspace === workspace.workspace_id, active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, title: `${host.machine.label} / ${workspace.label || workspace.workspace_id}${workspace.worktree ? '\n' + workspace.worktree.checkout_path : ''}${entry.group ? '\n' + entry.group.members.length + ' workspaces in group' : ''}`, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') };
+    const rows = resolveWorkspaceRows(preferences.workspaceRows, { workspace, status: entry.status, indented: entry.indented }, preferences.indicators);
+    return { rows, online: host.connection === 'online', rowContext: { host: host.machine.label, prefix: entry.indented ? entry.lastChild ? '└─ ' : '├─ ' : '', continuation: entry.indented ? entry.lastChild ? '   ' : '│  ' : '' }, shortcut: shortcuts?.isNavigating && host.machine.id === machineId && index < 9 ? index + 1 : undefined, id: `${host.machine.id}/${workspace.workspace_id}`, context: { kind: 'workspace' as const, machine: host.machine.id, id: workspace.workspace_id }, label: `${host.machine.label} / ${workspace.label || workspace.workspace_id}`, group: entry.group, badge: host.connection === 'online' ? entry.status.toUpperCase() : host.connection.toUpperCase(), preview: navigatePreview.target?.machine === host.machine.id && navigatePreview.target.workspace === workspace.workspace_id, active: host.machine.id === machineId && workspace.workspace_id === workspaceId, disabled: !host.machine.enabled, title: `${host.machine.label} / ${workspace.label || workspace.workspace_id}${workspace.worktree ? '\n' + workspace.worktree.checkout_path : ''}${entry.group ? '\n' + entry.group.members.length + ' workspaces in group' : ''}\n${rows.map(row => row.map(token => token.text).join(' · ')).join('\n')}`, select: () => selectTarget(host.machine.id, workspace.workspace_id, '', '') };
   })));
   revealWorkspaceSelection();
   const views = fleetState.hosts.filter(host => host.snapshot?.agent_view?.definition).map(host => `${host.machine.label}: ${host.snapshot!.agent_view!.definition!.label || 'FILTERED'}`);
@@ -227,7 +230,7 @@ async function api(path: string, data?: object): Promise<any> {
   if (!res.ok) throw new Error(value.error || `Request failed (${res.status})`);
   return value;
 }
-interface NavigationItem { shortcut?: number; preview?: boolean; rows?: RowToken[][]; online?: boolean; id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; prefix?: string; group?: { key: string; collapsed: boolean }; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
+interface NavigationItem { rowContext?: { host: string; prefix: string; continuation: string }; shortcut?: number; preview?: boolean; rows?: RowToken[][]; online?: boolean; id: string; label: string; active: boolean; select: () => void; disabled?: boolean; title?: string; badge?: string; group?: { key: string; collapsed: boolean }; context?: { kind: 'workspace' | 'tab' | 'pane'; machine: string; id: string } }
 async function toggleWorkspaceGroup(key: string, collapsed: boolean) {
   if (pendingGroups.has(key)) return;
   pendingGroups.add(key); renderFleetNavigation();
@@ -259,8 +262,9 @@ function navigation(id: string, items: NavigationItem[]) {
     existing.delete(item.id);
     node.dataset.id = item.id;
     if (item.shortcut) node.dataset.shortcutIndex = String(item.shortcut); else delete node.dataset.shortcutIndex;
-    const text = (item.prefix || '') + item.label;
-    if (item.rows) renderAgentRows(node, item.rows);
+    const text = item.label;
+    node.classList.toggle('workspace-entry', id === 'workspaces');
+    if (item.rows) renderSidebarRows(node, item.rows, item.rowContext ? { ...item.rowContext, prefix: (item.shortcut ? `${item.shortcut} ` : '') + item.rowContext.prefix, continuation: (item.shortcut ? '  ' : '') + item.rowContext.continuation } : undefined);
     else if (node.textContent !== text) node.textContent = text;
     node.classList.toggle('agent-entry', !!item.rows);
     if (item.rows) node.dataset.online = String(!!item.online);
@@ -289,7 +293,7 @@ function navigation(id: string, items: NavigationItem[]) {
     }
     if (parent.children[index] !== row) parent.insertBefore(row, parent.children[index] || null);
   });
-  for (const node of existing.values()) { if (node.classList.contains('agent-entry')) forgetAgentRows(node); if (node.parentElement?.classList.contains('workspace-row')) node.parentElement.remove(); else node.remove(); }
+  for (const node of existing.values()) { if (node.classList.contains('agent-entry')) forgetSidebarRows(node); if (node.parentElement?.classList.contains('workspace-row')) node.parentElement.remove(); else node.remove(); }
 }
 function renderNavigation() {
   if (!lifecycle.active) return;

@@ -21,8 +21,10 @@ test('Navigate scales across one and fifteen populated workspaces without termin
       await expect(page.locator('#workspaces button[data-id]')).toHaveCount(count); await expect(page.locator('#agents button')).toHaveCount(count);
       for (const mobile of [false, true]) {
         await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 });
+        const before = mobile ? [] : await page.locator('#workspaces button[data-id]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
         if (mobile) await page.locator('#navigate-toggle').click();
         else { await page.locator('.pane-active textarea').focus(); await page.keyboard.press('Control+b'); await page.keyboard.press('w'); }
+        if (!mobile) expect(await page.locator('#workspaces button[data-id]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))).toEqual(before);
         const sample = await page.evaluate(() => {
           const root = document.querySelector<HTMLElement>('#navigate-switcher:not([hidden])') || document.querySelector<HTMLElement>('#workspaces')!;
           const references = [...root.querySelectorAll('button')];

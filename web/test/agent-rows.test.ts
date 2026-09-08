@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { canonicalAgents, defaultAgentRows, tokenStyle, validateAgentRows } from '../shared/agent-rows.ts';
-import { agentTokenWidths, resolveAgentRows } from '../src/agent-row-renderer.ts';
+import { resolveAgentRows } from '../src/agent-row-renderer.ts';
+import { sidebarTokenWidths } from '../src/sidebar-row-renderer.ts';
 import { validatePreferences } from '../shared/settings.ts';
 import type { Agent } from '../shared/fleet.ts';
 
@@ -48,10 +49,10 @@ test('native rows resolve overrides, state labels, pane names and metadata witho
 
 test('native row widths reserve status, share spare cells and retain later text fields on narrow rails', () => {
   const tokens = [{ kind: 'state_icon', width: 9 }, { kind: 'machine', width: 7 }, { kind: 'workspace', width: 16 }, { kind: 'tab', width: 1 }];
-  assert.deepEqual(agentTokenWidths(tokens, 29), [9, 6, 6, 1]);
-  assert.deepEqual(agentTokenWidths(tokens, 18), [9, null, 4, 1]);
-  assert.deepEqual(agentTokenWidths(tokens, 11), [9, null, null, 1]);
-  assert.deepEqual(agentTokenWidths(tokens, 9), [9, null, null, null]);
-  assert.deepEqual(agentTokenWidths(tokens, 100), [9, 7, 16, 1]);
-  assert.deepEqual(agentTokenWidths([{ kind: 'agent', width: 2 }, { kind: 'custom', width: 30 }], 20), [2, 15]);
+  assert.deepEqual(sidebarTokenWidths(tokens, 29), [9, 6, 6, 1]);
+  assert.deepEqual(sidebarTokenWidths(tokens, 18), [9, null, 4, 1]);
+  assert.deepEqual(sidebarTokenWidths(tokens, 11), [9, null, null, 1]);
+  assert.deepEqual(sidebarTokenWidths(tokens, 9), [9, null, null, null]);
+  assert.deepEqual(sidebarTokenWidths(tokens, 100), [9, 7, 16, 1]);
+  assert.deepEqual(sidebarTokenWidths([{ kind: 'agent', width: 2 }, { kind: 'custom', width: 30 }], 20), [2, 15]);
 });

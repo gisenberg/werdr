@@ -33,13 +33,13 @@ aside nav button { border: 0; border-bottom: 1px solid var(--herdr-surface-dim, 
 .agent-entry[data-badge=BLOCKED] { --agent-status-color: var(--herdr-red); }
 .agent-entry[data-badge=WORKING] { --agent-status-color: var(--herdr-yellow); }
 .agent-entry[data-badge=DONE], .agent-entry[data-badge=IDLE] { --agent-status-color: var(--herdr-green); }
+.agent-token[data-token=git_status] { opacity: 1; }
 .agent-token[data-dim=true] { opacity: .7; }
 .agent-token[data-dim=false] { opacity: 1; }
 .agent-separator { flex: none; color: var(--herdr-overlay0); opacity: .7; }
-#settings-agent-rows { grid-column: 1 / -1; }
-#settings-agent-row-config { width: 100%; resize: vertical; font: inherit; color: var(--herdr-text); background: var(--herdr-panel-bg); border: 1px solid var(--herdr-surface1); padding: 8px; }
+#settings-agent-rows, #settings-workspace-rows { grid-column: 1 / -1; }
+#settings-agent-row-config, #settings-workspace-row-config { width: 100%; resize: vertical; font: inherit; color: var(--herdr-text); background: var(--herdr-panel-bg); border: 1px solid var(--herdr-surface1); padding: 8px; }
 .workspace-row { display: flex; flex: none; min-width: 0; }
-.workspace-row > button[data-shortcut-index]::before { content: attr(data-shortcut-index) " "; color: var(--herdr-overlay1); }
 .workspace-row > button.navigate-preview { outline: 1px solid var(--herdr-accent); outline-offset: -2px; color: var(--herdr-accent); }
 .workspace-row > button[data-id] { flex: 1; min-width: 0; }
 aside nav .workspace-group-toggle { flex: none; width: 30px; padding: 0; color: var(--herdr-accent); }
@@ -341,3 +341,12 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
   header { grid-template-columns: auto auto 1fr; }
   body:has(#navigate-switcher:not([hidden])) :is(#shortcut-status, #notice-toast) { display: none; }
 }
+
+#workspaces .workspace-row { line-height: 1.4; margin-bottom: var(--workspace-row-gap, 0lh); }
+#workspaces .workspace-row:last-child { margin-bottom: 0; }
+#workspaces .workspace-entry { line-height: 1.4; padding: 0 1ch; border-bottom: 0; }
+#workspaces .workspace-entry[data-online=true]::after { display: none; }
+.workspace-entry .agent-line + .agent-line { padding-left: 0; }
+.workspace-entry .agent-line { min-height: 1lh; }
+.row-prefix { flex: none; white-space: pre; color: var(--herdr-overlay1); }
+.workspace-host { display: block; white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--herdr-overlay1); }

@@ -1,6 +1,7 @@
 import { shortcutActions } from '../shared/shortcuts';
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
+import { defaultWorkspaceRows, workspaceRowTokens } from '../shared/workspace-rows';
 import { agentRowTokens, canonicalAgents, defaultAgentRows, detailedAgentRows } from '../shared/agent-rows';
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const settingsMarkup = `<dialog id="settings-dialog"><form id="settings-form"><h1>SETTINGS</h1><p>Appearance and behavior shared by your browsers. Changes preview until you save.</p><div id="settings-fields"></div><details><summary>CUSTOM THEME COLORS</summary><div id="settings-colors"></div></details><fieldset><legend>THIS DEVICE</legend><label><input id="settings-device-font" type="checkbox"> Override terminal font size on this device</label><label>DEVICE FONT SIZE<input id="settings-device-size" type="number" min="10" max="32" value="14"></label></fieldset><fieldset><legend>NATIVE HOST</legend><button id="settings-integrations" type="button">MANAGE HOST INTEGRATIONS</button><button id="settings-plugins" type="button">MANAGE HOST PLUGINS</button></fieldset><p id="settings-error" role="alert"></p><div class="settings-actions"><button type="submit">SAVE SETTINGS</button><button id="settings-cancel" type="button">CANCEL</button><button id="settings-reset" type="button">PREVIEW DEFAULTS</button></div></form></dialog>`;
@@ -111,20 +112,24 @@ export class Settings {
       parent.append(group);
     }
     const colors = element('settings-colors'); colors.replaceChildren();
-    const rows = document.createElement('details'); rows.id = 'settings-agent-rows';
-    const summary = document.createElement('summary'); summary.textContent = 'AGENT ROW LAYOUT'; rows.append(summary);
-    const hint = document.createElement('p'); hint.textContent = 'Arrange native fields into rows. Use $name for custom metadata. Missing fields disappear; an empty layout keeps the status indicator.'; rows.append(hint);
-    const presets = document.createElement('div'); presets.className = 'inline-actions';
-    for (const [label, config] of [['NATIVE DEFAULT', defaultAgentRows], ['DETAIL ROWS', detailedAgentRows]] as const) {
-      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
-      button.onclick = () => { element<HTMLTextAreaElement>('settings-agent-row-config').value = JSON.stringify(config, null, 2); this.preview(); }; presets.append(button);
+    for (const kind of ['agent', 'workspace'] as const) {
+      const isAgent = kind === 'agent', name = isAgent ? 'AGENT' : 'WORKSPACE';
+      const rows = document.createElement('details'); rows.id = `settings-${kind}-rows`;
+      const summary = document.createElement('summary'); summary.textContent = `${name} ROW LAYOUT`; rows.append(summary);
+      const hint = document.createElement('p'); hint.textContent = 'Arrange native fields into rows. Use $name for custom metadata. Missing fields disappear. ' + (isAgent ? 'An empty layout keeps the status indicator.' : 'Host identity remains visible. Grouped worktree children omit separate Git fields.'); rows.append(hint);
+      const presets = document.createElement('div'); presets.className = 'inline-actions';
+      const configs = isAgent ? [['NATIVE DEFAULT', defaultAgentRows], ['DETAIL ROWS', detailedAgentRows]] as const : [['NATIVE DEFAULT', defaultWorkspaceRows], ['COMPACT ROW', { rows: [['state_icon', 'workspace', 'git_status']], row_gap: 0 }]] as const;
+      for (const [label, config] of configs) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+        button.onclick = () => { element<HTMLTextAreaElement>(`settings-${kind}-row-config`).value = JSON.stringify(config, null, 2); this.preview(); }; presets.append(button);
+      }
+      rows.append(presets);
+      const rowLabel = document.createElement('label'); rowLabel.textContent = 'ROW CONFIGURATION (JSON)'; rowLabel.htmlFor = `settings-${kind}-row-config`;
+      const editor = document.createElement('textarea'); editor.id = rowLabel.htmlFor; editor.rows = 12; editor.spellcheck = false; editor.maxLength = 65536; editor.value = JSON.stringify(isAgent ? preferences.agentRows : preferences.workspaceRows, null, 2); rows.append(rowLabel, editor);
+      const help = document.createElement('p'); help.textContent = `Fields: ${(isAgent ? agentRowTokens : workspaceRowTokens).join(', ')}. Set row_gap to the number of blank lines between ${kind}s.` + (isAgent ? ` rows_by_agent accepts layouts for: ${canonicalAgents.join(', ')}.` : ' Git counts appear when ahead or behind; unknown Git data stays hidden.'); rows.append(help);
+      const rules = document.createElement('p'); rules.textContent = 'A styled field uses {"token":"$load","fg":"#abc","bold":true,"rules":[{"gt":80,"fg":"#f44"}]}. Rules use equals, contains, starts_with, gt, or lt. Text rules may set ignore_case. The first matching rule wins; bold and dim accept true or false. State icons and Git counts accept styles without rules.'; rows.append(rules);
+      parent.append(rows);
     }
-    rows.append(presets);
-    const rowLabel = document.createElement('label'); rowLabel.textContent = 'ROW CONFIGURATION (JSON)'; rowLabel.htmlFor = 'settings-agent-row-config';
-    const editor = document.createElement('textarea'); editor.id = rowLabel.htmlFor; editor.rows = 12; editor.spellcheck = false; editor.maxLength = 65536; editor.value = JSON.stringify(preferences.agentRows, null, 2); rows.append(rowLabel, editor);
-    const help = document.createElement('p'); help.textContent = `Fields: ${agentRowTokens.join(', ')}. Set row_gap to the number of blank lines between agents. rows_by_agent accepts layouts for: ${canonicalAgents.join(', ')}.`; rows.append(help);
-    const rules = document.createElement('p'); rules.textContent = 'A styled field uses {"token":"$load","fg":"#abc","bold":true,"rules":[{"gt":80,"fg":"#f44"}]}. Rules use equals, contains, starts_with, gt, or lt. Text rules may set ignore_case. The first matching rule wins; bold and dim accept true or false.'; rows.append(rules);
-    parent.append(rows);
     const keys = document.createElement('details'); keys.id = 'settings-keybindings'; keys.className = 'shortcut-settings';
     const legend = document.createElement('summary'); legend.textContent = 'KEYBINDINGS'; keys.append(legend);
     const keyHint = document.createElement('p'); keyHint.textContent = 'Browser bindings are shared across your devices. Use native syntax such as prefix+shift+n or ctrl+alt+n. Separate alternatives with a comma; an empty field disables an action. Use comma or plus for those literal keys. Super means Command on macOS or the Windows key. Navigate bindings apply only inside Navigate mode and use bare keys such as h or up. Other letter bindings need prefix+. Browser and OS reserved shortcuts may be unavailable; prefer prefix bindings.'; keys.append(keyHint);
@@ -147,6 +152,8 @@ export class Settings {
     value.shortcuts = { prefix: element<HTMLInputElement>('settings-prefix').value, bindings: Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLInputElement>('[data-shortcut]')].map(input => [input.dataset.shortcut, input.value.trim() ? input.value.split(',').map(value => value.trim()) : []])) };
     try { value.agentRows = JSON.parse(element<HTMLTextAreaElement>('settings-agent-row-config').value); }
     catch { throw new Error('Agent rows: enter valid JSON.'); }
+    try { value.workspaceRows = JSON.parse(element<HTMLTextAreaElement>('settings-workspace-row-config').value); }
+    catch { throw new Error('Workspace rows: enter valid JSON.'); }
     for (const input of element('settings-fields').querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-setting]')) value[input.dataset.setting!] = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input instanceof HTMLInputElement && input.type === 'number' ? input.valueAsNumber : input.value;
     for (const input of element('settings-colors').querySelectorAll<HTMLInputElement>('[data-color]')) if (input.value.trim()) (value.customColors as Record<string, string>)[input.dataset.color!] = input.value.trim();
     return validatePreferences(value);
@@ -166,6 +173,7 @@ export class Settings {
     root.style.colorScheme = rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 > 128 ? 'light' : 'dark';
     root.style.setProperty('--sidebar-width', `${preferences.sidebarWidth}px`); root.style.setProperty('--wmux-mono-font', fontFamilies[preferences.font]);
     root.style.setProperty('--agent-row-gap', `${preferences.agentRows.row_gap}lh`);
+    root.style.setProperty('--workspace-row-gap', `${preferences.workspaceRows.row_gap}lh`);
     root.dataset.tabBarPosition = preferences.tabBarPosition;
     root.dataset.density = preferences.compact ? 'compact' : 'comfortable'; root.dataset.indicators = preferences.indicators; root.dataset.toastPosition = preferences.toastPosition;
     this.changed(this.preferences, colors);

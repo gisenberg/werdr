@@ -30,7 +30,7 @@ export function workspaceEntries(machine: Machine, workspaces: Workspace[], coll
     if (parent) parents.set(key, parent);
   }
   const emitted = new Set<string>(), entries: WorkspaceEntry[] = [];
-  const matches = (workspace: Workspace) => `${machine.label} ${workspace.label} ${workspace.workspace_id} ${workspace.worktree?.repo_name || ''} ${workspace.worktree?.checkout_path || ''}`.toLowerCase().includes(query);
+  const matches = (workspace: Workspace) => `${machine.label} ${workspace.label} ${workspace.workspace_id} ${workspace.branch || ''} ${Object.values(workspace.tokens || {}).join(' ')} ${workspace.worktree?.repo_name || ''} ${workspace.worktree?.checkout_path || ''}`.toLowerCase().includes(query);
   for (const workspace of workspaces) {
     const members = workspace.worktree && groups.get(workspace.worktree.repo_key);
     const parent = workspace.worktree && parents.get(workspace.worktree.repo_key);

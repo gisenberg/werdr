@@ -29,6 +29,20 @@ class Endpoint implements NativeEndpoint {
   close() { this.closed = true; this.listeners = []; }
 }
 
+test('workspace row metadata rejects malformed optional fields without taking a compatible host offline', async () => {
+  for (const fields of [{ custom_label: 'false' }, { branch: 3 }, { git_ahead_behind: null }, { git_ahead_behind: [1] }, { git_ahead_behind: [-1, 0] }, { git_ahead_behind: [0, 1.5] }]) {
+    const directory = await mkdtemp(join(tmpdir(), 'werdr-workspace-fleet-'));
+    const endpoints = { good: new Endpoint(), bad: new Endpoint() };
+    Object.assign(endpoints.bad.snapshot.workspaces[0], fields);
+    const fleet = new Fleet(async () => [{ id: 'good', label: 'Good', enabled: true }, { id: 'bad', label: 'Bad', enabled: true }], join(directory, 'notices.json'), async machine => endpoints[machine.id as 'good' | 'bad']);
+    try {
+      await fleet.start();
+      await until(() => fleet.state().hosts[0]?.connection === 'online' && fleet.state().hosts[1]?.connection === 'offline');
+      assert.equal(fleet.state().hosts[1].snapshot, undefined);
+    } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+  }
+});
+
 test('semantic notifications exclusively use the advertised stream and retain native facts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'werdr-semantic-fleet-'));
   const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: true };

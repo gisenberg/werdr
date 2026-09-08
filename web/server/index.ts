@@ -73,20 +73,20 @@ function reply(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));
 }
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(req: IncomingMessage, maxBytes = 65536): Promise<Record<string, unknown>> {
   if (req.headers['content-type'] !== 'application/json') throw new Error('Expected JSON');
   const chunks: Buffer[] = []; let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 65536) throw new Error('Request too large');
+    if (size > maxBytes) throw new Error('Request too large');
     chunks.push(chunk);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString());
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected object');
   return value;
 }
-async function authorizedBody(req: IncomingMessage) {
-  const value = await body(req);
+async function authorizedBody(req: IncomingMessage, maxBytes = 65536) {
+  const value = await body(req, maxBytes);
   if (!session(req)) throw new ManagementError('Sign in required', 401);
   return value;
 }
@@ -147,7 +147,8 @@ const handler: RequestListener = async (req, res) => {
         return reply(res, 200, { ok: true });
       }
       if (url.pathname === '/api/settings' && req.method === 'GET') return reply(res, 200, settings.read());
-      if (url.pathname === '/api/settings' && req.method === 'POST') { const value = await authorizedBody(req); return reply(res, 200, await settings.update(value.revision, value.preferences)); }
+      // Both bounded row layouts, saved groups and keybindings must fit together.
+      if (url.pathname === '/api/settings' && req.method === 'POST') { const value = await authorizedBody(req, 131072); return reply(res, 200, await settings.update(value.revision, value.preferences)); }
       if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: fleet.state().hosts.map(host => host.machine) });
       if (url.pathname === '/api/fleet' && req.method === 'GET') return reply(res, 200, fleet.state());
       if (url.pathname === '/api/hosts/edit' && req.method === 'POST') { await management.edit(await authorizedBody(req)); return reply(res, 200, { ok: true }); }

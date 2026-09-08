@@ -65,7 +65,7 @@ test('version-seven preferences migrate keybindings privately without resetting 
     const { shortcuts, ...previous } = { ...defaults, theme: 'nord', collapsedWorkspaceGroups: ['saved'] };
     await writeFile(path, JSON.stringify({ version: 7, revision: 31, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path); assert.deepEqual(store.read(), { revision: 31, preferences: { ...previous, shortcuts } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 13);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 14);
     const changed = structuredClone(store.read()); changed.preferences.shortcuts.prefix = 'ctrl+a';
     await store.update(31, changed.preferences); changed.preferences.shortcuts.bindings.help.length = 0;
     assert.deepEqual((await settingsStore(path)).read().preferences.shortcuts.bindings.help, ['prefix+?']);
@@ -150,7 +150,7 @@ test('version-eight keybindings migrate Navigate defaults while retaining remaps
     assert.deepEqual(settings.preferences.shortcuts.bindings.help, ['prefix+f1']);
     assert.deepEqual(settings.preferences.shortcuts.bindings.close_pane, []);
     assert.deepEqual(settings.preferences.shortcuts.bindings.navigate_workspace_down, ['down']);
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 13);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 14);
     assert.deepEqual((await settingsStore(path)).read(), settings);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
