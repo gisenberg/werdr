@@ -953,6 +953,18 @@ impl Terminal {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> Result<(), Error> {
+        #[cfg(windows)]
+        if self.cols()? != cols || self.rows()? != rows {
+            // The recent-output cache observes the last viewport row. Keeping
+            // that pin across reflow makes Ghostty retain trailing blank rows,
+            // pushing the live text into history. A read observer must not
+            // influence which terminal rows survive a resize.
+            // SAFETY: This terminal owns the reference, and freeing null is supported.
+            unsafe {
+                ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
+            }
+            self.tracked_row = ptr::null_mut();
+        }
         let size_report = ffi::GhosttySizeReportSize {
             rows,
             columns: cols,

@@ -57,7 +57,10 @@ pub(super) fn update(core: &mut GhosttyPaneCore) {
     let mut moved_snapshot = Vec::new();
     if pending_refresh && history_changed {
         let viewport_rows = scrollbar.map_or(1, |metrics| metrics.len.max(1));
-        let recovery_rows = history_growth.max(viewport_rows).min(CACHE_LINES);
+        let recovery_rows = history_growth
+            .max(viewport_rows)
+            .min(CACHE_LINES)
+            .min(total.saturating_sub(len));
         for offset in (1..=recovery_rows).rev().step_by(viewport_rows) {
             super::ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset);
             let Ok(moved) = visible_render_lines(core) else {

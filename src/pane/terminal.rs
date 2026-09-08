@@ -5458,7 +5458,7 @@ mod tests {
         pane.process_pty_bytes(
             PaneId::from_raw(1),
             0,
-            b"PS C:\\work\\resize> Write-Output 'RESIZE_RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ'\r\nRESIZE_RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\nPS C:\\work\\resize> ",
+            b"PS C:\\work\\resize> Write-Output ('RESIZE_' + 'RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ')\r\nRESIZE_RETAIN_ME_ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\nPS C:\\work\\resize> ",
             &tx,
         );
         pane.set_scroll_offset_from_bottom(0);
@@ -5471,6 +5471,8 @@ mod tests {
             "resize lost the live screen after restoring Copy mode's scroll offset"
         );
         assert_eq!(pane.scroll_metrics().unwrap().offset_from_bottom, 0);
+        assert_eq!(pane.scroll_metrics().unwrap().max_offset_from_bottom, 0);
+        assert_eq!(pane.recent_text(100).matches("RESIZE_RETAIN_ME").count(), 1);
     }
 
     #[test]

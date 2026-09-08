@@ -136,10 +136,12 @@ Exact retention across a reconnect to the same native boot remains unproven unti
 ## Windows resize recovery
 
 Restoring Copy mode's native scroll offset before shrinking the terminal could leave the live Windows viewport empty.
-The Windows recent-output cache masked that empty screen, preventing the existing resize recovery from running.
-Resize recovery now reads the actual terminal text and ANSI instead of consulting that cache.
-The regression test fails on Windows before the fix and passes afterward; Linux also retains the screen, and existing blank-screen and scrolled-history resize tests remain covered.
-An isolated real PowerShell comparison reproduces the loss in the official runtime and verifies retention in the fixed build.
+The Windows recent-output cache tracked the last viewport row, preserving unused blank rows during reflow and pushing live text into history.
+That observer is now released before geometry changes, and cache recovery scans only available history.
+Resize recovery also reads actual terminal text and ANSI instead of consulting cached output that can mask an empty screen.
+The regression checks visible retention, no artificial scrollback, and a single copy of the output after resize.
+It fails on Windows before the fix and passes afterward; Linux also passes, and existing blank-screen and scrolled-history resize tests remain covered.
+An isolated real PowerShell comparison reproduces the loss in the official runtime and verifies retention without duplicate history in the fixed build.
 This fix requires adoption by the owning native runtime; the deployed Windows runtimes remain unchanged while their live sessions require preservation.
 
 ## Native runtime rollout gate
