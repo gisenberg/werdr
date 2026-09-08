@@ -118,3 +118,36 @@ The generator may need the host compiler's include path through its normal Clang
 ```sh
 bindgen vendor/libghostty-vt/include/ghostty/vt.h --allowlist-function 'ghostty_.*' --allowlist-type 'Ghostty.*' --allowlist-var 'GHOSTTY_.*' --with-derive-default --output src/ghostty/bindings.rs -- -Ivendor/libghostty-vt/include
 ```
+
+## 0004 preserve pending single character shifts in VT exports
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0004-preserve-pending-charset-shift.patch`
+
+herdr issue: none; browser desktop-parity terminal restoration work in the werdr fork
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/formatter.zig`
+
+reason: ScreenFormatter exports character-set designations and locking invocations but omits a pending SS2 or SS3.
+Restoring such an export changes the next printed character, for example turning a British-character-set pound sign into a hash.
+Emit the pending single shift after screen content, without consuming the live source state.
+This does not constitute complete terminal-state serialization.
+
+remove when: upstream ScreenFormatter retains pending single shifts and the primary/alternate-screen restoration regression passes without this patch.
+
+verification:
+
+```sh
+just test-one explicit_screen_export
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```

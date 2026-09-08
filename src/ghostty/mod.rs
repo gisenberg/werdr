@@ -4077,6 +4077,36 @@ mod tests {
     }
 
     #[test]
+    fn explicit_screen_export_preserves_pending_single_shift() {
+        for screen in [ActiveScreen::Primary, ActiveScreen::Alternate] {
+            for shift in [b"\x1b*A\x1bN".as_slice(), b"\x1b+A\x1bO".as_slice()] {
+                let mut source = Terminal::new(40, 5, 1_000_000).unwrap();
+                let mut restored = Terminal::new(40, 5, 1_000_000).unwrap();
+                if screen == ActiveScreen::Alternate {
+                    source.write(b"\x1b[?1049h");
+                    restored.write(b"\x1b[?1049h");
+                }
+                source.write(b"before ");
+                // Designate the British charset and select it for one character.
+                source.write(shift);
+                let exported = source.screen_vt(screen).unwrap();
+                assert_eq!(source.screen_vt(screen).unwrap(), exported);
+                restored.write(exported.as_bytes());
+                // Export must neither consume the source shift nor lose it on restore.
+                source.write(b"##");
+                restored.write(b"##");
+                let expected = source.read_ansi_viewport((0, 0), (39, 4), false).unwrap();
+                assert!(expected.contains("£#"), "{expected:?}");
+                assert_eq!(
+                    restored.read_ansi_viewport((0, 0), (39, 4), false).unwrap(),
+                    expected,
+                    "screen={screen:?}, shift={shift:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn explicit_screen_exports_restore_both_buffers_and_current_cursor() {
         let mut source = Terminal::new(40, 5, 1_000_000).unwrap();
         for row in 0..40 {

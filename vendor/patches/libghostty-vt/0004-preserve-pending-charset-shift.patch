@@ -1,0 +1,30 @@
+diff --git a/vendor/libghostty-vt/src/terminal/formatter.zig b/vendor/libghostty-vt/src/terminal/formatter.zig
+index 553ea28d..2702a728 100644
+--- a/vendor/libghostty-vt/src/terminal/formatter.zig
++++ b/vendor/libghostty-vt/src/terminal/formatter.zig
+@@ -478,6 +478,7 @@ pub const ScreenFormatter = struct {
+ 
+         /// Emit character set designations and invocations.
+         /// This includes G0-G3 designations (ESC ( ) * +) and GL/GR invocations.
++        /// Pending SS2/SS3 invocations are retained for the next printed character.
+         charsets: bool,
+ 
+         /// Emit nothing.
+@@ -650,6 +651,17 @@ pub const ScreenFormatter = struct {
+                 };
+                 try writer.print("{s}", .{seq});
+             }
++
++            // A single shift belongs to the next printed character, so emit it
++            // after the content without consuming it in the source screen.
++            if (charset.single_shift) |slot| {
++                const seq = switch (slot) {
++                    .G0, .G1 => unreachable, // Only SS2 and SS3 exist.
++                    .G2 => "\x1bN",
++                    .G3 => "\x1bO",
++                };
++                try writer.print("{s}", .{seq});
++            }
+         }
+ 
+         // Emit cursor position using CUP (CSI H)

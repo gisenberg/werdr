@@ -478,6 +478,7 @@ pub const ScreenFormatter = struct {
 
         /// Emit character set designations and invocations.
         /// This includes G0-G3 designations (ESC ( ) * +) and GL/GR invocations.
+        /// Pending SS2/SS3 invocations are retained for the next printed character.
         charsets: bool,
 
         /// Emit nothing.
@@ -647,6 +648,17 @@ pub const ScreenFormatter = struct {
                     .G1 => "\x1b~", // LS1R
                     .G2 => unreachable,
                     .G3 => "\x1b|", // LS3R
+                };
+                try writer.print("{s}", .{seq});
+            }
+
+            // A single shift belongs to the next printed character, so emit it
+            // after the content without consuming it in the source screen.
+            if (charset.single_shift) |slot| {
+                const seq = switch (slot) {
+                    .G0, .G1 => unreachable, // Only SS2 and SS3 exist.
+                    .G2 => "\x1bN",
+                    .G3 => "\x1bO",
                 };
                 try writer.print("{s}", .{seq});
             }
