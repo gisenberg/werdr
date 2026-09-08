@@ -13,11 +13,14 @@ export const shortcutDefaults = {
   split_vertical: ['prefix+v', 'ctrl+d', 'super+d'], split_horizontal: ['prefix+minus', 'ctrl+shift+d', 'super+shift+d'],
   close_pane: ['prefix+x'], zoom: ['prefix+z'], resize_mode: ['prefix+r'],
   resize_pane_left: [], resize_pane_down: [], resize_pane_up: [], resize_pane_right: [], toggle_sidebar: ['prefix+b'],
+  navigate_workspace_up: ['up'], navigate_workspace_down: ['down'],
+  navigate_pane_left: ['h'], navigate_pane_down: ['j'], navigate_pane_up: ['k'], navigate_pane_right: ['l'],
 } satisfies Record<string, string[]>;
 export type ShortcutAction = keyof typeof shortcutDefaults;
 export interface Shortcuts { prefix: string; bindings: Record<ShortcutAction, string[]> }
 export const defaultShortcuts: Shortcuts = { prefix: 'ctrl+b', bindings: shortcutDefaults };
 export const shortcutActions = Object.keys(shortcutDefaults) as ShortcutAction[];
+export function isNavigateAction(action: ShortcutAction) { return action.startsWith('navigate_'); }
 export interface Chord { key: string; ctrl: boolean; alt: boolean; shift: boolean; meta: boolean; prefix: boolean }
 const names: Record<string, string> = { esc: 'Escape', escape: 'Escape', enter: 'Enter', return: 'Enter', tab: 'Tab', backspace: 'Backspace', bs: 'Backspace', delete: 'Delete', insert: 'Insert', home: 'Home', end: 'End', pageup: 'PageUp', pagedown: 'PageDown', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', space: ' ', minus: '-', plus: '+', comma: ',', period: '.', slash: '/', backslash: '\\', quote: "'", double_quote: '"', 'double-quote': '"', semicolon: ';', colon: ':', percent: '%', ampersand: '&', backtick: '`' };
 const modifiers: Record<string, 'ctrl' | 'alt' | 'shift' | 'meta' | 'prefix'> = { ctrl: 'ctrl', control: 'ctrl', shift: 'shift', alt: 'alt', option: 'alt', meta: 'alt', super: 'meta', cmd: 'meta', command: 'meta', prefix: 'prefix' };
@@ -46,11 +49,12 @@ export function matchesChord(chord: Chord, event: ShortcutKey) {
   return chord.key.toLowerCase() === event.key.toLowerCase() && chord.ctrl === event.ctrlKey && chord.alt === event.altKey && chord.meta === event.metaKey && (chord.shift === event.shiftKey || implicitShift && event.shiftKey);
 }
 export interface Binding { chord: Chord; action: ShortcutAction; index?: number }
-export function compileShortcuts(value: Shortcuts): { prefix: Chord; bindings: Binding[] } {
-  return { prefix: parseChord(value.prefix), bindings: shortcutActions.flatMap(action => value.bindings[action].flatMap(text => {
+export function compileShortcuts(value: Shortcuts): { prefix: Chord; bindings: Binding[]; navigate: Binding[] } {
+  const all = shortcutActions.flatMap(action => value.bindings[action].flatMap(text => {
     if (text.endsWith('1..9')) return Array.from({ length: 9 }, (_, index) => ({ chord: parseChord(`${text.slice(0, -4)}${index + 1}`), action, index }));
     return [{ chord: parseChord(text), action }];
-  })) };
+  }));
+  return { prefix: parseChord(value.prefix), bindings: all.filter(binding => !isNavigateAction(binding.action)), navigate: all.filter(binding => isNavigateAction(binding.action)) };
 }
 export function validateShortcuts(value: unknown): Shortcuts {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Keybindings must be an object.');
@@ -68,15 +72,17 @@ export function validateShortcuts(value: unknown): Shortcuts {
     if (!['switch_tab', 'switch_workspace', 'focus_agent'].includes(action) && values.some(text => text.includes('1..9'))) throw new Error('1..9 is only available for indexed tab, workspace and agent switching.');
   }
   const out = { prefix: input.prefix.trim(), bindings };
-  const compiled = compileShortcuts(out), seen: Chord[] = [];
+  const compiled = compileShortcuts(out), seen: Chord[] = [], navigateSeen: Chord[] = [];
   const overlaps = (a: Chord, b: Chord) => a.key.toLowerCase() === b.key.toLowerCase() && a.ctrl === b.ctrl && a.alt === b.alt && a.meta === b.meta && a.prefix === b.prefix && (a.shift === b.shift || shiftedPunctuation.has(a.key));
-  for (const { chord, action } of compiled.bindings) {
-    if (seen.some(previous => overlaps(previous, chord))) throw new Error(`Conflicting keybinding for ${action}.`);
+  for (const { chord, action } of [...compiled.bindings, ...compiled.navigate]) {
+    const navigate = isNavigateAction(action), scope = navigate ? navigateSeen : seen;
+    if (scope.some(previous => overlaps(previous, chord))) throw new Error(`Conflicting keybinding for ${action}.`);
     if (overlaps({ ...chord, prefix: false }, prefix)) throw new Error('A binding cannot also be the prefix or the double-prefix forwarding key.');
-    if (!chord.prefix && [...chord.key].length === 1 && !chord.ctrl && !chord.alt && !chord.meta) throw new Error('Direct printable bindings would intercept terminal typing. Use prefix+ instead.');
+    if (navigate && (chord.prefix || chord.key === 'Escape' || !chord.ctrl && !chord.alt && !chord.meta && ((!chord.shift && ['Enter', 'ArrowLeft', 'ArrowRight', ...'123456789'].includes(chord.key)) || chord.key === 'Tab'))) throw new Error('Navigate bindings cannot use prefix syntax or reserved navigation keys.');
+    if (!navigate && !chord.prefix && [...chord.key].length === 1 && !chord.ctrl && !chord.alt && !chord.meta) throw new Error('Direct printable bindings would intercept terminal typing. Use prefix+ instead.');
     // Clipboard gestures stay owned by native selection and browser paste.
     if ((chord.ctrl || chord.meta) && !chord.alt && !chord.shift && ['c', 'v'].includes(chord.key)) throw new Error('Ctrl/Super+C and Ctrl/Super+V are reserved for clipboard access.');
-    seen.push(chord);
+    scope.push(chord);
   }
   if ((prefix.ctrl || prefix.meta) && !prefix.alt && !prefix.shift && ['c', 'v'].includes(prefix.key)) throw new Error('Clipboard gestures cannot be the prefix.');
   return out;

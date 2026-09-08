@@ -24,8 +24,11 @@ Browser cookies last 90 days and survive gateway restarts through an atomic owne
 Browser-session revocation removes persisted authority and closes the matching terminal controllers immediately while herdr retains the shells.
 Token replacement or explicit access-token revocation invalidates token-authenticated sessions; their persisted token fingerprint also prevents resurrection if shutdown interrupts rotation.
 The browser owns navigation selection, its viewport, mobile chrome, and display rendering.
-`ShortcutMode` owns prefix and resize state, while `DesktopShortcuts` resolves configured commands before terminal keyboard encoding.
-Bindings and prefix preferences live in the version-eight browser settings store, with migration and revision-checked saves.
+`ShortcutMode` owns prefix, Navigate, and resize state, while `DesktopShortcuts` resolves configured commands before terminal keyboard encoding.
+Bindings and prefix preferences live in the version-nine browser settings store, with migration and revision-checked saves.
+`NavigatePreview` retains a stable host/workspace highlight independently from the active terminal.
+Workspace commands capture this target before leaving the mode, while directional pane focus preserves the expected attachment transition.
+The mobile switcher uses a pure section model and a retained DOM renderer, makes the background inert, and restores terminal or copy focus when hidden.
 Command key ownership suppresses repeats across dialogs and selection changes without consuming releases that belong to terminal input.
 Literal prefixes from copy mode use the same native encoder and image-paste ordering queue as ordinary terminal input.
 Layout results do not import another native client's focus; explicit browser focus actions and context-matched creation results control browser selection.

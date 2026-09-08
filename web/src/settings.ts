@@ -125,7 +125,7 @@ export class Settings {
     parent.append(rows);
     const keys = document.createElement('details'); keys.id = 'settings-keybindings'; keys.className = 'shortcut-settings';
     const legend = document.createElement('summary'); legend.textContent = 'KEYBINDINGS'; keys.append(legend);
-    const keyHint = document.createElement('p'); keyHint.textContent = 'Browser bindings are shared across your devices. Use native syntax such as prefix+shift+n or ctrl+alt+n. Separate alternatives with a comma; an empty field disables an action. Use comma or plus for those literal keys. Super means Command on macOS or the Windows key. Browser and OS reserved shortcuts may be unavailable; prefer prefix bindings.'; keys.append(keyHint);
+    const keyHint = document.createElement('p'); keyHint.textContent = 'Browser bindings are shared across your devices. Use native syntax such as prefix+shift+n or ctrl+alt+n. Separate alternatives with a comma; an empty field disables an action. Use comma or plus for those literal keys. Super means Command on macOS or the Windows key. Navigate bindings apply only inside Navigate mode and use bare keys such as h or up. Other letter bindings need prefix+. Browser and OS reserved shortcuts may be unavailable; prefer prefix bindings.'; keys.append(keyHint);
     const prefixLabel = document.createElement('label'); prefixLabel.textContent = 'PREFIX';
     const prefix = document.createElement('input'); prefix.id = 'settings-prefix'; prefix.value = preferences.shortcuts.prefix; prefix.maxLength = 80; prefixLabel.append(prefix); keys.append(prefixLabel);
     for (const action of shortcutActions) {

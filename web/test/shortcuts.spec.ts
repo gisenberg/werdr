@@ -152,3 +152,184 @@ test('moving a pane follows its destination after automatic native fallback but 
     expect(new URL(page.url()).searchParams.get('pane')).toBe(latest);
   } finally { release(); await runtime.close(); }
 });
+
+test('Navigate previews workspaces without terminal churn and confirms stable targets', async ({ page }) => {
+  const runtime = await fixture(); const inputs: string[] = []; const actions: string[] = [];
+  try {
+    await capture(page, inputs); await login(page, runtime);
+    const first = new URL(page.url()).searchParams.get('workspace');
+    await prefix(page, 'Shift+N'); await expect(page.locator('#workspaces button[data-id]')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const second = new URL(page.url()).searchParams.get('workspace'); expect(second).not.toBe(first);
+    const textarea = await page.locator('.pane-active .pane-content textarea').elementHandle(); const url = page.url();
+    page.on('request', request => { if (request.url().endsWith('/api/action')) actions.push(request.postDataJSON().action); });
+    await prefix(page, 'w'); await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    await page.keyboard.press('ArrowUp');
+    await expect(page.locator('#workspaces button.navigate-preview')).toHaveAttribute('data-id', new RegExp(`/${first}$`));
+    expect(page.url()).toBe(url); expect(await textarea!.evaluate(node => node.isConnected)).toBe(true);
+    expect(actions).toEqual([]); expect(inputs).toEqual([]);
+    await page.keyboard.press('9'); await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    await page.keyboard.press('Escape'); await expect(page.locator('.navigate-preview')).toHaveCount(0); expect(page.url()).toBe(url);
+    await prefix(page, 'w'); await page.keyboard.press('ArrowUp'); await page.keyboard.press('Enter');
+    await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).toBe(first);
+    await expect(page.locator('#shortcut-status')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    await prefix(page, 'w'); await page.keyboard.press('2');
+    await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).toBe(second);
+    expect(inputs).toEqual([]);
+  } finally { await runtime.close(); }
+});
+
+test('Navigate pane focus retains workspace preview and rename targets the preview', async ({ page }) => {
+  const runtime = await fixture();
+  try {
+    await login(page, runtime); const first = new URL(page.url()).searchParams.get('workspace');
+    await prefix(page, 'Shift+N'); await expect(page.locator('#workspaces button[data-id]')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const second = new URL(page.url()).searchParams.get('workspace'), pane = new URL(page.url()).searchParams.get('pane');
+    await prefix(page, 'w'); await page.keyboard.press('ArrowUp'); await page.keyboard.press('h');
+    await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(pane);
+    await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    await expect(page.locator('#workspaces button.navigate-preview')).toHaveAttribute('data-id', new RegExp(`/${first}$`));
+    expect(new URL(page.url()).searchParams.get('workspace')).toBe(second);
+    const rename = page.waitForRequest(request => request.url().endsWith('/api/action') && request.postDataJSON().action === 'workspace.rename');
+    await page.keyboard.press('Shift+W');
+    await page.locator('#rename-value').fill('Preview renamed');
+    await page.locator('#rename-form button[type=submit]').click();
+    expect((await rename).postDataJSON().id).toBe(first);
+    await expect(page.locator('#shortcut-status')).toBeHidden();
+    expect(new URL(page.url()).searchParams.get('workspace')).toBe(second);
+  } finally { await runtime.close(); }
+});
+
+test('Navigate cancellation restores copy while confirming the same workspace exits copy', async ({ page }) => {
+  const runtime = await fixture();
+  try {
+    await login(page, runtime);
+    await prefix(page, '['); await expect(page.locator('.copy-layer')).toBeVisible();
+    await prefix(page, 'w'); await page.keyboard.press('Escape'); await expect(page.locator('.copy-layer')).toBeVisible();
+    await prefix(page, 'w'); await page.keyboard.press('Enter'); await expect(page.locator('.copy-layer')).toHaveCount(0);
+    await focus(page); await prefix(page, '['); await expect(page.locator('.copy-layer')).toBeVisible();
+    await prefix(page, 'w'); await page.keyboard.press('1'); await expect(page.locator('.copy-layer')).toHaveCount(0);
+  } finally { await runtime.close(); }
+});
+
+test('mobile Navigate switches workspaces and tabs, keeps terminals mounted, and suspends for menus', async ({ page }) => {
+  const runtime = await fixture(); const inputs: string[] = [];
+  try {
+    await capture(page, inputs); await login(page, runtime);
+    const first = new URL(page.url()).searchParams.get('workspace');
+    await prefix(page, 'Shift+N'); await expect(page.locator('#workspaces button[data-id]')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const second = new URL(page.url()).searchParams.get('workspace');
+    await prefix(page, 'c'); await expect(page.locator('#tabs button')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+    const activeTab = new URL(page.url()).searchParams.get('tab');
+    const textarea = await page.locator('.pane-active .pane-content textarea').elementHandle();
+    await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#navigate-toggle').click();
+    const switcher = page.locator('#navigate-switcher'); await expect(switcher).toBeVisible();
+    await expect(page.locator('#app')).toHaveAttribute('inert', '');
+    expect(await textarea!.evaluate(node => node.isConnected)).toBe(true);
+    await expect(switcher.locator('[data-section=workspaces] button')).toHaveCount(3);
+    await expect(switcher.locator('[data-section=tabs] button')).toHaveCount(3);
+    await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowUp');
+    await expect(switcher.locator('.navigate-preview')).toHaveAttribute('data-id', new RegExp(`/${first}$`));
+    expect(new URL(page.url()).searchParams.get('workspace')).toBe(second);
+    expect(inputs).toEqual([]);
+    await page.screenshot({ path: 'test-results/navigate-switcher-mobile.png' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await switcher.getByRole('button', { name: 'KEYBOARD SHORTCUTS', exact: true }).click();
+    await expect(switcher).toBeHidden(); await expect(page.locator('#shortcut-help')).toBeVisible();
+    await expect(page.locator('#app')).not.toHaveAttribute('inert', ''); await page.locator('#shortcut-help button').click();
+    await page.locator('#navigate-toggle').click();
+    await switcher.locator('[data-section=tabs] button').nth(1).click();
+    await expect(switcher).toBeHidden(); await expect.poll(() => new URL(page.url()).searchParams.get('tab')).not.toBe(activeTab);
+    await expect(page.locator('#shield')).toBeHidden(); await page.locator('#navigate-toggle').click();
+    await switcher.locator('[data-section=workspaces] button').nth(1).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('workspace')).toBe(first);
+    await expect(switcher).toBeHidden(); await page.locator('#navigate-toggle').click();
+    await switcher.getByRole('button', { name: '[+] NEW TAB', exact: true }).click();
+    await expect(switcher).toBeHidden(); await expect(page.locator('#tabs button')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await page.locator('#navigate-toggle').click();
+    await switcher.getByRole('button', { name: '[X] CLOSE', exact: true }).click();
+    await expect(switcher).toBeHidden(); await expect(page.locator('#app')).not.toHaveAttribute('inert', '');
+  } finally { await runtime.close(); }
+});
+
+test('mobile Navigate retains unavailable hosts, isolates scroll, and follows native agent targets', async ({ page }) => {
+  const runtime = await fixture(); const inputs: string[] = [];
+  try {
+    const { mkdir, writeFile } = await import('node:fs/promises'); const { join } = await import('node:path');
+    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'a'.repeat(32), label: 'Unavailable host', target: '127.0.0.1', session: 'unavailable', enabled: false }] }), { mode: 0o600 });
+    await capture(page, inputs); await login(page, runtime);
+    const original = new URL(page.url()).searchParams.get('pane');
+    const agent = JSON.parse(await runtime.cli('workspace', 'create')).result.root_pane;
+    await runtime.cli('pane', 'report-agent', agent.pane_id, '--source', 'werdr-navigate-test', '--agent', 'Claude', '--state', 'working', '--seq', '1');
+    await expect(page.locator('#agents button')).toHaveCount(1); await expect(page.locator('#hosts button')).toHaveCount(2);
+    await page.setViewportSize({ width: 390, height: 540 }); await page.locator('#navigate-toggle').click();
+    const switcher = page.locator('#navigate-switcher'); await expect(switcher).toBeVisible();
+    const unavailable = switcher.getByRole('button', { name: 'Unavailable host', exact: true });
+    await expect(unavailable).toHaveAttribute('aria-disabled', 'true');
+    // Unavailable rows remain inspectable and report why they cannot activate.
+    await unavailable.click({ force: true }); await expect(switcher.locator('.switcher-notice')).toContainText('not ready');
+    expect(new URL(page.url()).searchParams.get('pane')).toBe(original); await expect(switcher).toBeVisible();
+    await switcher.locator('.switcher-content').hover(); await page.mouse.wheel(0, 700);
+    await expect.poll(() => switcher.locator('.switcher-content').evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    expect(inputs).toEqual([]); expect(new URL(page.url()).searchParams.get('pane')).toBe(original);
+    await switcher.locator('[data-section=agents] button').click();
+    await expect(switcher).toBeHidden(); await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe(agent.pane_id);
+    await expect(page.locator('#shield')).toBeHidden(); expect(inputs).toEqual([]);
+    await page.locator('#navigate-toggle').click(); await page.keyboard.press('Escape');
+    await expect(page.locator('.pane-active .pane-content textarea')).toBeFocused();
+    await page.keyboard.type('x'); await expect.poll(() => inputs.join('')).toBe('x');
+    await page.locator('#navigate-toggle').click(); await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(switcher).toBeHidden(); await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    await expect(page.locator('.pane-active .pane-content textarea')).toBeFocused();
+    await page.keyboard.press('Escape'); await page.keyboard.type('y'); await expect.poll(() => inputs.join('')).toBe('xy');
+  } finally { await runtime.close(); }
+});
+
+test('mobile empty switcher returns after dismissing settings or keyboard help', async ({ page }) => {
+  const runtime = await fixture();
+  try {
+    await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#navigate-toggle').click();
+    const switcher = page.locator('#navigate-switcher'); await expect(switcher).toBeVisible();
+    await switcher.getByRole('button', { name: 'KEYBOARD SHORTCUTS', exact: true }).click();
+    await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(switcher).toBeHidden();
+    await page.locator('#shortcut-help button').click(); await expect(switcher).toBeVisible();
+    await switcher.getByRole('button', { name: 'SETTINGS', exact: true }).click();
+    await expect(page.locator('#settings-dialog')).toBeVisible(); await page.locator('#settings-cancel').click();
+    await expect(switcher).toBeVisible();
+    await switcher.getByRole('button', { name: '[+] NEW WORKSPACE', exact: true }).click();
+    await expect(switcher).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
+    expect(new URL(page.url()).searchParams.get('workspace')).toBeTruthy();
+  } finally { await runtime.close(); }
+});
+
+test('Navigate survives the expected attachment of a previously hidden pane', async ({ page }) => {
+  const runtime = await fixture(); const queued: (() => void)[] = []; let hold = true;
+  try {
+    await login(page, runtime); const left = new URL(page.url()).searchParams.get('pane')!;
+    await prefix(page, 'v'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'z');
+    await expect(page.locator('.terminal-pane:visible')).toHaveCount(1);
+    await page.routeWebSocket('**/ws/terminal?*', socket => {
+      const server = socket.connectToServer();
+      if (new URL(socket.url()).searchParams.get('pane') !== left) return;
+      server.onMessage(message => { if (hold) queued.push(() => socket.send(message)); else socket.send(message); });
+    });
+    await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
+    await expect(page.locator('.terminal-pane')).toHaveCount(1); await focus(page);
+    await prefix(page, 'w'); await page.keyboard.press('h');
+    await expect.poll(() => queued.length).toBeGreaterThan(0);
+    await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    hold = false; for (const release of queued.splice(0)) release();
+    await expect(page.locator('#shield')).toBeHidden();
+    await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', left);
+    await expect(page.locator('#shortcut-status')).toContainText('[NAVIGATE]');
+    await page.keyboard.press('Escape'); await expect(page.locator('#shortcut-status')).toBeHidden();
+  } finally { hold = false; for (const release of queued.splice(0)) release(); await runtime.close(); }
+});

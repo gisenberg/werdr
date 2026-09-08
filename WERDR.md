@@ -51,7 +51,8 @@ Generation atomically updates `WERDR_TOKEN_FILE`, invalidates the old token, and
 Password-authenticated sessions remain signed in, and token-authenticated sessions cannot generate tokens.
 
 Use the workspace `[+]` control to launch a shell.
-On phones, `[H] HOSTS` opens the navigation drawer.
+On phones, `[W] SWITCH` opens the full-screen host, agent, workspace, and tab switcher.
+`[H] HOSTS` opens the searchable navigation drawer.
 
 The C64 font and redistributable artwork are bundled; provision the other faces and Workbench screenshot privately using the [asset setup](werdr/BOOT_FONTS.md) to match wmux.
 
@@ -65,6 +66,14 @@ Press and release it, then press a command key: `v` splits right, `-` splits dow
 Press the prefix twice to send a literal prefix key to the pane, including from copy mode.
 `Ctrl/Cmd+K` opens the command palette, while `Ctrl/Cmd+D` and `Ctrl/Cmd+Shift+D` retain the direct split shortcuts.
 
+Prefix followed by `w` enters Navigate mode.
+Up/Down previews workspaces without switching the active terminal; Enter confirms, and bare `1` through `9` selects a numbered workspace.
+Desktop preview wraps through visible groups; phone preview clamps and includes expanded groups.
+`h/j/k/l` and Left/Right move between panes while retaining the workspace preview; Tab/Shift+Tab cycles panes and exits Navigate.
+Escape or the configured prefix cancels, returning to Copy mode when it is still active.
+Workspace rename, close, creation source, and worktree commands use the highlighted workspace; tab and pane commands use the active terminal context.
+On phones, the switcher supports touch selection, isolated scrolling, and menu actions without removing the terminal.
+
 Prefix followed by `r` enters resize mode.
 Use `h/j/k/l` or arrows to resize repeatedly, then press Enter, Escape, or the configured resize binding to finish.
 Prefix followed by `[` opens native scrollback copy mode; its existing search and movement keys stay active outside a prefix command.
@@ -74,14 +83,16 @@ Bindings use native syntax such as `prefix+shift+n`, `ctrl+alt+n`, or `super+k`;
 Separate alternatives with commas, use `comma` or `plus` for literal punctuation, and leave an action empty to disable its bindings.
 Indexed tab, workspace, and agent actions use a `1..9` range.
 Changes preview until saved, persist across browsers, and restore after gateway restarts.
-Validation rejects duplicate bindings, unmodified printable shortcuts that would intercept typing, and reserved copy/paste gestures.
+Navigate bindings form a separate scope and may use bare letters without intercepting terminal typing.
+Validation rejects conflicting bindings within a scope, reserved navigation keys, and reserved copy/paste gestures.
 Browser and OS shortcuts may not reach the page; configure a prefix alternative for those keys.
 
 Help shows the saved bindings and whether each action is available in the selected context.
 Editable controls, dialogs, IME composition, clipboard access, and held command keys retain their own input scope.
-Changing pane, attachment, or host cancels an armed command.
+Unrelated pane, attachment, or host changes cancel an armed command.
+Navigate preserves its own directional pane focus through the expected terminal attachment.
 Native fallback after a move still follows the moved pane, while a newer navigation or command prevents an older response from changing selection.
-The browser binding catalog covers its supported built-in actions; native custom shell bindings, navigation-mode controls, detach/reload/notification-target bindings, and last-pane tracking remain outside this catalog.
+The browser binding catalog covers its supported built-in actions; native custom shell bindings, detach/reload/notification-target bindings, and last-pane tracking remain outside this catalog.
 ## Current behavior
 
 **SETTINGS** provides native herdr palettes, custom semantic colors, live preview/cancel, system light/dark switching, terminal fonts, sidebar density/width, agent ordering, close confirmations, and notification options.

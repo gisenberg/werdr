@@ -16,7 +16,7 @@ test('browser prefix defaults match native actions and retain browser aliases', 
   for (const [action, bindings] of Object.entries(shortcutDefaults)) {
     if (action === 'command_palette') continue;
     const match = native.match(new RegExp(`${action}: BindingConfig::(?:one\\("([^"]+)"\\)|empty\\(\\))`));
-    assert.ok(match, action); assert.deepEqual(bindings.filter(value => value.startsWith('prefix+')), match[1] ? [match[1]] : [], action);
+    assert.ok(match, action); assert.deepEqual(bindings.filter(value => action.startsWith('navigate_') || value.startsWith('prefix+')), match[1] ? [match[1]] : [], action);
   }
   assert.deepEqual(validateShortcuts(defaultShortcuts), defaultShortcuts);
 });
@@ -65,7 +65,7 @@ test('version-seven preferences migrate keybindings privately without resetting 
     const { shortcuts, ...previous } = { ...defaults, theme: 'nord', collapsedWorkspaceGroups: ['saved'] };
     await writeFile(path, JSON.stringify({ version: 7, revision: 31, preferences: previous }), { mode: 0o600 });
     const store = await settingsStore(path); assert.deepEqual(store.read(), { revision: 31, preferences: { ...previous, shortcuts } });
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 8);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 9);
     const changed = structuredClone(store.read()); changed.preferences.shortcuts.prefix = 'ctrl+a';
     await store.update(31, changed.preferences); changed.preferences.shortcuts.bindings.help.length = 0;
     assert.deepEqual((await settingsStore(path)).read().preferences.shortcuts.bindings.help, ['prefix+?']);
@@ -97,4 +97,77 @@ test('repeats already held by terminal input never become new commands or steal 
   mode.blur(); assert.deepEqual(mode.down(key('d', { ctrlKey: true, repeat: true })), { consume: true }); assert.equal(mode.up('KeyD'), false);
   assert.deepEqual(parseChord('N+shift'), parseChord('shift+n'));
   assert.equal(parseChord('backslash').key.length, 1);
+});
+
+test('Navigate owns its separate keys and resolves prefix commands without stealing terminal letters', () => {
+  const mode = new ShortcutMode(defaultShortcuts);
+  assert.equal(press(mode, 'h').consume, false);
+  mode.mode = 'navigate';
+  assert.equal(press(mode, 'ArrowDown').action, 'navigate_workspace_down');
+  assert.equal(press(mode, 'h').action, 'navigate_pane_left');
+  assert.equal(press(mode, 'ArrowRight').action, 'navigate_pane_right');
+  assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'q').consume, true); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, '9').index, 8); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'Enter').navigate, 'confirm'); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'Tab', { shiftKey: true }).action, 'cycle_pane_previous'); assert.equal(mode.mode, 'terminal');
+  mode.mode = 'navigate'; assert.equal(press(mode, 'N', { shiftKey: true }).action, 'new_workspace'); assert.equal(mode.mode, 'terminal');
+  mode.mode = 'navigate'; assert.equal(press(mode, 'r').action, 'resize_mode'); assert.equal(mode.mode, 'resize');
+  mode.mode = 'navigate'; assert.equal(prefix(mode).consume, true); assert.equal(mode.mode, 'terminal');
+  mode.mode = 'navigate'; press(mode, 'Escape', { altKey: true }); assert.equal(mode.mode, 'terminal');
+});
+
+test('Navigate remaps override prefix right-hand keys while general pane focus bindings stay excluded', () => {
+  const configured = validateShortcuts({ ...defaultShortcuts, bindings: { ...shortcutDefaults, navigate_workspace_down: ['n'], navigate_pane_left: ['a'] } });
+  const mode = new ShortcutMode(configured); mode.mode = 'navigate';
+  assert.equal(press(mode, 'n').action, 'navigate_workspace_down'); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'h').action, undefined); assert.equal(mode.mode, 'navigate');
+  assert.equal(press(mode, 'a').action, 'navigate_pane_left');
+  mode.reset(); prefix(mode); assert.equal(press(mode, 'n').action, 'next_tab');
+  for (const binding of ['prefix+a', 'Escape', 'alt+Escape', 'Enter', 'Tab', 'shift+Tab', 'left', 'right', '1', 'ctrl+b', 'ctrl+c', 'ctrl+v', 'up']) {
+    assert.throws(() => validateShortcuts({ ...defaultShortcuts, bindings: { ...shortcutDefaults, navigate_workspace_down: [binding] } }), binding);
+  }
+});
+
+test('held Navigate movement repeats only while the original mode owns the key', () => {
+  const mode = new ShortcutMode(defaultShortcuts); mode.mode = 'navigate';
+  const down = key('ArrowDown'); assert.equal(mode.down(down).action, 'navigate_workspace_down');
+  assert.equal(mode.down({ ...down, repeat: true }).action, 'navigate_workspace_down');
+  mode.reset(); assert.deepEqual(mode.down({ ...down, repeat: true }), { consume: true });
+  mode.up(down.code); mode.mode = 'navigate';
+  assert.deepEqual(mode.down({ ...down, repeat: true }), { consume: true });
+  assert.equal(mode.owns(down.code), false);
+});
+
+test('version-eight keybindings migrate Navigate defaults while retaining remaps and revision', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'werdr-navigate-')), path = join(directory, 'settings.json');
+  try {
+    const bindings = Object.fromEntries(Object.entries(shortcutDefaults).filter(([action]) => !action.startsWith('navigate_')));
+    bindings.help = ['prefix+f1']; bindings.close_pane = [];
+    await writeFile(path, JSON.stringify({ version: 8, revision: 47, preferences: { ...defaults, shortcuts: { prefix: 'ctrl+a', bindings } } }), { mode: 0o600 });
+    const store = await settingsStore(path), settings = store.read();
+    assert.equal(settings.revision, 47); assert.equal(settings.preferences.shortcuts.prefix, 'ctrl+a');
+    assert.deepEqual(settings.preferences.shortcuts.bindings.help, ['prefix+f1']);
+    assert.deepEqual(settings.preferences.shortcuts.bindings.close_pane, []);
+    assert.deepEqual(settings.preferences.shortcuts.bindings.navigate_workspace_down, ['down']);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).version, 9);
+    assert.deepEqual((await settingsStore(path)).read(), settings);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('invalid indexed prefix fallback leaves Navigate active until the controller finds a target', () => {
+  const configured = validateShortcuts({ ...defaultShortcuts, bindings: { ...shortcutDefaults, focus_agent: ['prefix+alt+1..9'] } });
+  const mode = new ShortcutMode(configured); mode.mode = 'navigate';
+  const result = press(mode, '9', { altKey: true });
+  assert.equal(result.action, 'focus_agent'); assert.equal(result.index, 8); assert.equal(mode.mode, 'navigate');
+});
+
+test('Navigate retains the browser palette and reset ends held movement leases even after reentry', () => {
+  const mode = new ShortcutMode(defaultShortcuts); mode.mode = 'navigate';
+  assert.equal(press(mode, 'k', { ctrlKey: true }).action, 'command_palette'); assert.equal(mode.mode, 'terminal');
+  for (const state of ['navigate', 'resize'] as const) {
+    mode.mode = state; const arrow = key('ArrowLeft'); assert.ok(mode.down(arrow).action);
+    mode.reset(); mode.mode = state;
+    assert.deepEqual(mode.down({ ...arrow, repeat: true }), { consume: true }); mode.up(arrow.code);
+  }
 });
