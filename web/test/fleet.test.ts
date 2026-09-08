@@ -50,9 +50,9 @@ test('semantic notifications exclusively use the advertised stream and retain na
   } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('semantic completion waits for metadata requested after the event', async () => {
+for (const semantic of [true, false]) test(`${semantic ? 'semantic' : 'legacy'} completion waits for metadata requested after the event`, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'werdr-semantic-order-'));
-  const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: true };
+  const endpoint = new Endpoint(); endpoint.capabilities = { semantic_notifications: semantic };
   endpoint.status('blocked');
   const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => endpoint);
   let release: (() => void) | undefined;
@@ -72,7 +72,9 @@ test('semantic completion waits for metadata requested after the event', async (
     fleet.on('event', event => {
       if (event.type === 'fleet.notices' && event.added) observed.push(fleet.state().hosts[0].snapshot!.agents[0].agent_status);
     });
-    for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'notification.semantic')) listener.receive({ event: 'notification.semantic', data: { kind: 'finished', title: 'Finished', pane_id: 'p:1', terminal_id: 'terminal:1', workspace_id: 'w:1', tab_id: 't:1' } });
+    if (semantic) {
+      for (const listener of endpoint.listeners) if (listener.subscriptions.some(item => item.type === 'notification.semantic')) listener.receive({ event: 'notification.semantic', data: { kind: 'finished', title: 'Finished', pane_id: 'p:1', terminal_id: 'terminal:1', workspace_id: 'w:1', tab_id: 't:1' } });
+    } else endpoint.status('done');
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.deepEqual(observed, [], 'completion must not be validated against pre-event blocked metadata');
     assert.ok(release); release();

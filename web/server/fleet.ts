@@ -116,11 +116,8 @@ export class Fleet extends EventEmitter {
       if (host.api?.capabilities?.semantic_notifications) {
         const notice = semanticNotice(event.data, host.view.machine);
         if (notice) {
-          // Separate native sockets can deliver a notification before metadata.
-          // Only a snapshot requested after this event can validate its target.
-          host.pendingNotices.push({ sequence: ++host.eventSequence, notice });
-          host.pendingNotices.splice(0, Math.max(0, host.pendingNotices.length - 256));
-          this.invalidate(host, 0);
+          host.eventSequence++;
+          this.queueNotice(host, notice);
         }
       }
       return;
@@ -210,7 +207,14 @@ export class Fleet extends EventEmitter {
     if (!kind) return;
     const name = next.name || next.display_agent || next.agent || next.title || next.pane_id;
     const notice: Notice = { id: randomBytes(16).toString('hex'), machineId: host.view.machine.id, machineLabel: host.view.machine.label, endpointKey: noticeEndpointKey(host.view.machine), terminalId: next.terminal_id, paneId: next.pane_id, workspaceId: next.workspace_id, tabId: next.tab_id, title: kind === 'attention' ? `${name} needs attention` : `${name} finished`, body: `${host.view.machine.label} / ${next.workspace_id} / ${next.pane_id}`, kind, sound: kind === 'attention' ? 'request' : 'done', ...(next.agent ? { agent: next.agent } : {}), created: Date.now(), read: false };
-    this.recordNotice(host, notice);
+    this.queueNotice(host, notice);
+  }
+  private queueNotice(host: Host, notice: Notice) {
+    // Separate native sockets can deliver status or notifications before metadata.
+    // Only a snapshot requested after that event can validate its target.
+    host.pendingNotices.push({ sequence: host.eventSequence, notice });
+    host.pendingNotices.splice(0, Math.max(0, host.pendingNotices.length - 256));
+    this.invalidate(host, 0);
   }
   private recordNotice(host: Host, notice: Notice) {
     const epoch = host.epoch;
