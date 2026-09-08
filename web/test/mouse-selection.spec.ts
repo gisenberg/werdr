@@ -7,10 +7,15 @@ test.beforeAll(async () => { runtime = await fixture(); });
 test.afterAll(async () => { await runtime?.close(); });
 async function create(page: Page) {
   await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
-  const previous = new URL(page.url()).searchParams.get('pane');
+  // A saved selection can restore while creation is in flight. Wait for the
+  // new pane's identity instead of accepting any URL change during restore.
+  const created = page.waitForResponse(response => response.url().endsWith('/api/action') && response.request().postDataJSON()?.action === 'workspace.create');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
-  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(previous); await expect(page.locator('#shield')).toBeHidden();
-  return new URL(page.url()).searchParams.get('pane')!;
+  const response = await created; expect(response.ok()).toBe(true);
+  const pane = (await response.json()).root_pane.pane_id as string;
+  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe(pane);
+  await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', pane); await expect(page.locator('#shield')).toBeHidden();
+  return pane;
 }
 const action = (page: Page, id: string, data: object) => page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', id, ...data } });
 async function geometry(page: Page) {
