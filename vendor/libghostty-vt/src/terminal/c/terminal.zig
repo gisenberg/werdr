@@ -719,7 +719,7 @@ pub fn snapshot_graphics_policy_get(
     return .success;
 }
 
-/// Restore policy only onto a graphics-empty, APC-inactive terminal. The supplied
+/// Restore policy only onto a graphics-empty terminal. The supplied
 /// source-file callback is rebound to this destination's context at commit.
 /// Validation and all allocations precede mutation, including when input
 /// directory slices alias this terminal's current borrowed policy.
@@ -738,7 +738,7 @@ pub fn snapshot_graphics_policy_set(
     var exclusions: u64 = 0;
     const query = @import("snapshot.zig").graphics_exclusions(terminal_, &exclusions);
     if (query != .success) return query;
-    if (exclusions != 0) return .invalid_value;
+    if (exclusions & ~@as(u64, 1 << 6) != 0) return .invalid_value;
     var bytes: usize = 0;
     for ([_]ScreenSet.Key{ .primary, .alternate }, 0..) |key, i| {
         const source = policy.screens[i];

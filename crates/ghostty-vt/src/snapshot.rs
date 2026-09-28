@@ -27,6 +27,46 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Capture quiescent APC state without executing commands or callbacks.
+    /// Contains private payload data; retained graphics are not included.
+    /// Limit bounds encoded bytes, not allocator overhead or retained capacities.
+    pub fn apc_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = EncodedBytes {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        // SAFETY: live handle and exact output types; guard owns native allocation.
+        unsafe {
+            ffi::ghostty_snapshot_apc_encode_alloc(
+                self.raw,
+                ptr::null(),
+                limit,
+                &mut bytes.ptr,
+                &mut bytes.len,
+            )
+            .into_result()?;
+            if bytes.len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(bytes.len)
+                .map_err(|_| Error(ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY))?;
+            result.extend_from_slice(slice::from_raw_parts(bytes.ptr, bytes.len));
+            Ok(result)
+        }
+    }
+
+    /// Apply authoritative APC state after matching outer parser reconstruction.
+    /// Validation/allocation precede replacement; no historical effects execute.
+    pub fn restore_apc_snapshot(&mut self, bytes: &[u8], limit: usize) -> Result<(), Error> {
+        // SAFETY: input borrow outlives synchronous decode; handle exclusively held.
+        unsafe {
+            ffi::ghostty_snapshot_apc_restore(self.raw, bytes.as_ptr(), bytes.len(), limit)
+                .into_result()
+        }
+    }
+
     /// Capture quiescent OSC parser state, limits and initialized capture data.
     /// May contain private command data. Not a full snapshot.
     /// Limit bounds encoded bytes, not allocator overhead or retained capacity.
@@ -209,8 +249,9 @@ impl Terminal {
     /// Query graphics/glyph state that the native snapshot cannot preserve.
     ///
     /// Returns a reason mask, including unknown future bits, without allocating,
-    /// changing screens or emitting callbacks. Any nonzero value must reject a
-    /// preservation-dependent capture. Zero is not complete eligibility: graphics
+    /// changing screens or emitting callbacks. A nonzero value rejects core-only
+    /// preservation. APC requires its authoritative snapshot alongside the core.
+    /// Unknown bits still reject capture. Zero is not complete eligibility: graphics
     /// policy and caller-owned state still need independent preservation.
     pub fn snapshot_graphics_exclusions(&self) -> Result<u64, Error> {
         let mut flags = 0;
@@ -386,6 +427,89 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn apc_snapshot_every_cut_preserves_future_replies_and_graphics() {
+        use std::sync::{Arc, Mutex};
+        for sequence in [
+            b"\x1b_Ga=q,i=42,f=32,s=1,v=1;AAAAAA==\x1b\\".as_slice(),
+            b"\x1b_Ga=T,f=32,i=7,p=3,s=1,v=1;AAAAAA==\x1b\\",
+            b"\x1b_Ga=p,i=42,H=-12\x9c",
+            b"\x1b_25a1;s\x1b\\",
+            b"\x1b_Ga=q,i=42\x18tail",
+            b"\x1b_Ga=q,i=42\x1atail",
+        ] {
+            for cut in 0..=sequence.len() {
+                let mut source = terminal();
+                source.enable_kitty_graphics().unwrap();
+                // Do not run the completed image command before the cut: retained
+                // images are a separate, still unsupported snapshot domain.
+                source.write(&sequence[..cut]);
+                if source.snapshot_graphics_exclusions().unwrap()
+                    & !u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_APC)
+                    != 0
+                {
+                    continue;
+                }
+                let policy = source.graphics_policy_snapshot(16384).unwrap();
+                let apc = source.apc_snapshot(4096).unwrap();
+                let mut restored =
+                    Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+                let a = Arc::new(Mutex::new(Vec::new()));
+                let b = Arc::new(Mutex::new(Vec::new()));
+                for (t, output) in [(&mut source, a.clone()), (&mut restored, b.clone())] {
+                    t.set_write_pty_callback(move |bytes| {
+                        output.lock().unwrap().extend_from_slice(bytes)
+                    })
+                    .unwrap();
+                }
+                restored
+                    .restore_graphics_policy_snapshot(&policy, 16384)
+                    .unwrap();
+                restored.restore_apc_snapshot(&apc, 4096).unwrap();
+                restored.restore_apc_snapshot(&apc, 4096).unwrap();
+                assert!(b.lock().unwrap().is_empty());
+                source.write(&sequence[cut..]);
+                restored.write(&sequence[cut..]);
+                assert_eq!(*a.lock().unwrap(), *b.lock().unwrap(), "cut {cut}");
+                assert_eq!(
+                    source.apc_snapshot(4096).unwrap(),
+                    restored.apc_snapshot(4096).unwrap()
+                );
+                assert_eq!(
+                    source.kitty_image_placements().unwrap(),
+                    restored.kitty_image_placements().unwrap()
+                );
+                source.write(b"\x1b_Ga=q,i=99,f=32,s=1,v=1;AAAAAA==\x1b\\tail");
+                restored.write(b"\x1b_Ga=q,i=99,f=32,s=1,v=1;AAAAAA==\x1b\\tail");
+                assert_eq!(*a.lock().unwrap(), *b.lock().unwrap());
+                assert_eq!(
+                    source.screen_vt(ActiveScreen::Primary).unwrap(),
+                    restored.screen_vt(ActiveScreen::Primary).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apc_snapshot_rejects_malformed_and_mismatched_outer_without_mutation() {
+        let mut source = terminal();
+        source.write(b"\x1b_Ga=q,i=42");
+        let bytes = source.apc_snapshot(4096).unwrap();
+        for cut in 0..bytes.len() {
+            assert!(source.restore_apc_snapshot(&bytes[..cut], 4096).is_err());
+            assert_eq!(source.apc_snapshot(4096).unwrap(), bytes);
+        }
+        assert!(source.apc_snapshot(bytes.len() - 1).is_err());
+        assert!(source
+            .restore_apc_snapshot(&bytes, bytes.len() - 1)
+            .is_err());
+        let mut inactive = terminal();
+        let empty = inactive.apc_snapshot(4096).unwrap();
+        assert!(inactive.restore_apc_snapshot(&bytes, 4096).is_err());
+        assert!(source.restore_apc_snapshot(&empty, 4096).is_err());
+        assert_eq!(source.apc_snapshot(4096).unwrap(), bytes);
     }
 
     #[test]

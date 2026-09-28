@@ -451,6 +451,10 @@ comptime {
             @export(&alloc.freeOpaque, .{ .name = "ghostty_wasm_free_opaque" });
             @export(&alloc.takeOpaque, .{ .name = "ghostty_wasm_take_opaque" });
         }
+        if (features.snapshot) {
+            @export(&c.snapshot_apc_encode_alloc, .{ .name = "ghostty_snapshot_apc_encode_alloc" });
+            @export(&c.snapshot_apc_restore, .{ .name = "ghostty_snapshot_apc_restore" });
+        }
     }
 }
 

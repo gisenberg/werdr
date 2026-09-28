@@ -3,6 +3,58 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0019 authoritative APC handler snapshots
+
+status: active, private pane draft integration; retained graphics remain unsupported
+
+patch: `vendor/patches/libghostty-vt/0019-apc-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/apc.zig`
+- `vendor/libghostty-vt/src/terminal/apc_snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/apc_snapshot.zig`
+
+reason: Continuation replay can resurrect discarded APC commands or lose unknown-command truncation and recognition/limit policy.
+APCST1 preserves inactive, ignore, initialized identification, unknown capture, Kitty parsing and glyph parsing, plus independent future recognition and optional limits.
+Kitty records contain only present key values and initialized temporary/payload bytes, with stable explicit state tags and a-z/A-Z key order.
+Unknown capture retains sticky truncation even below its captured limit and can resume after an allocation failure.
+Unsupported-build protocols reject before allocation; replacement stages destination-owned data and requires exact agreement with outer APC activity before releasing old state.
+No completion, command execution or callback occurs during capture/replacement.
+Encoded limits do not include allocator overhead or retained capacities.
+These operations are opt-in snapshot work, not additional per-byte, render or pane-fanout work.
+Patch 0012 is amended to allow policy application during APC parsing without changing the active parser; the private pane draft then applies APCST1 authoritatively.
+The draft still rejects retained images, placements, loading, counters, byte accounting, glossary entries and unknown exclusion flags.
+Payloads contain private terminal data and must not be logged.
+This is not complete terminal preservation or external effect/runtime ownership transfer.
+
+remove when: upstream preserves equivalent authoritative APC state and every-cut, failure, aliasing, reduced-feature, policy and coordinated pane tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=apc snapshot' --summary all
+zig build test-lib-vt -Demit-lib-vt=true '-Dvt-features=-kitty_graphics,-glyph_protocol' '-Dtest-filter=apc snapshot' --summary all
+just test-one apc_snapshot
+just test-one pane_state_draft
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig commands inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0018 authoritative OSC capture snapshots
 
 status: active, private pane draft integration; not complete runtime preservation
@@ -267,7 +319,7 @@ Rust bindings are generated with `just libghostty-bindings`.
 
 ## 0012 exact empty-storage graphics policy restoration
 
-status: active, private restore prerequisite; retained graphics and partial APC remain excluded
+status: active, private restore prerequisite; retained graphics remain excluded
 
 patch: `vendor/patches/libghostty-vt/0012-snapshot-graphics-policy.patch`
 
@@ -288,7 +340,8 @@ local files:
 
 reason: The binary codec omits per-screen graphics limits, media permissions, temporary directories, PNG/source forwarding and APC recognition/limits.
 Restoring current environment defaults is not policy preservation, even when image storage is empty.
-Expose a frozen sized V1 policy record with borrowed reads and transactional application to a matching graphics-empty, APC-inactive terminal.
+Expose a frozen sized V1 policy record with borrowed reads and transactional application to a matching graphics-empty terminal.
+Policy application leaves an active APC parser untouched; patch 0019 preserves that parser authoritatively after outer continuation replay.
 Directory slices share one terminal-owned backing buffer, including paths inherited by newly created alternate screens.
 Application copies borrowed input before releasing old storage and rebinds supplied destination callbacks without copying source contexts.
 Unknown flags, incompatible features/screens, invalid lengths, missing required callbacks and allocation failures reject before mutation.
@@ -334,6 +387,7 @@ local files:
 reason: Native snapshots omit images, placements, in-progress loading, automatic IDs and glyph registrations.
 Continuation replay also occurs before caller APC recognition policy is restored, so even ignored partial APC can change behavior.
 Expose an allocation-free read-only query over both existing screens and the APC handler so the private pane draft can reject these exclusions before encoding.
+The draft now exempts only the APC bit when carrying the authoritative APCST1 payload from patch 0019; the query itself remains conservative.
 Zero flags do not establish full eligibility: empty-storage graphics policy, other protocol state and external I/O ownership still require preservation.
 
 remove when: upstream exposes an equivalent conservative query or faithfully preserves these states, and the native and Rust graphics exclusion regressions pass without this patch.

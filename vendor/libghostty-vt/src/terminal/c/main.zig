@@ -126,6 +126,10 @@ pub const sgr_unknown_partial = sgr.unknown_partial;
 pub const sgr_attribute_tag = sgr.attribute_tag;
 pub const sgr_attribute_value = sgr.attribute_value;
 
+pub const apc_snapshot = @import("apc_snapshot.zig");
+pub const snapshot_apc_encode_alloc = apc_snapshot.encode_alloc;
+pub const snapshot_apc_restore = apc_snapshot.restore;
+
 pub const key_event_new = key_event.new;
 pub const key_event_free = key_event.free;
 pub const key_event_set_action = key_event.set_action;
@@ -287,6 +291,7 @@ test {
     _ = color;
     _ = color_scheme;
     _ = grid_ref;
+    _ = apc_snapshot;
     _ = grid_ref_tracked;
     _ = io;
     _ = kitty_graphics;

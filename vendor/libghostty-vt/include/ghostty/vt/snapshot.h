@@ -472,6 +472,20 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_decoder_new_buf(
  */
 GHOSTTY_API void ghostty_snapshot_decoder_free(GhosttySnapshotDecoder decoder);
 
+/** Capture sensitive APC parser state at a quiescent feed boundary.
+ * Limit bounds encoded bytes, not allocator overhead or retained capacities.
+ * Free output using ghostty_free with the same allocator.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_apc_encode_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
+    uint8_t** out_ptr, size_t* out_len);
+/** Atomically replace APC state after matching outer parser reconstruction.
+ * No commands or callbacks execute; empty input is invalid.
+ * Retained graphics and external effect ownership are separate obligations.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_apc_restore(
+    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
+
 /**
  * Set a snapshot decoder option.
  *
@@ -678,7 +692,7 @@ typedef struct {
 GHOSTTY_API GhosttyResult ghostty_snapshot_graphics_policy_get(
     GhosttyTerminal terminal, GhosttySnapshotGraphicsPolicyV1* out_policy);
 
-/** Apply only to graphics-empty, APC-inactive terminals with matching screens.
+/** Apply only to graphics-empty terminals with matching screens.
  * Validation and directory allocation precede mutation. The supplied destination
  * callback is rebound at commit; source context pointers are never transferred.
  * This does not repair partial-APC replay or establish complete handoff safety.

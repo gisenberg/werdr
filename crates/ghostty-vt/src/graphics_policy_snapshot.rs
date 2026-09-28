@@ -10,8 +10,8 @@ struct ScreenPolicy {
 }
 
 /// In-memory policy record, not a wire format or full snapshot eligibility.
-/// Capture at the same exclusive cut as the native terminal. Partial APC and
-/// retained graphics remain excluded until their own preservation is supported.
+/// Capture at the same exclusive cut as the native terminal. Partial APC needs
+/// its separate authoritative snapshot; retained graphics remain excluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsPolicySnapshot {
     features: u32,
@@ -283,7 +283,14 @@ mod tests {
                 .is_err());
             assert_eq!(source.graphics_policy_snapshot(16384).unwrap(), baseline);
         }
-        source.write(b"\x1b_G");
+        source.write(b"\x1b_Ga=T,f=32,i=7,s=1,v=1;AAAA");
+        let active = source.apc_snapshot(4096).unwrap();
+        source
+            .restore_graphics_policy_snapshot(&baseline, 16384)
+            .unwrap();
+        assert_eq!(source.apc_snapshot(4096).unwrap(), active);
+        source.write(b"AA==\x1b\\");
+        assert_eq!(source.kitty_image_placements().unwrap().len(), 1);
         assert!(source
             .restore_graphics_policy_snapshot(&baseline, 16384)
             .is_err());

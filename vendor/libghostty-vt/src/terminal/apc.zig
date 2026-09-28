@@ -3,6 +3,7 @@ const build_options = @import("terminal_options");
 const Allocator = std.mem.Allocator;
 
 pub const glyph = @import("apc/glyph.zig");
+pub const snapshot = @import("apc_snapshot.zig");
 const kitty_gfx = @import("kitty/graphics.zig");
 
 const log = std.log.scoped(.terminal_apc);
@@ -452,6 +453,10 @@ pub const Command = union(enum) {
         }
     }
 };
+
+test {
+    _ = snapshot;
+}
 
 test "unknown APC command" {
     const testing = std.testing;

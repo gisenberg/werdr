@@ -26,6 +26,7 @@ pub(super) struct DraftLimits {
     pub dnd_bytes: usize,
     pub handler_bytes: usize,
     pub osc_capture_bytes: usize,
+    pub apc_bytes: usize,
 }
 
 pub(super) struct PaneStateDraft {
@@ -37,6 +38,7 @@ pub(super) struct PaneStateDraft {
     dnd: Vec<u8>,
     handler: Vec<u8>,
     osc_capture: Vec<u8>,
+    apc: Vec<u8>,
     replies: Vec<Bytes>,
     #[cfg(windows)]
     observer: Option<crate::ghostty::TrackedRowSnapshot>,
@@ -144,7 +146,8 @@ impl GhosttyPaneTerminal {
             .terminal
             .snapshot_graphics_exclusions()
             .map_err(|e| e.to_string())?;
-        if exclusions != 0 {
+        // APC continuation is preserved separately; retained graphics are not.
+        if exclusions & !u64::from(crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_APC) != 0 {
             return Err(format!(
                 "unsupported graphics/glyph snapshot state: {exclusions:#x}"
             ));
@@ -194,6 +197,10 @@ impl GhosttyPaneTerminal {
             return Err("native snapshot exceeds limit".into());
         }
         Ok(PaneStateDraft {
+            apc: core
+                .terminal
+                .apc_snapshot(limits.apc_bytes)
+                .map_err(|e| e.to_string())?,
             osc_capture: core
                 .terminal
                 .osc_capture_snapshot(limits.osc_capture_bytes)
@@ -264,6 +271,9 @@ impl GhosttyPaneTerminal {
             .restore_osc_capture_snapshot(&draft.osc_capture, limits.osc_capture_bytes)
             .map_err(|e| e.to_string())?;
         terminal
+            .restore_apc_snapshot(&draft.apc, limits.apc_bytes)
+            .map_err(|e| e.to_string())?;
+        terminal
             .restore_callback_snapshot(draft.callbacks, limits.callback_bytes)
             .map_err(|e| e.to_string())?;
         #[cfg(windows)]
@@ -316,6 +326,7 @@ mod tests {
             dnd_bytes: 1 << 20,
             handler_bytes: 1 << 20,
             osc_capture_bytes: 1 << 20,
+            apc_bytes: 1 << 20,
         }
     }
 
@@ -498,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_state_draft_rejects_graphics_without_mutation() {
+    fn pane_state_draft_apc_snapshot_preserves_without_capture_effects() {
         let (tx, mut rx) = mpsc::channel(32);
         for prefix in [b"\x1b_".as_slice(), b"\x1b_G", b"\x1b_25a1;r;"] {
             let source = pane(&tx);
@@ -510,11 +521,25 @@ mod tests {
                 .terminal
                 .snapshot_bytes()
                 .unwrap();
-            assert!(source
-                .capture_state_draft(limits())
-                .err()
-                .unwrap()
-                .contains("unsupported graphics/glyph"));
+            let draft = source.capture_state_draft(limits()).unwrap();
+            let restored =
+                GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+            assert_eq!(
+                source
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .apc_snapshot(4096)
+                    .unwrap(),
+                restored
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .apc_snapshot(4096)
+                    .unwrap()
+            );
             assert_eq!(
                 source
                     .core
@@ -533,6 +558,57 @@ mod tests {
     }
 
     #[test]
+    fn pane_state_draft_apc_snapshot_budget_and_retained_graphics_gate() {
+        let (tx, _rx) = mpsc::channel(16);
+        let source = pane(&tx);
+        source
+            .core
+            .lock()
+            .unwrap()
+            .terminal
+            .enable_kitty_graphics()
+            .unwrap();
+        feed(&source, &tx, b"\x1b_Ga=T,f=32,i=7,s=1,v=1;AAAA");
+        let restricted = DraftLimits {
+            apc_bytes: 0,
+            ..limits()
+        };
+        assert!(source.capture_state_draft(restricted).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        assert!(GhosttyPaneTerminal::restore_state_draft(draft, restricted, tx.clone()).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        let restored =
+            GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+        assert_effects(
+            feed(&source, &tx, b"AA==\x1b\\"),
+            feed(&restored, &tx, b"AA==\x1b\\"),
+        );
+        for pane in [&source, &restored] {
+            assert!(pane
+                .capture_state_draft(limits())
+                .err()
+                .unwrap()
+                .contains("unsupported graphics/glyph"));
+        }
+        assert_eq!(
+            source
+                .core
+                .lock()
+                .unwrap()
+                .terminal
+                .kitty_image_placements()
+                .unwrap(),
+            restored
+                .core
+                .lock()
+                .unwrap()
+                .terminal
+                .kitty_image_placements()
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn pane_state_draft_continues_partial_native_and_caller_protocols() {
         let (tx, _rx) = mpsc::channel(16);
         for sequence in [
@@ -546,6 +622,10 @@ mod tests {
             b"\x1bP$qm\x1b\\",
             b"\x1b]9;4;1;25\x07",
             b"\x1b[?1049hALT\x1b[?1049l",
+            b"\x1b_Ga=q,i=42,f=32,s=1,v=1;AAAAAA==\x1b\\",
+            b"\x1b_25a1;s\x1b\\",
+            b"\x1b_Xprivate\x18tail",
+            b"\x1b_Ga=p,i=42\x9ctail",
         ] {
             for cut in 0..=sequence.len() {
                 let source = pane(&tx);

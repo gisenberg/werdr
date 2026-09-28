@@ -37,7 +37,7 @@ index ea1960bc..5e5cba6c 100644
 +GHOSTTY_API GhosttyResult ghostty_snapshot_graphics_policy_get(
 +    GhosttyTerminal terminal, GhosttySnapshotGraphicsPolicyV1* out_policy);
 +
-+/** Apply only to graphics-empty, APC-inactive terminals with matching screens.
++/** Apply only to graphics-empty terminals with matching screens.
 + * Validation and directory allocation precede mutation. The supplied destination
 + * callback is rebound at commit; source context pointers are never transferred.
 + * This does not repair partial-APC replay or establish complete handoff safety.
@@ -167,7 +167,7 @@ index cef91872..84192452 100644
 +    return .success;
 +}
 +
-+/// Restore policy only onto a graphics-empty, APC-inactive terminal. The supplied
++/// Restore policy only onto a graphics-empty terminal. The supplied
 +/// source-file callback is rebound to this destination's context at commit.
 +/// Validation and all allocations precede mutation, including when input
 +/// directory slices alias this terminal's current borrowed policy.
@@ -186,7 +186,7 @@ index cef91872..84192452 100644
 +    var exclusions: u64 = 0;
 +    const query = @import("snapshot.zig").graphics_exclusions(terminal_, &exclusions);
 +    if (query != .success) return query;
-+    if (exclusions != 0) return .invalid_value;
++    if (exclusions & ~@as(u64, 1 << 6) != 0) return .invalid_value;
 +    var bytes: usize = 0;
 +    for ([_]ScreenSet.Key{ .primary, .alternate }, 0..) |key, i| {
 +        const source = policy.screens[i];

@@ -5424,6 +5424,25 @@ unsafe extern "C" {
     pub fn ghostty_snapshot_decoder_free(decoder: GhosttySnapshotDecoder);
 }
 unsafe extern "C" {
+    #[doc = " Capture sensitive APC parser state at a quiescent feed boundary.\n Limit bounds encoded bytes, not allocator overhead or retained capacities.\n Free output using ghostty_free with the same allocator."]
+    pub fn ghostty_snapshot_apc_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limit: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Atomically replace APC state after matching outer parser reconstruction.\n No commands or callbacks execute; empty input is invalid.\n Retained graphics and external effect ownership are separate obligations."]
+    pub fn ghostty_snapshot_apc_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limit: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Set a snapshot decoder option.\n\n The value pointer must have the type documented by option. Options may only\n be changed before decoding starts.\n\n @param decoder Decoder handle (must not be NULL)\n @param option Option to change\n @param value Pointer to the option value (must not be NULL)\n @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if decoding has\n         started or an argument is invalid, or another error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_decoder_set(
         decoder: GhosttySnapshotDecoder,
@@ -5566,7 +5585,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Apply only to graphics-empty, APC-inactive terminals with matching screens.\n Validation and directory allocation precede mutation. The supplied destination\n callback is rebound at commit; source context pointers are never transferred.\n This does not repair partial-APC replay or establish complete handoff safety."]
+    #[doc = " Apply only to graphics-empty terminals with matching screens.\n Validation and directory allocation precede mutation. The supplied destination\n callback is rebound at commit; source context pointers are never transferred.\n This does not repair partial-APC replay or establish complete handoff safety."]
     pub fn ghostty_snapshot_graphics_policy_set(
         terminal: GhosttyTerminal,
         policy: *const GhosttySnapshotGraphicsPolicyV1,
