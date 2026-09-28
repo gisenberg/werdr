@@ -3,6 +3,49 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0023 coordinated graphics generation rebinding
+
+status: active, storage prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0023-generation-domain-rebinding.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/generation_snapshot.zig`
+
+reason: Restoration must preserve source generation ordering and equivalence classes while assigning globally fresh destination stamps.
+The mapping registers both stores, image generations, live or stale frame-target generations and separately supplied external pending-token generations.
+It preserves zero, sorts and deduplicates bounded source references, then atomically reserves an ordered contiguous range with checked exhaustion.
+Preparation completes allocations before reserving stamps; aborted restores may leave unused stamps, which are never recycled.
+Application validates every source reference and rejects repeated store, loading and shallow image-map ownership before any write.
+It changes only generations, preserving dirty flags, image data, ages, stale-reference distinctions and caller-owned clocks.
+The atomic and mutex implementations share the same existing counter with ordinary mutations, whose single-stamp fast path is unchanged.
+Tests cover both implementations, concurrent reservation/native-mutation interleaving, exhaustion, allocation cleanup, all-store preflight, pending completion, frame continuation, number lookup and eviction order.
+Only opt-in restore work is added; no render or mutation fast path receives extra work.
+Aggregate storage installation, animation clock rebasing, host attachments and external producer ownership remain separate coordinator responsibilities.
+
+remove when: upstream provides equivalent coordinated generation rebinding and ordering, authority, concurrency, exhaustion and rollback tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=generation snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+
 ## 0022 screen-qualified graphics placement snapshots
 
 status: active, domain prerequisite; retained graphics gate remains closed

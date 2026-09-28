@@ -38,6 +38,13 @@ pub fn nextGeneration(io: std.Io) u64 {
     return generation_counter.next(io);
 }
 
+/// Atomically reserve a nonempty contiguous range for snapshot rebinding.
+/// Returns its first stamp, or null without mutation when exhausted or empty.
+/// Ordinary mutation retains its existing single-stamp fast path.
+pub fn reserveGenerations(io: std.Io, count: u64) ?u64 {
+    return generation_counter.reserve(io, count);
+}
+
 /// Backing implementation for the generation counter. We use a
 /// lock-free atomic counter where we can, but not all targets support
 /// 64-bit atomic operations (e.g. 32-bit ARM Android), so we fall back
@@ -47,16 +54,40 @@ pub fn nextGeneration(io: std.Io) u64 {
 /// The pointer-width check is a conservative proxy for 64-bit atomic
 /// support: every 64-bit target supports 64-bit atomics, while 32-bit
 /// targets may not (per the compiler's atomic operand validation).
-const GenerationCounter = if (@bitSizeOf(usize) >= 64) struct {
+const GenerationCounter = if (@bitSizeOf(usize) >= 64) AtomicGenerationCounter else LockedGenerationCounter;
+
+const AtomicGenerationCounter = struct {
     value: std.atomic.Value(u64) = .init(0),
+
+    fn reserve(self: *@This(), io: std.Io, count: u64) ?u64 {
+        _ = io;
+        if (count == 0) return null;
+        var previous = self.value.load(.monotonic);
+        while (true) {
+            const last = std.math.add(u64, previous, count) catch return null;
+            previous = self.value.cmpxchgWeak(previous, last, .monotonic, .monotonic) orelse return previous + 1;
+        }
+    }
 
     fn next(self: *@This(), io: std.Io) u64 {
         _ = io;
         return self.value.fetchAdd(1, .monotonic) + 1;
     }
-} else struct {
+};
+
+const LockedGenerationCounter = struct {
     mutex: std.Io.Mutex = .init,
     value: u64 = 0,
+
+    fn reserve(self: *@This(), io: std.Io, count: u64) ?u64 {
+        if (count == 0) return null;
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const last = std.math.add(u64, self.value, count) catch return null;
+        const first = self.value + 1;
+        self.value = last;
+        return first;
+    }
 
     fn next(self: *@This(), io: std.Io) u64 {
         self.mutex.lockUncancelable(io);
@@ -65,6 +96,47 @@ const GenerationCounter = if (@bitSizeOf(usize) >= 64) struct {
         return self.value;
     }
 };
+
+test "generation snapshot reservation exhaustion is atomic" {
+    const testing = std.testing;
+    // Exercise the mutex fallback on 64-bit hosts as well as its native target.
+    inline for (if (@bitSizeOf(usize) >= 64) .{ AtomicGenerationCounter, LockedGenerationCounter } else .{LockedGenerationCounter}) |Counter| {
+        var counter: Counter = .{};
+        try testing.expect(counter.reserve(testing.io, 0) == null);
+        try testing.expectEqual(@as(?u64, 1), counter.reserve(testing.io, 3));
+        try testing.expectEqual(@as(u64, 4), counter.next(testing.io));
+        try testing.expect(counter.reserve(testing.io, std.math.maxInt(u64)) == null);
+        try testing.expectEqual(@as(?u64, 5), counter.reserve(testing.io, std.math.maxInt(u64) - 4));
+        try testing.expect(counter.reserve(testing.io, 1) == null);
+    }
+}
+
+test "generation snapshot reservations interleave with native mutations" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    inline for (if (@bitSizeOf(usize) >= 64) .{ AtomicGenerationCounter, LockedGenerationCounter } else .{LockedGenerationCounter}) |Counter| {
+        var counter: Counter = .{};
+        var results: [4][256]u64 = undefined;
+        const Worker = struct {
+            fn run(c: *Counter, values: *[256]u64) void {
+                for (0..64) |i| {
+                    const first = c.reserve(std.testing.io, 3).?;
+                    for (0..3) |j| values[i * 4 + j] = first + j;
+                    values[i * 4 + 3] = c.next(std.testing.io);
+                }
+            }
+        };
+        var threads: [4]?std.Thread = @splat(null);
+        defer for (threads) |thread| if (thread) |t| t.join();
+        for (&threads, 0..) |*thread, i| thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &counter, &results[i] });
+        for (&threads) |*thread| {
+            thread.*.?.join();
+            thread.* = null;
+        }
+        const flat = std.mem.bytesAsSlice(u64, std.mem.asBytes(&results));
+        std.mem.sort(u64, flat, {}, std.sort.asc(u64));
+        for (flat, 1..) |value, expected| try std.testing.expectEqual(@as(u64, @intCast(expected)), value);
+    }
+}
 
 /// An image storage is associated with a terminal screen (i.e. main
 /// screen, alt screen) and contains all the transmitted images and

@@ -11,6 +11,8 @@
 //! aim to ship a v1 of this implementation came at some cost. I learned a lot
 //! though and I think we can go back through and fix this up.
 
+pub const generation_snapshot = @import("generation_snapshot.zig");
+
 const render = @import("graphics_render.zig");
 const command = @import("graphics_command.zig");
 const exec = @import("graphics_exec.zig");
