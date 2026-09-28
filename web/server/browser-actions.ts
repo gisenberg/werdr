@@ -77,6 +77,9 @@ export function browserAction(value: Record<string, unknown>): { method: string;
       return { method, params: { pane_id: id(), destination, focus: true } };
     }
     case 'pane.close': return { method, params: { pane_id: id() } };
+    case 'pane.input.set':
+      if (value.right_click !== 'pane' && value.right_click !== 'herdr') throw new ManagementError('Invalid right-click target.');
+      return { method, params: { pane_id: id(), right_click: value.right_click } };
     case 'pane.rename': return { method, params: { pane_id: id(), label: value.label === null ? null : text(value.label) } };
     case 'pane.split':
       if (!['right', 'down'].includes(String(value.direction))) throw new ManagementError('Invalid split direction.');

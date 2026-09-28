@@ -452,6 +452,10 @@ pub struct PaneInfo {
     pub workspace_id: String,
     pub tab_id: String,
     pub focused: bool,
+    /// Whether an unmodified right click belongs to a mouse-reporting application.
+    /// Missing on older runtimes; clients must not infer ownership from mouse mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_click_passthrough: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

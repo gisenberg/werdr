@@ -6,7 +6,7 @@ export type AgentStatus = 'unknown' | 'idle' | 'working' | 'blocked' | 'done';
 export interface WorkspaceWorktree { repo_key: string; repo_name: string; repo_root: string; checkout_path: string; is_linked_worktree: boolean }
 export interface Workspace { active_tab_id?: string; workspace_id: string; label: string; custom_label?: boolean; branch?: string; git_ahead_behind?: [number, number]; agent_status: AgentStatus; tokens?: Record<string, string>; worktree?: WorkspaceWorktree }
 export interface Tab { tab_id: string; workspace_id: string; label: string; custom_label?: boolean }
-export interface Pane { pane_id: string; terminal_id: string; workspace_id: string; tab_id: string; label?: string; title?: string; agent?: string; display_agent?: string; agent_status: AgentStatus; cwd?: string; revision?: number }
+export interface Pane { pane_id: string; terminal_id: string; workspace_id: string; tab_id: string; label?: string; title?: string; agent?: string; display_agent?: string; agent_status: AgentStatus; cwd?: string; revision?: number; right_click_passthrough?: boolean }
 export interface Agent extends Pane { name?: string; state_change_seq: number; interactive_ready?: boolean; launch_pending?: boolean; state_labels?: Record<string, string>; tokens?: Record<string, string>; terminal_title?: string; terminal_title_stripped?: string; foreground_cwd?: string }
 export interface AgentView { definition: { source: string; label?: string } | null; pane_ids: string[] }
 export interface Snapshot { runtime_boot_id?: string | null; agent_view?: AgentView; focused_workspace_id?: string; version: string; protocol: number; workspaces: Workspace[]; tabs: Tab[]; panes: Pane[]; agents: Agent[]; layouts: { tab_id: string; focused_pane_id: string }[] }

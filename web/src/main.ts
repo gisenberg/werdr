@@ -507,6 +507,10 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
   const focusedPane = target.machine === machineId ? paneId : undefined;
   if (target.kind === 'pane' && focusedPane && focusedPane !== target.id) items.push({ label: 'SWAP WITH FOCUSED PANE', run: () => invoke('pane.swap', target.id, { source: focusedPane, target: target.id }) });
   if (target.kind === 'pane' && item.label) items.push({ label: 'CLEAR PANE NAME', run: () => invoke('pane.rename', target.id, { label: null }) });
+  if (target.kind === 'pane' && typeof (item as Snapshot['panes'][number]).right_click_passthrough === 'boolean') {
+    const owned = (item as Snapshot['panes'][number]).right_click_passthrough;
+    items.push({ label: owned ? 'RIGHT CLICK: APPLICATION (SWITCH TO MENU)' : 'RIGHT CLICK: MENU (SWITCH TO APPLICATION)', run: () => invoke('pane.input.set', target.id, { right_click: owned ? 'herdr' : 'pane' }) });
+  }
   if (target.kind === 'pane') items.push(
     { label: 'SPLIT RIGHT', run: () => invoke('pane.split', target.id, { direction: 'right' }) },
     { label: 'SPLIT DOWN', run: () => invoke('pane.split', target.id, { direction: 'down' }) },
@@ -517,11 +521,12 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
   if (discoveredActions) void discoveredActions.then(items => append?.(items));
 }
 for (const type of ['contextmenu', 'keydown'] as const) element('terminal').addEventListener(type, event => {
-  const origin = (event.target as Element).closest<HTMLElement>('.pane-title'); if (!origin) return;
+  const hit = (event.target as Element).closest<HTMLElement>('.pane-title, .pane-content'); if (!hit || hit.closest('#native-popup')) return;
+  const origin = hit.matches('.pane-content') ? hit.querySelector<HTMLElement>('textarea') || hit : hit;
   if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
   const id = origin.closest<HTMLElement>('.terminal-pane')?.dataset.pane; if (!id) return;
-  event.preventDefault(); openNavigationMenu(origin, { kind: 'pane', machine: machineId, id }, event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : undefined);
-});
+  event.preventDefault(); event.stopPropagation(); openNavigationMenu(origin, { kind: 'pane', machine: machineId, id }, event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : undefined);
+}, type === 'keydown');
 type Command = ShortcutCommand;
 let commands: Command[] = [];
 let paletteCommandSelection: { identity: string; selection?: CommandSelection; error?: string } | undefined;

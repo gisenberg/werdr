@@ -117,6 +117,7 @@ export class DesktopSurface {
       }
       this.overflow.get(id)?.remove(); this.overflow.delete(id);
       position(controller.element, rect);
+      controller.rightClickPassthrough = pane.right_click_passthrough === true;
       controller.chrome(paneChrome(rect, width, height, this.panes.length > 1 && !mobile, this.preferences), paneBorderLabel(pane, this.preferences), `${pane.label || pane.title || id} [${pane.agent_status.toUpperCase()}]`, id === this.pane);
       controller.show(true);
     }

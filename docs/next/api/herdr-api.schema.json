@@ -1212,6 +1212,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "right_click_passthrough": {
+              "description": "Whether an unmodified right click belongs to a mouse-reporting application.\nMissing on older runtimes; clients must not infer ownership from mouse mode.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "scroll": {
               "anyOf": [
                 {
@@ -9284,6 +9291,13 @@
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
+            },
+            "right_click_passthrough": {
+              "description": "Whether an unmodified right click belongs to a mouse-reporting application.\nMissing on older runtimes; clients must not infer ownership from mouse mode.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "scroll": {
               "anyOf": [

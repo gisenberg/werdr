@@ -268,7 +268,9 @@ export class Fleet extends EventEmitter {
       if (this.stopped || this.hosts.get(machineId) !== host || host.epoch !== epoch || host.api !== api || host.view.connection !== 'online' || !host.view.machine.enabled) throw new NativeApiError('Host changed while the action was running; refresh before retrying.', 'interrupted');
     };
     return async (method, params = {}, invalidate = true) => {
-      current(); const result = await api.request(method, params); current();
+      current();
+      if (method === 'pane.input.set' && !host.view.snapshot?.panes.some(pane => pane.pane_id === (params as { pane_id?: string }).pane_id && typeof pane.right_click_passthrough === 'boolean')) throw new NativeApiError('This pane does not expose native right-click routing. Update its owning runtime first.', 'unsupported');
+      const result = await api.request(method, params); current();
       if (invalidate) this.invalidate(host, 0); return result;
     };
   }

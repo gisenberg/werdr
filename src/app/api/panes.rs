@@ -2337,6 +2337,7 @@ mod tests {
         let (mut app, public_pane_id) = app_with_test_workspace();
         let target = app.state.workspaces[0].tabs[0].root_pane;
         let other = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
 
         let response = app.handle_pane_input_set(
             "req".into(),
@@ -2360,6 +2361,21 @@ mod tests {
                 .unwrap()
                 .right_click_passthrough
         );
+        assert_eq!(
+            app.pane_info(0, target).unwrap().right_click_passthrough,
+            Some(true)
+        );
+        assert_eq!(
+            app.pane_info(0, other).unwrap().right_click_passthrough,
+            Some(false)
+        );
+        let mut legacy = serde_json::to_value(app.pane_info(0, target).unwrap()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("right_click_passthrough");
+        let parsed: PaneInfo = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.right_click_passthrough, None);
     }
 
     fn app_with_send_key_runtime(

@@ -29,6 +29,29 @@ class Endpoint implements NativeEndpoint {
   close() { this.closed = true; this.listeners = []; }
 }
 
+test('right-click mutations require native pane metadata and never probe unsupported endpoints', async () => {
+  for (const ownership of [undefined, 'false', false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'werdr-mouse-fleet-'));
+    let mutations = 0;
+    class MouseEndpoint extends Endpoint {
+      async request(method: string) {
+        if (method === 'pane.input.set') { mutations++; return { snapshot: structuredClone(this.snapshot) }; }
+        return super.request(method);
+      }
+    }
+    const endpoint = new MouseEndpoint(); Object.assign(endpoint.snapshot.panes[0], { right_click_passthrough: ownership });
+    const fleet = new Fleet(async () => [{ id: 'one', label: 'One', enabled: true }], join(directory, 'notices.json'), async () => endpoint);
+    try {
+      await fleet.start(); await until(() => fleet.state().hosts[0]?.connection === 'online');
+      const change = () => fleet.request('one', 'pane.input.set', { pane_id: 'p:1', right_click: 'pane' });
+      if (typeof ownership === 'boolean') { await change(); assert.equal(mutations, 1); }
+      else { await assert.rejects(change(), /owning runtime/); assert.equal(mutations, 0); }
+      await assert.rejects(fleet.request('one', 'pane.input.set', { pane_id: 'missing', right_click: 'pane' }), /owning runtime/);
+      assert.equal(fleet.state().hosts[0].connection, 'online');
+    } finally { fleet.stop(); await rm(directory, { recursive: true, force: true }); }
+  }
+});
+
 test('workspace row metadata rejects malformed optional fields without taking a compatible host offline', async () => {
   for (const fields of [{ custom_label: 'false' }, { branch: 3 }, { git_ahead_behind: null }, { git_ahead_behind: [1] }, { git_ahead_behind: [-1, 0] }, { git_ahead_behind: [0, 1.5] }]) {
     const directory = await mkdtemp(join(tmpdir(), 'werdr-workspace-fleet-'));

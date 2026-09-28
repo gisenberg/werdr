@@ -181,6 +181,7 @@ fn pane_scroll_result(
             workspace_id: "ws_1".into(),
             tab_id: "tab_1".into(),
             focused: true,
+            right_click_passthrough: None,
             cwd: None,
             foreground_cwd: None,
             restore_error: None,

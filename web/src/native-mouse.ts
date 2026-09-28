@@ -1,4 +1,5 @@
 import type { Terminal } from 'ghostty-web';
+import { rightClickRoute, type RightClickModifier } from '../shared/right-click';
 
 /** The native attach client accepts SGR cell reports and applies the application's modes. */
 export class NativeMouse {
@@ -7,7 +8,10 @@ export class NativeMouse {
   private buttons = new Set<number>();
   private last?: { column: number; row: number; modifiers: number };
   private motion = '';
-  constructor(private content: HTMLElement, private terminal: () => Terminal | undefined, private available: () => boolean, private send: (text: string) => void) {
+  private rightPassthrough = false;
+  private strippedModifiers = 0;
+  constructor(private content: HTMLElement, private terminal: () => Terminal | undefined, private available: () => boolean, private send: (text: string) => void,
+    private rightClick: () => { paneOwns: boolean; modifier: RightClickModifier } = () => ({ paneOwns: false, modifier: '' })) {
     content.addEventListener('mousedown', this.down, true);
     content.addEventListener('click', this.context, true);
     content.addEventListener('contextmenu', this.context, true);
@@ -17,8 +21,9 @@ export class NativeMouse {
   }
   setEnabled(enabled: boolean) { if (this.enabled !== enabled) { this.release(); this.enabled = enabled; } }
   release() {
-    if (this.last) for (const button of this.buttons) this.report(button, this.last, false);
+    if (this.last) for (const button of this.buttons) this.report(button, { ...this.last, modifiers: this.last.modifiers & ~(button === 2 ? this.strippedModifiers : 0) }, false);
     this.buttons.clear(); this.last = undefined; this.motion = '';
+    this.rightPassthrough = false; this.strippedModifiers = 0;
   }
   dispose() {
     this.release();
@@ -38,10 +43,22 @@ export class NativeMouse {
   private stop(event: MouseEvent) { event.preventDefault(); event.stopImmediatePropagation(); }
   private report(button: number, point: { column: number; row: number; modifiers: number }, press = true) { this.send(`\x1b[<${button | point.modifiers};${point.column + 1};${point.row + 1}${press ? 'M' : 'm'}`); }
   private blur = () => this.release();
-  private context = (event: MouseEvent) => { if (this.enabled && this.available()) this.stop(event); };
+  private context = (event: MouseEvent) => {
+    if (!this.enabled || !this.available()) return;
+    // Keyboard context menus always belong to the browser client.
+    if (event.type === 'contextmenu') { if (event.button === 2 && this.rightPassthrough) this.stop(event); }
+    else if (event.button !== 2 || this.rightPassthrough) this.stop(event);
+  };
   private down = (event: MouseEvent) => {
     if (!this.enabled || !this.available() || event.button > 2) return;
     const point = this.point(event); if (!point) return;
+    if (event.button === 2) {
+      const policy = this.rightClick();
+      this.rightPassthrough = rightClickRoute(this.enabled, policy.paneOwns, policy.modifier, event) === 'pane';
+      this.strippedModifiers = this.rightPassthrough ? point.modifiers : 0;
+      if (!this.rightPassthrough) { this.stop(event); return; }
+      point.modifiers &= ~this.strippedModifiers;
+    }
     this.stop(event); this.terminal()?.textarea?.focus({ preventScroll: true });
     this.buttons.add(event.button); this.last = point; this.motion = ''; this.report(event.button, point);
   };
@@ -51,6 +68,7 @@ export class NativeMouse {
     const point = this.point(event); if (!point) return;
     this.stop(event);
     const button = this.buttons.values().next().value ?? 3;
+    if (button === 2) point.modifiers &= ~this.strippedModifiers;
     const key = `${button}:${point.column}:${point.row}:${point.modifiers}`;
     this.last = point;
     if (this.motion !== key) { this.motion = key; this.report(32 + button, point); }
@@ -58,6 +76,7 @@ export class NativeMouse {
   private up = (event: MouseEvent) => {
     if (!this.buttons.has(event.button)) return;
     this.stop(event); const point = this.point(event) ?? this.last;
+    if (point && event.button === 2) point.modifiers &= ~this.strippedModifiers;
     if (point) this.report(event.button, point, false);
     this.buttons.delete(event.button); this.last = point; this.motion = '';
   };

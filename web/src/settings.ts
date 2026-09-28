@@ -1,4 +1,5 @@
 import { soundAgents } from '../shared/agent-sounds';
+import { rightClickModifiers } from '../shared/right-click';
 import { shortcutActions } from '../shared/shortcuts';
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
@@ -24,6 +25,7 @@ const groups: [string, Control[]][] = [
   ]],
   ['NAVIGATION', [{ key: 'agentSort', label: 'AGENT ORDER', choices: ['priority', 'native'] }, { key: 'confirmClose', label: 'CONFIRM PROCESS CLOSURE' }, { key: 'scrollLines', label: 'SCROLL LINES', min: 1, max: 20 }]],
   ['TERMINAL SELECTION', [{ key: 'copyOnSelect', label: 'COPY ON MOUSE SELECTION' }, { key: 'clipboardToast', label: 'CLIPBOARD SUCCESS TOAST' }, { key: 'clipboardToastPosition', label: 'CLIPBOARD TOAST POSITION', choices: ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'] }]],
+  ['TERMINAL MOUSE', [{ key: 'rightClickPassthroughModifier', label: 'RIGHT-CLICK APPLICATION MODIFIER (META = COMMAND / WINDOWS; SHIFT OPENS MENU)', choices: rightClickModifiers }]],
   ['NOTIFICATIONS', [{ key: 'notificationAttention', label: 'ATTENTION ALERTS' }, { key: 'notificationFinished', label: 'COMPLETION ALERTS' }, { key: 'notificationSound', label: 'ALERT SOUND' }, { key: 'toastDelivery', label: 'ALERT DELIVERY', choices: ['off', 'browser', 'desktop', 'both'] }, { key: 'toastDelaySeconds', label: 'AGENT ALERT DELAY (SECONDS)', min: 0, max: 60 }, { key: 'toastNativeDuration', label: 'NATIVE TOAST DURATIONS (ATTENTION 8S / DONE 5S / UPDATE 3S)' }, { key: 'toastSeconds', label: 'OVERRIDE DURATION (SECONDS; 0 HIDES TOASTS)', min: 0, max: 60 }, { key: 'toastPosition', label: 'TOAST POSITION', choices: ['top-left', 'top-right', 'bottom-left', 'bottom-right'] }]],
 ];
 export class Settings {
@@ -102,7 +104,7 @@ export class Settings {
       for (const control of controls) {
         const label = document.createElement('label'); label.textContent = control.label;
         const input = document.createElement(control.choices ? 'select' : 'input'); input.dataset.setting = control.key;
-        if (input instanceof HTMLSelectElement) for (const choice of control.choices!) { const option = document.createElement('option'); option.value = choice; option.textContent = choice.replaceAll('-', ' ').toUpperCase(); input.append(option); }
+        if (input instanceof HTMLSelectElement) for (const choice of control.choices!) { const option = document.createElement('option'); option.value = choice; option.textContent = choice === '' ? 'OFF' : choice.replaceAll('-', ' ').toUpperCase(); input.append(option); }
         if (input instanceof HTMLInputElement) {
           input.type = control.min === undefined ? 'checkbox' : 'number';
           if (input.type === 'checkbox') input.checked = preferences[control.key] as boolean;
