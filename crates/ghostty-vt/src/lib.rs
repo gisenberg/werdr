@@ -25,11 +25,13 @@ use std::slice;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use crate::pane_graphics_files::OwnedExport;
+mod callback_snapshot;
 #[cfg(target_os = "linux")]
 mod native_image_sources;
 mod native_source;
 pub mod pane_graphics_files;
 mod snapshot;
+pub use callback_snapshot::TerminalCallbackSnapshot;
 
 /// Terminfo entry the terminal emulates; child processes should see it as TERM.
 pub const TERM: &str = "xterm-256color";
