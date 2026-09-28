@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::terminal::TerminalCursorState;
 mod settle_snapshot;
+pub(crate) use settle_snapshot::SnapshotV1 as CursorSettleSnapshot;
 mod snapshot;
 
 pub(crate) const CURSOR_POSITION_SETTLE: Duration = Duration::from_millis(20);

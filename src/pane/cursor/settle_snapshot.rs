@@ -38,7 +38,7 @@ impl From<CursorV1> for TerminalCursorState {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV1 {
+pub(crate) struct SnapshotV1 {
     version: u8,
     #[serde(deserialize_with = "Option::deserialize")]
     settled: Option<CursorV1>,
@@ -62,7 +62,10 @@ fn age(now: Instant, since: Option<Instant>) -> Result<Option<u64>, &'static str
 }
 
 impl SnapshotV1 {
-    fn capture(state: &CursorPositionSettleState, now: Instant) -> Result<Self, &'static str> {
+    pub(crate) fn capture(
+        state: &CursorPositionSettleState,
+        now: Instant,
+    ) -> Result<Self, &'static str> {
         Ok(Self {
             version: 1,
             settled: state.settled.map(Into::into),
@@ -73,7 +76,7 @@ impl SnapshotV1 {
         })
     }
 
-    fn restore(self, now: Instant) -> Result<CursorPositionSettleState, &'static str> {
+    pub(crate) fn restore(self, now: Instant) -> Result<CursorPositionSettleState, &'static str> {
         let max_age = CURSOR_POSITION_MAX_HOLD.as_nanos() as u64;
         if self.version != 1
             || self
