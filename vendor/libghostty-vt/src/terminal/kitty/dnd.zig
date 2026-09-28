@@ -59,6 +59,7 @@ pub const Item = dnd_drop.State.Item;
 pub const MoveEvent = dnd_drop.State.MoveEvent;
 pub const max_mime_list_bytes = dnd_drop.max_mime_list_bytes;
 pub const handleCommand = dnd_drop.handleCommand;
+pub const snapshot = @import("dnd_snapshot.zig");
 pub const Event = dnd_drop.Event;
 
 test {
@@ -66,4 +67,5 @@ test {
     _ = dnd_response;
     _ = dnd_drop;
     _ = @import("dnd_test.zig");
+    _ = snapshot;
 }

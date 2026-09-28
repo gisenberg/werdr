@@ -3,6 +3,46 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0014 native DND domain snapshots
+
+status: active, domain codec only; C/Rust/private pane draft integration remains pending
+
+patch: `vendor/patches/libghostty-vt/0014-dnd-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/dnd.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/dnd_snapshot.zig`
+
+reason: Core terminal snapshots omit DND registration, chunk metadata, acceptance buffers, offered MIME types and held drop data.
+The DNDST1 codec preserves these as owned native data without emitting events or assuming ownership of an external drag session.
+It retains binary buffers, absent versus present-empty arrays, inactive chunk metadata and reachable partial states after allocation or writer failure.
+Offered lists are not restricted by the separate sixteen-item native drop cap.
+Preflight bounds encoded bytes and logical variable backing storage before allocation, including slice-array amplification.
+Fixed state, allocator bookkeeping and simultaneous input/output allocations are separate from this limit.
+Snapshot payloads can contain private dropped data and must not be logged.
+This domain codec alone does not preserve DND through pane snapshots or establish safe runtime migration.
+
+remove when: upstream provides equivalent owned DND snapshots and every-cut, future-response, allocation-failure, reset and budget tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=dnd snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+
 ## 0013 in-flight clipboard write snapshots
 
 status: active, private pane draft integration; not complete runtime preservation

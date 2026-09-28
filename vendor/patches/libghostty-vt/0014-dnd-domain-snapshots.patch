@@ -1,0 +1,606 @@
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/dnd.zig b/vendor/libghostty-vt/src/terminal/kitty/dnd.zig
+index 3142a415..13194a0a 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/dnd.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/dnd.zig
+@@ -59,6 +59,7 @@ pub const Item = dnd_drop.State.Item;
+ pub const MoveEvent = dnd_drop.State.MoveEvent;
+ pub const max_mime_list_bytes = dnd_drop.max_mime_list_bytes;
+ pub const handleCommand = dnd_drop.handleCommand;
++pub const snapshot = @import("dnd_snapshot.zig");
+ pub const Event = dnd_drop.Event;
+ 
+ test {
+@@ -66,4 +67,5 @@ test {
+     _ = dnd_response;
+     _ = dnd_drop;
+     _ = @import("dnd_test.zig");
++    _ = snapshot;
+ }
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/dnd_snapshot.zig b/vendor/libghostty-vt/src/terminal/kitty/dnd_snapshot.zig
+new file mode 100644
+index 00000000..12620602
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/kitty/dnd_snapshot.zig
+@@ -0,0 +1,582 @@
++//! Bounded DND state codec. Restores data, never native drag events or ownership.
++//! Payload may contain dropped private data; do not log it.
++const std = @import("std");
++const drop = @import("dnd_drop.zig");
++const command = @import("dnd_command.zig");
++const Allocator = std.mem.Allocator;
++pub const Error = error{ InvalidSnapshot, LimitExceeded, OutOfMemory };
++const magic = "DNDST1";
++
++const Reader = struct {
++    bytes: []const u8,
++    offset: usize = 0,
++    fn take(self: *Reader, len: usize) Error![]const u8 {
++        if (len > self.bytes.len - self.offset) return error.InvalidSnapshot;
++        const result = self.bytes[self.offset..][0..len];
++        self.offset += len;
++        return result;
++    }
++    fn int(self: *Reader, comptime T: type) Error!T {
++        return std.mem.readInt(T, (try self.take(@sizeOf(T)))[0..@sizeOf(T)], .little);
++    }
++    fn count(self: *Reader) Error!usize {
++        return std.math.cast(usize, try self.int(u64)) orelse error.InvalidSnapshot;
++    }
++    fn boolean(self: *Reader) Error!bool {
++        return switch (try self.int(u8)) {
++            0 => false,
++            1 => true,
++            else => error.InvalidSnapshot,
++        };
++    }
++    fn string(self: *Reader, max: usize) Error![]const u8 {
++        const len = try self.count();
++        if (len > max) return error.InvalidSnapshot;
++        return self.take(len);
++    }
++};
++
++const Writer = struct {
++    bytes: []u8,
++    offset: usize = 0,
++    fn put(self: *Writer, value: []const u8) void {
++        @memcpy(self.bytes[self.offset..][0..value.len], value);
++        self.offset += value.len;
++    }
++    fn int(self: *Writer, comptime T: type, value: T) void {
++        std.mem.writeInt(T, self.bytes[self.offset..][0..@sizeOf(T)], value, .little);
++        self.offset += @sizeOf(T);
++    }
++    fn string(self: *Writer, value: []const u8) void {
++        self.int(u64, value.len);
++        self.put(value);
++    }
++};
++
++fn add(size: *usize, len: usize, limit: usize) Error!void {
++    size.* = std.math.add(usize, size.*, len) catch return error.LimitExceeded;
++    if (size.* > limit) return error.LimitExceeded;
++}
++
++/// Both encoded bytes and logical variable backing storage must fit `limit`.
++/// Fixed state, allocator overhead and simultaneous input/output are separate.
++pub fn encode(alloc: Allocator, state: *const drop.State, limit: usize) Error![]u8 {
++    const d = &state.drop;
++    if (d.registered_mimes.items.len > drop.max_mime_list_bytes or
++        d.accepted_mimes.items.len > drop.max_mime_list_bytes + 1) return error.InvalidSnapshot;
++    var size: usize = 0;
++    var owned: usize = 0;
++    try add(&size, magic.len + 1 + 1 + 1 + 24 + 4 + 1, limit);
++    for ([_][]const u8{ d.registered_mimes.items, d.accepted_mimes.items }) |bytes| {
++        try add(&size, 8, limit);
++        try add(&size, bytes.len, limit);
++        try add(&owned, bytes.len, limit);
++    }
++    if (d.offered) |offered| {
++        try add(&size, 8, limit);
++        var offset: usize = 0;
++        for (offered.mimes) |mime| {
++            try add(&size, 8, limit);
++            try add(&size, mime.len, limit);
++            try add(&owned, @sizeOf([]const u8) + 1, limit);
++            try add(&owned, mime.len, limit);
++            // Native Offered owns one joined payload, not each MIME string.
++            if (offset > offered.payload.len or mime.len >= offered.payload.len - offset) return error.InvalidSnapshot;
++            if (!std.mem.eql(u8, mime, offered.payload[offset..][0..mime.len]) or
++                offered.payload[offset + mime.len] != ' ') return error.InvalidSnapshot;
++            offset += mime.len + 1;
++        }
++        if (offset != offered.payload.len) return error.InvalidSnapshot;
++    }
++    if (d.items) |items| {
++        try add(&size, 8, limit);
++        for (items) |item| {
++            try add(&size, 16, limit);
++            try add(&size, item.mime.len, limit);
++            try add(&size, item.data.len, limit);
++            try add(&owned, @sizeOf(drop.State.Item), limit);
++            try add(&owned, item.mime.len, limit);
++            try add(&owned, item.data.len, limit);
++        }
++    }
++    const bytes = try alloc.alloc(u8, size);
++    var w: Writer = .{ .bytes = bytes };
++    w.put(magic);
++    const flags: u8 = @as(u8, @intFromBool(state.chunking.active)) |
++        (@as(u8, @intFromBool(d.hovered)) << 1) | (@as(u8, @intFromBool(d.dropped)) << 2) |
++        (@as(u8, @intFromBool(d.accept_in_progress)) << 3) |
++        (@as(u8, @intFromBool(d.offered != null)) << 4) | (@as(u8, @intFromBool(d.items != null)) << 5);
++    w.int(u8, flags);
++    const meta = state.chunking.metadata;
++    w.int(u8, if (meta.type) |t| @intFromEnum(t) else 0);
++    w.int(u8, @intFromBool(meta.more));
++    w.int(u32, meta.client_id);
++    w.int(u32, meta.operation);
++    w.int(i32, meta.cell_x);
++    w.int(i32, meta.cell_y);
++    w.int(i32, meta.pixel_x);
++    w.int(i32, meta.pixel_y);
++    w.int(u32, d.client_id);
++    w.int(u8, if (d.accepted) |a| @intFromEnum(a) else 255);
++    w.string(d.registered_mimes.items);
++    w.string(d.accepted_mimes.items);
++    if (d.offered) |offered| {
++        w.int(u64, offered.mimes.len);
++        for (offered.mimes) |mime| w.string(mime);
++    }
++    if (d.items) |items| {
++        w.int(u64, items.len);
++        for (items) |item| {
++            w.string(item.mime);
++            w.string(item.data);
++        }
++    }
++    std.debug.assert(w.offset == bytes.len);
++    return bytes;
++}
++
++const View = struct {
++    flags: u8,
++    meta: command.Metadata,
++    client_id: u32,
++    accepted: ?command.Operation,
++    registered: []const u8,
++    accepted_mimes: []const u8,
++    offered_count: usize = 0,
++    offered_payload_len: usize = 0,
++    offered: []const u8 = "",
++    item_count: usize = 0,
++    items: []const u8 = "",
++};
++
++fn preflight(bytes: []const u8, limit: usize) Error!View {
++    if (bytes.len > limit) return error.LimitExceeded;
++    var r: Reader = .{ .bytes = bytes };
++    if (!std.mem.eql(u8, try r.take(magic.len), magic)) return error.InvalidSnapshot;
++    const flags = try r.int(u8);
++    if (flags & 0xc0 != 0) return error.InvalidSnapshot;
++    const tag = try r.int(u8);
++    const meta: command.Metadata = .{
++        .type = if (tag == 0) null else std.enums.fromInt(command.EventType, tag) orelse return error.InvalidSnapshot,
++        .more = try r.boolean(),
++        .client_id = try r.int(u32),
++        .operation = try r.int(u32),
++        .cell_x = try r.int(i32),
++        .cell_y = try r.int(i32),
++        .pixel_x = try r.int(i32),
++        .pixel_y = try r.int(i32),
++    };
++    const client_id = try r.int(u32);
++    const accepted = try r.int(u8);
++    var v: View = .{ .flags = flags, .meta = meta, .client_id = client_id, .accepted = switch (accepted) {
++        0 => .none,
++        1 => .copy,
++        2 => .move,
++        255 => null,
++        else => return error.InvalidSnapshot,
++    }, .registered = try r.string(drop.max_mime_list_bytes), .accepted_mimes = try r.string(drop.max_mime_list_bytes + 1) };
++    var owned: usize = 0;
++    try add(&owned, v.registered.len, limit);
++    try add(&owned, v.accepted_mimes.len, limit);
++    if (flags & 16 != 0) {
++        v.offered_count = try r.count();
++        if (v.offered_count > (bytes.len - r.offset) / 8) return error.InvalidSnapshot;
++        const start = r.offset;
++        for (0..v.offered_count) |_| {
++            const mime = try r.string(limit);
++            try add(&v.offered_payload_len, mime.len, limit);
++            try add(&v.offered_payload_len, 1, limit);
++            try add(&owned, @sizeOf([]const u8) + 1, limit);
++            try add(&owned, mime.len, limit);
++        }
++        v.offered = bytes[start..r.offset];
++    }
++    if (flags & 32 != 0) {
++        v.item_count = try r.count();
++        if (v.item_count > (bytes.len - r.offset) / 16) return error.InvalidSnapshot;
++        const start = r.offset;
++        for (0..v.item_count) |_| {
++            const mime = try r.string(limit);
++            const data = try r.string(limit);
++            try add(&owned, @sizeOf(drop.State.Item), limit);
++            try add(&owned, mime.len, limit);
++            try add(&owned, data.len, limit);
++        }
++        v.items = bytes[start..r.offset];
++    }
++    if (r.offset != bytes.len) return error.InvalidSnapshot;
++    return v;
++}
++
++/// Construct a fully owned state after bounded preflight. The caller destroys
++/// it with State.destroy using the same allocator. No events are emitted.
++pub fn decode(alloc: Allocator, bytes: []const u8, limit: usize) Error!*drop.State {
++    const v = try preflight(bytes, limit);
++    const result = try alloc.create(drop.State);
++    result.* = .{};
++    errdefer result.destroy(alloc);
++    result.chunking = .{ .active = v.flags & 1 != 0, .metadata = v.meta };
++    result.drop.client_id = v.client_id;
++    result.drop.hovered = v.flags & 2 != 0;
++    result.drop.dropped = v.flags & 4 != 0;
++    result.drop.accept_in_progress = v.flags & 8 != 0;
++    result.drop.accepted = v.accepted;
++    result.drop.registered_mimes = .fromOwnedSlice(try alloc.dupe(u8, v.registered));
++    result.drop.accepted_mimes = .fromOwnedSlice(try alloc.dupe(u8, v.accepted_mimes));
++    if (v.flags & 16 != 0) {
++        const mimes = try alloc.alloc([]const u8, v.offered_count);
++        errdefer alloc.free(mimes);
++        const payload = try alloc.alloc(u8, v.offered_payload_len);
++        errdefer alloc.free(payload);
++        var r: Reader = .{ .bytes = v.offered };
++        var offset: usize = 0;
++        for (mimes) |*mime| {
++            const value = try r.string(limit);
++            @memcpy(payload[offset..][0..value.len], value);
++            payload[offset + value.len] = ' ';
++            mime.* = payload[offset..][0..value.len];
++            offset += value.len + 1;
++        }
++        result.drop.offered = .{ .mimes = mimes, .payload = payload };
++    }
++    if (v.flags & 32 != 0) {
++        const items = try alloc.alloc(drop.State.Item, v.item_count);
++        errdefer alloc.free(items);
++        var copied: usize = 0;
++        errdefer for (items[0..copied]) |item| {
++            alloc.free(item.mime);
++            alloc.free(item.data);
++        };
++        var r: Reader = .{ .bytes = v.items };
++        for (items) |*item| {
++            const mime = try alloc.dupe(u8, try r.string(limit));
++            errdefer alloc.free(mime);
++            const data = try alloc.dupe(u8, try r.string(limit));
++            item.* = .{ .mime = mime, .data = data };
++            copied += 1;
++        }
++        result.drop.items = items;
++    }
++    return result;
++}
++
++fn expectEquivalent(a: *const drop.State, b: *const drop.State) !void {
++    const alloc = std.testing.allocator;
++    const left = try encode(alloc, a, 1 << 20);
++    defer alloc.free(left);
++    const right = try encode(alloc, b, 1 << 20);
++    defer alloc.free(right);
++    try std.testing.expectEqualSlices(u8, left, right);
++}
++
++fn decodeWithAllocator(alloc: Allocator, bytes: []const u8) !void {
++    const restored = try decode(alloc, bytes, 1 << 20);
++    defer restored.destroy(alloc);
++}
++
++test "dnd snapshot owned drop data and allocation failures" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source = try alloc.create(drop.State);
++    source.* = .{};
++    defer source.destroy(alloc);
++    try source.drop.registered_mimes.appendSlice(alloc, "text/plain \xff");
++    try source.drop.accepted_mimes.appendSlice(alloc, "text/plain\x00\xff\x00");
++    source.drop.client_id = 42;
++    source.chunking = .{ .active = true, .metadata = .{
++        .type = .status,
++        .more = true,
++        .client_id = 7,
++        .operation = 2,
++        .cell_x = -1,
++        .cell_y = 99,
++        .pixel_x = -100,
++        .pixel_y = 200,
++    } };
++    var output: std.Io.Writer.Allocating = .init(alloc);
++    defer output.deinit();
++    try source.dragDrop(alloc, &output.writer, .{
++        .cell_x = 1,
++        .cell_y = 2,
++        .pixel_x = 3,
++        .pixel_y = 4,
++        .operations = .{ .copy = true },
++    }, &.{ .{ .mime = "text/plain", .data = "private\x00\xff" }, .{ .mime = "\xff", .data = "second" } });
++    const bytes = try encode(alloc, source, 1 << 20);
++    defer alloc.free(bytes);
++    try testing.checkAllAllocationFailures(alloc, decodeWithAllocator, .{bytes});
++    for (0..3) |_| {
++        const restored = try decode(alloc, bytes, 1 << 20);
++        defer restored.destroy(alloc);
++        try expectEquivalent(source, restored);
++        try testing.expectEqualStrings("private\x00\xff", restored.drop.items.?[0].data);
++        try testing.expect(restored.drop.items.?[0].data.ptr != source.drop.items.?[0].data.ptr);
++    }
++}
++
++test "dnd snapshot empty presence and retained chunk metadata" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source = try alloc.create(drop.State);
++    source.* = .{};
++    defer source.destroy(alloc);
++    source.drop.offered = .{ .mimes = try alloc.alloc([]const u8, 0), .payload = try alloc.alloc(u8, 0) };
++    source.drop.items = try alloc.alloc(drop.State.Item, 0);
++    source.drop.dropped = true;
++    source.chunking.metadata = .{ .type = .register, .client_id = 123 };
++    for (0..2) |i| {
++        if (i == 1) source.chunking = .{ .active = true, .metadata = .{} };
++        const bytes = try encode(alloc, source, 1 << 20);
++        defer alloc.free(bytes);
++        const restored = try decode(alloc, bytes, bytes.len);
++        defer restored.destroy(alloc);
++        try expectEquivalent(source, restored);
++        try testing.expect(restored.drop.offered != null);
++        try testing.expect(restored.drop.items != null);
++    }
++}
++
++test "dnd snapshot offered count exceeds native drop cap" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source = try alloc.create(drop.State);
++    source.* = .{};
++    defer source.destroy(alloc);
++    var output: std.Io.Writer.Allocating = .init(alloc);
++    defer output.deinit();
++    const mimes = [_][]const u8{"x"} ** 33;
++    try source.dragMove(alloc, &output.writer, .{
++        .cell_x = 0,
++        .cell_y = 0,
++        .pixel_x = 0,
++        .pixel_y = 0,
++        .operations = .{ .copy = true },
++    }, &mimes);
++    const bytes = try encode(alloc, source, 1 << 20);
++    defer alloc.free(bytes);
++    const restored = try decode(alloc, bytes, 1 << 20);
++    defer restored.destroy(alloc);
++    try expectEquivalent(source, restored);
++    try testing.expectEqual(@as(usize, 33), restored.drop.offered.?.mimes.len);
++    // Slice storage costs more than the encoded short MIME strings.
++    try testing.expectError(error.LimitExceeded, encode(alloc, source, bytes.len));
++    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, bytes.len));
++}
++
++test "dnd snapshot malformed input rejected before allocation" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source: drop.State = .{};
++    const bytes = try encode(alloc, &source, 1 << 20);
++    defer alloc.free(bytes);
++    for (0..bytes.len) |end| try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes[0..end], bytes.len));
++    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, bytes.len - 1));
++    for ([_]usize{ 0, 6, 7, 8, 37 }) |offset| {
++        const old = bytes[offset];
++        bytes[offset] = 254;
++        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, bytes.len));
++        bytes[offset] = old;
++    }
++    const trailing = try std.mem.concat(alloc, u8, &.{ bytes, "x" });
++    defer alloc.free(trailing);
++    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, trailing, trailing.len));
++}
++
++fn send(slot: *?*drop.State, writer: *std.Io.Writer, metadata: []const u8, payload: ?[]const u8) !?drop.Event {
++    return drop.handleCommand(slot, std.testing.allocator, writer, .{
++        .metadata = metadata,
++        .payload = payload,
++        .terminator = .st,
++    });
++}
++
++test "dnd snapshot every registration and acceptance chunk cut" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const payload = "text/plain application/octet-stream\xff";
++    for ([_][]const u8{ "t=a:i=42:m=1", "t=m:o=2:m=1" }) |metadata| {
++        for (0..payload.len + 1) |cut| {
++            var source: ?*drop.State = null;
++            defer if (source) |s| s.destroy(alloc);
++            var a: std.Io.Writer.Allocating = .init(alloc);
++            defer a.deinit();
++            var b: std.Io.Writer.Allocating = .init(alloc);
++            defer b.deinit();
++            _ = try send(&source, &a.writer, "t=a:i=99", "old");
++            _ = try send(&source, &a.writer, metadata, payload[0..cut]);
++            const bytes = try encode(alloc, source.?, 4096);
++            defer alloc.free(bytes);
++            var restored: ?*drop.State = try decode(alloc, bytes, 4096);
++            defer if (restored) |s| s.destroy(alloc);
++            try expectEquivalent(source.?, restored.?);
++            try testing.expectEqual(
++                try send(&source, &a.writer, "m=0", payload[cut..]),
++                try send(&restored, &b.writer, "m=0", payload[cut..]),
++            );
++            try expectEquivalent(source.?, restored.?);
++            try testing.expectEqualSlices(u8, a.written(), b.written());
++            try testing.expectEqual(try send(&source, &a.writer, "t=A", null), try send(&restored, &b.writer, "t=A", null));
++            try testing.expect(source == null and restored == null);
++        }
++    }
++}
++
++test "dnd snapshot future requests conclusion and leave are identical" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    var source: ?*drop.State = null;
++    defer if (source) |s| s.destroy(alloc);
++    var a: std.Io.Writer.Allocating = .init(alloc);
++    defer a.deinit();
++    var b: std.Io.Writer.Allocating = .init(alloc);
++    defer b.deinit();
++    _ = try send(&source, &a.writer, "t=a:i=42", "text/plain");
++    const items = [_]drop.State.Item{.{ .mime = "text/plain", .data = "hello" }} ** 17;
++    try source.?.dragDrop(alloc, &a.writer, .{
++        .cell_x = 0,
++        .cell_y = 0,
++        .pixel_x = 0,
++        .pixel_y = 0,
++        .operations = .{ .copy = true },
++    }, &items);
++    try testing.expectEqual(@as(usize, 16), source.?.drop.items.?.len);
++    const bytes = try encode(alloc, source.?, 4096);
++    defer alloc.free(bytes);
++    var restored: ?*drop.State = try decode(alloc, bytes, 4096);
++    defer if (restored) |s| s.destroy(alloc);
++    a.clearRetainingCapacity();
++    try source.?.dragLeave(alloc, &a.writer);
++    try restored.?.dragLeave(alloc, &b.writer);
++    try testing.expectEqual(@as(usize, 0), b.written().len);
++    for ([_][]const u8{ "t=r:x=1:i=7", "t=r:x=16", "t=r:x=17", "t=r:o=1", "t=r:o=1", "t=r:x=1" }, 0..) |meta, i| {
++        try testing.expectEqual(try send(&source, &a.writer, meta, null), try send(&restored, &b.writer, meta, null));
++        try testing.expectEqualSlices(u8, a.written(), b.written());
++        if (i == 0) try testing.expectEqualStrings("\x1b]72;t=r:x=1:i=42:m=0;aGVsbG8=\x1b\\\x1b]72;t=r:x=1:i=42\x1b\\", b.written());
++        try expectEquivalent(source.?, restored.?);
++        a.clearRetainingCapacity();
++        b.clearRetainingCapacity();
++    }
++}
++
++test "dnd snapshot failed drop writer preserves reachable partial state" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source = try alloc.create(drop.State);
++    source.* = .{};
++    defer source.destroy(alloc);
++    var writer: std.Io.Writer = .fixed(&.{});
++    try testing.expectError(error.WriteFailed, source.dragDrop(alloc, &writer, .{
++        .cell_x = 0,
++        .cell_y = 0,
++        .pixel_x = 0,
++        .pixel_y = 0,
++        .operations = .{ .copy = true },
++    }, &.{.{ .mime = "text/plain", .data = "hello" }}));
++    try testing.expect(source.drop.dropped);
++    try testing.expect(source.drop.items == null);
++    try testing.expect(source.drop.offered != null);
++    const bytes = try encode(alloc, source, 4096);
++    defer alloc.free(bytes);
++    const restored = try decode(alloc, bytes, 4096);
++    defer restored.destroy(alloc);
++    try expectEquivalent(source, restored);
++}
++
++test "dnd snapshot native drop allocation failures preserve partial state" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    var succeeded = false;
++    var saw_dropped_without_offer = false;
++    for (0..32) |failure_offset| {
++        var failing = testing.FailingAllocator.init(alloc, .{});
++        const native_alloc = failing.allocator();
++        const source = try native_alloc.create(drop.State);
++        source.* = .{};
++        defer source.destroy(native_alloc);
++        var output: std.Io.Writer.Allocating = .init(alloc);
++        defer output.deinit();
++        failing.fail_index = failing.alloc_index + failure_offset;
++        const result = source.dragDrop(native_alloc, &output.writer, .{
++            .cell_x = 0,
++            .cell_y = 0,
++            .pixel_x = 0,
++            .pixel_y = 0,
++            .operations = .{ .copy = true },
++        }, &.{.{ .mime = "text/plain", .data = "hello" }});
++        const bytes = try encode(alloc, source, 4096);
++        defer alloc.free(bytes);
++        const restored = try decode(alloc, bytes, 4096);
++        defer restored.destroy(alloc);
++        try expectEquivalent(source, restored);
++        if (source.drop.dropped and source.drop.offered == null) saw_dropped_without_offer = true;
++        if (result) |_| {
++            succeeded = true;
++            break;
++        } else |err| try testing.expectEqual(error.OutOfMemory, err);
++    }
++    try testing.expect(succeeded);
++    try testing.expect(saw_dropped_without_offer);
++}
++
++test "dnd snapshot acceptance exact cap and failed final terminator" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    for ([_]bool{ false, true }) |fail_terminator| {
++        var failing = testing.FailingAllocator.init(alloc, .{});
++        const native_alloc = failing.allocator();
++        const source = try native_alloc.create(drop.State);
++        source.* = .{};
++        defer source.destroy(native_alloc);
++        // Exact capacity forces the final NUL append to grow the allocation.
++        const payload = try native_alloc.alloc(u8, drop.max_mime_list_bytes);
++        @memset(payload, ' ');
++        source.drop.accepted_mimes = .fromOwnedSlice(payload);
++        source.drop.accept_in_progress = true;
++        source.drop.accepted = .move;
++        var slot: ?*drop.State = source;
++        var writer: std.Io.Writer = .fixed(&.{});
++        if (fail_terminator) {
++            failing.fail_index = failing.alloc_index;
++            failing.resize_fail_index = failing.resize_index;
++        }
++        const result = drop.handleCommand(&slot, native_alloc, &writer, .{
++            .metadata = "t=m:m=0",
++            .payload = null,
++            .terminator = .st,
++        });
++        if (fail_terminator) {
++            try testing.expectError(error.OutOfMemory, result);
++        } else {
++            try testing.expectEqual(drop.Event.acceptance, (try result).?);
++        }
++        try testing.expect(!source.drop.accept_in_progress);
++        try testing.expectEqual(drop.max_mime_list_bytes + @as(usize, @intFromBool(!fail_terminator)), source.drop.accepted_mimes.items.len);
++        try testing.expectEqual(@as(u8, 0), source.drop.accepted_mimes.items[0]);
++        const bytes = try encode(alloc, source, 2 << 20);
++        defer alloc.free(bytes);
++        const restored = try decode(alloc, bytes, 2 << 20);
++        defer restored.destroy(alloc);
++        try testing.expectEqualSlices(u8, source.drop.accepted_mimes.items, restored.drop.accepted_mimes.items);
++        try testing.expectEqual(source.drop.accepted, restored.drop.accepted);
++        try testing.expectEqual(source.drop.accept_in_progress, restored.drop.accept_in_progress);
++    }
++}
++
++test "dnd snapshot terminal reset preserves drop and clears chunking" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const Terminal = @import("../Terminal.zig");
++    var terminal = try Terminal.init(testing.io, alloc, .{ .cols = 20, .rows = 4 });
++    defer terminal.deinit(alloc);
++    var output: std.Io.Writer.Allocating = .init(alloc);
++    defer output.deinit();
++    _ = try send(&terminal.kitty_dnd, &output.writer, "t=a:i=42:m=1", "partial");
++    const before = try encode(alloc, terminal.kitty_dnd.?, 4096);
++    defer alloc.free(before);
++    const restored = try decode(alloc, before, 4096);
++    defer restored.destroy(alloc);
++    terminal.fullReset();
++    restored.chunking = .{};
++    try expectEquivalent(terminal.kitty_dnd.?, restored);
++    try testing.expectEqualStrings("partial", terminal.kitty_dnd.?.drop.registered_mimes.items);
++}
