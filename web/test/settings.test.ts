@@ -45,6 +45,29 @@ test('version-fourteen settings acquire independent native clipboard feedback pr
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('deployed version-fourteen settings preserve revisions, bindings, groups and row layouts through both migrations', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'werdr-deployed-settings-')), path = join(dir, 'settings.json');
+  try {
+    const { agentSounds, clipboardToast, clipboardToastPosition, ...previous } = structuredClone(defaults);
+    previous.shortcuts.prefix = 'ctrl+a'; previous.shortcuts.bindings.help = ['prefix+f1'];
+    previous.collapsedWorkspaceGroups = ['saved-group-a', 'saved-group-b'];
+    previous.agentRows = { rows: [['agent', 'state_icon']], rows_by_agent: { claude: [['state_text']] }, row_gap: 2 };
+    previous.workspaceRows = { rows: [['workspace'], ['branch', 'git_status']], row_gap: 1 };
+    previous.notificationSound = false; previous.toastDelivery = 'desktop'; previous.fontSize = 18;
+    await writeFile(path, JSON.stringify({ version: 14, revision: 117, preferences: previous }), { mode: 0o600 });
+    const expected = { revision: 117, preferences: { ...previous, agentSounds, clipboardToast, clipboardToastPosition } };
+    const store = await settingsStore(path);
+    assert.deepEqual(store.read(), expected);
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { version: 16, ...expected });
+    assert.deepEqual((await settingsStore(path)).read(), expected);
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+    await assert.rejects(store.update(116, expected.preferences), /Settings changed/);
+    assert.deepEqual(store.read(), expected);
+    await store.update(117, { ...expected.preferences, clipboardToast: false });
+    assert.deepEqual((await settingsStore(path)).read(), { revision: 118, preferences: { ...expected.preferences, clipboardToast: false } });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('browser palettes match native source and all theme tokens resolve to colors', async () => {
   await promisify(execFile)(process.execPath, ['../werdr/export-themes.mjs', '--check']);
   assert.equal(themeNames.length, 18);
