@@ -19,6 +19,8 @@ use crate::protocol::CellData;
 mod migration_tests;
 #[cfg(windows)]
 mod windows_recent_fallback;
+#[cfg(any(windows, test))]
+mod windows_recent_state;
 
 #[cfg(test)]
 use super::cursor::CURSOR_POSITION_SETTLE;

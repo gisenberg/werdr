@@ -1,22 +1,7 @@
 use super::{ghostty_line_from_cells, GhosttyPaneCore, TerminalReadSnapshot};
 
-const CACHE_LINES: usize = 2000;
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Cache {
-    rows: Vec<RenderedLine>,
-    last_snapshot: Vec<RenderedLine>,
-    pub(super) usable: bool,
-    last_scrollbar: Option<(usize, usize)>,
-    pub(super) needs_refresh: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RenderedLine {
-    text: String,
-    soft_wrapped: bool,
-    wrap_continuation: bool,
-}
+pub(super) use super::windows_recent_state::Cache;
+use super::windows_recent_state::{RenderedLine, CACHE_LINES};
 
 pub(super) fn update(core: &mut GhosttyPaneCore) {
     if !primary_screen_active(core) {
