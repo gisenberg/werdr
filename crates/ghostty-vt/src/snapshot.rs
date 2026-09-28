@@ -27,6 +27,48 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Capture handler policy, ordered grants and authoritative DCS state.
+    /// Contains sensitive grant passwords. Not a full snapshot.
+    /// Limit bounds encoded bytes and grant backing plus nested DCS bytes.
+    pub fn handler_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = EncodedBytes {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        // SAFETY: live handle, exact output types, native allocation owned by guard.
+        unsafe {
+            ffi::ghostty_snapshot_handler_encode_alloc(
+                self.raw,
+                ptr::null(),
+                limit,
+                &mut bytes.ptr,
+                &mut bytes.len,
+            )
+            .into_result()?;
+            if bytes.len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(bytes.len)
+                .map_err(|_| Error(ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY))?;
+            result.extend_from_slice(slice::from_raw_parts(bytes.ptr, bytes.len));
+            Ok(result)
+        }
+    }
+
+    /// Replace an unpublished terminal's handler state without historical effects.
+    /// The native decoder validates before allocation and commits only on success.
+    /// Apply after matching outer continuation. Unfinished OSC state is separate.
+    /// Limit bounds encoded bytes and logical backing, not allocator overhead.
+    pub fn restore_handler_snapshot(&mut self, bytes: &[u8], limit: usize) -> Result<(), Error> {
+        // SAFETY: input borrow outlives synchronous decode, handle exclusively held.
+        unsafe {
+            ffi::ghostty_snapshot_handler_restore(self.raw, bytes.as_ptr(), bytes.len(), limit)
+                .into_result()
+        }
+    }
+
     /// Capture owned DND registration, chunking and dropped data.
     /// Empty bytes mean no state. Sensitive payload, not a full snapshot.
     /// Limit bounds encoded bytes and logical backing, not allocator overhead.
@@ -298,6 +340,117 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn handler_snapshot_continues_every_dcs_cut_and_preserves_reply_policy() {
+        use std::sync::{Arc, Mutex};
+        let sequence = b"\x1bP+q544e;436f\x1b\\\x1bP$q q\x1b\\";
+        for cut in 0..=sequence.len() {
+            let mut source = terminal();
+            let enabled = true;
+            let name = ffi::GhosttyString {
+                ptr: b"custom".as_ptr().cast(),
+                len: 6,
+            };
+            // SAFETY: live exclusive handle and correctly typed synchronous options.
+            unsafe {
+                ffi::ghostty_terminal_set(
+                    source.raw,
+                    ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TITLE_REPORT,
+                    (&enabled as *const bool).cast(),
+                )
+                .into_result()
+                .unwrap();
+                ffi::ghostty_terminal_set(
+                    source.raw,
+                    ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
+                    (&name as *const ffi::GhosttyString).cast(),
+                )
+                .into_result()
+                .unwrap();
+            }
+            source.write(b"\x1b]2;title\x1b\\");
+            source.write(&sequence[..cut]);
+            let handler = source.handler_snapshot(4096).unwrap();
+            let mut restored =
+                Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+            let a = Arc::new(Mutex::new(Vec::new()));
+            let b = Arc::new(Mutex::new(Vec::new()));
+            for (terminal, output) in [(&mut source, a.clone()), (&mut restored, b.clone())] {
+                terminal
+                    .set_write_pty_callback(move |bytes| {
+                        output.lock().unwrap().extend_from_slice(bytes)
+                    })
+                    .unwrap();
+            }
+            restored.restore_handler_snapshot(&handler, 4096).unwrap();
+            restored.restore_handler_snapshot(&handler, 4096).unwrap();
+            assert!(b.lock().unwrap().is_empty());
+            source.write(&sequence[cut..]);
+            restored.write(&sequence[cut..]);
+            for suffix in [
+                b"\x1b[21t".as_slice(),
+                b"\x1bP+q544e\x1b\\",
+                b"\x1bc",
+                b"\x1bP+q544e\x1b\\",
+            ] {
+                source.write(suffix);
+                restored.write(suffix);
+                assert_eq!(*a.lock().unwrap(), *b.lock().unwrap(), "cut {cut}");
+                assert_eq!(
+                    source.handler_snapshot(4096).unwrap(),
+                    restored.handler_snapshot(4096).unwrap()
+                );
+            }
+            assert!(b.lock().unwrap().windows(5).any(|bytes| bytes == b"title"));
+            assert!(b
+                .lock()
+                .unwrap()
+                .windows(12)
+                .any(|bytes| bytes == b"637573746F6D"));
+        }
+    }
+
+    #[test]
+    fn handler_snapshot_preserves_future_limit_separately_from_active_write() {
+        let mut source = terminal();
+        let set_limit = |terminal: &mut Terminal, limit: usize| {
+            // SAFETY: the option reads a size_t synchronously from this borrow.
+            unsafe {
+                ffi::ghostty_terminal_set(
+                    terminal.raw,
+                    ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES,
+                    (&limit as *const usize).cast(),
+                )
+                .into_result()
+                .unwrap();
+            }
+        };
+        set_limit(&mut source, 17);
+        source.write(b"\x1b]5522;type=write:id=old\x1b\\");
+        set_limit(&mut source, 3);
+        let handler = source.handler_snapshot(4096).unwrap();
+        let transaction = source.clipboard_write_snapshot(4096).unwrap();
+        let mut restored =
+            Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+        restored.restore_handler_snapshot(&handler, 4096).unwrap();
+        restored
+            .restore_clipboard_write_snapshot(&transaction, 4096)
+            .unwrap();
+        let payload =
+            b"\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGVsbG8h\x1b\\\x1b]5522;type=wdata\x1b\\";
+        for terminal in [&mut source, &mut restored] {
+            terminal.write(payload);
+            assert_eq!(terminal.take_clipboard_writes(), vec![b"Hello!".to_vec()]);
+            terminal.write(b"\x1b]5522;type=write:id=new\x1b\\");
+            terminal.write(payload);
+            assert!(terminal.take_clipboard_writes().is_empty());
+        }
+        assert_eq!(
+            source.handler_snapshot(4096).unwrap(),
+            restored.handler_snapshot(4096).unwrap()
+        );
     }
 
     #[test]

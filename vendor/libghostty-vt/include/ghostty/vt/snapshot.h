@@ -308,6 +308,20 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_dnd_restore(
 GHOSTTY_API GhosttyResult ghostty_snapshot_encode(GhosttyTerminal terminal,
                                                   GhosttyWriter writer);
 
+/** Capture sensitive handler policy, grants and authoritative DCS state.
+ * Limit bounds encoded bytes and grant backing plus nested DCS bytes,
+ * not allocator overhead. Free output with ghostty_free and the same allocator.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_handler_encode_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
+    uint8_t** out_ptr, size_t* out_len);
+/** Atomically restore after matching outer parser continuation reconstruction.
+ * Never emits callbacks. Empty input is invalid, not an implicit policy reset.
+ * Does not preserve unfinished OSC capture or external delivery ownership.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_handler_restore(
+    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
+
 /**
  * Encode a complete terminal snapshot to a caller-provided buffer.
  *

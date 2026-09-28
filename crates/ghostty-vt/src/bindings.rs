@@ -5340,6 +5340,25 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Capture sensitive handler policy, grants and authoritative DCS state.\n Limit bounds encoded bytes and grant backing plus nested DCS bytes,\n not allocator overhead. Free output with ghostty_free and the same allocator."]
+    pub fn ghostty_snapshot_handler_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limit: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Atomically restore after matching outer parser continuation reconstruction.\n Never emits callbacks. Empty input is invalid, not an implicit policy reset.\n Does not preserve unfinished OSC capture or external delivery ownership."]
+    pub fn ghostty_snapshot_handler_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limit: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Encode a complete terminal snapshot to a caller-provided buffer.\n\n Pass NULL for buf with buf_len zero to query the required size. If the\n buffer is too small, this returns GHOSTTY_OUT_OF_SPACE and stores the\n required capacity in out_written. A non-NULL undersized buffer may contain\n a partial snapshot prefix. On success, out_written receives the number of\n bytes encoded.\n\n A terminal can be encoded with tracking disabled when its VT parser and\n UTF-8 decoder are both at ground. If either is unfinished, tracking must\n have been enabled before the input that produced that state was written;\n otherwise this returns GHOSTTY_INVALID_VALUE.\n\n @param terminal Terminal to encode (must not be NULL)\n @param buf Destination buffer, or NULL when buf_len is zero\n @param buf_len Destination buffer capacity in bytes\n @param[out] out_written Bytes written, or required capacity on\n             GHOSTTY_OUT_OF_SPACE (must not be NULL)\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_encode_buf(
         terminal: GhosttyTerminal,

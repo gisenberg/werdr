@@ -50,6 +50,10 @@ pub const sys = @import("sys.zig");
 pub const terminal = @import("terminal.zig");
 pub const unicode = @import("unicode.zig");
 
+pub const handler_snapshot = @import("handler_snapshot.zig");
+pub const snapshot_handler_encode_alloc = handler_snapshot.encode_alloc;
+pub const snapshot_handler_restore = handler_snapshot.restore;
+
 // The full C API, unexported.
 pub const build_info = buildpkg.get;
 
@@ -295,6 +299,7 @@ test {
     _ = key_encode;
     _ = mouse_event;
     _ = mouse_encode;
+    _ = handler_snapshot;
     _ = paste;
     _ = search;
     _ = sgr;

@@ -3,9 +3,53 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0017 coordinated stream handler snapshots
+
+status: active, private pane draft integration; unfinished OSC capture remains separate
+
+patch: `vendor/patches/libghostty-vt/0017-handler-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/handler_snapshot.zig`
+
+reason: Core continuation replay omits handler policy and can resurrect a DCS query discarded after allocation failure.
+HNDLR1 preserves the exact semantic-failure latch, title-report policy, nullable raw terminfo name, future clipboard-write limit, ordered password grants and nested DCSST1 state.
+Replacement validates and stages all allocations before freeing replay-created DCS state or old grants, then rebinds terminfo bytes into destination-owned backing without callbacks.
+A non-inactive DCS handler requires outer DCS passthrough, but passthrough may legitimately have an inactive handler after parameter overflow.
+Limits bound encoded bytes and grant entry/password backing plus nested DCS bytes, not allocator overhead or total RSS.
+Grant flags, raw passwords and ordering are preserved directly, retaining one-time wrong-direction consumption, swap removal and oldest-entry eviction.
+Snapshot payloads contain permission-grant secrets and must not be logged.
+This does not preserve unfinished OSC allocation-failure state or establish external effect ownership.
+
+remove when: upstream preserves equivalent handler state and atomicity, and allocation-failure, continuation, policy, grant ordering and private pane draft tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=handler snapshot' --summary all
+just test-one handler
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0016 authoritative DCS domain snapshots
 
-status: active, domain codec only; coordinated handler restoration remains pending
+status: active, domain codec; coordinated handler restoration tracked by patch 0017
 
 patch: `vendor/patches/libghostty-vt/0016-dcs-domain-snapshots.patch`
 

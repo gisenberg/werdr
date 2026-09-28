@@ -429,6 +429,10 @@ comptime {
         if (features.grid_introspection and features.snapshot) {
             @export(&c.tracked_grid_ref_snapshot, .{ .name = "ghostty_tracked_grid_ref_snapshot" });
         }
+        if (features.snapshot) {
+            @export(&c.snapshot_handler_encode_alloc, .{ .name = "ghostty_snapshot_handler_encode_alloc" });
+            @export(&c.snapshot_handler_restore, .{ .name = "ghostty_snapshot_handler_restore" });
+        }
         @export(&c.build_info, .{ .name = "ghostty_build_info" });
         @export(&c.type_json, .{ .name = "ghostty_type_json" });
         @export(&c.alloc_alloc, .{ .name = "ghostty_alloc" });
