@@ -2,6 +2,44 @@ import { test, expect } from '@playwright/test';
 import { fixture } from './fixture';
 import { consoleInput } from './console-helpers';
 
+test('fitting forwards geometry even when a native frame already resized the renderer', async ({ page }) => {
+  const runtime = await fixture();
+  let latest: any, sendFrame: ((value: unknown) => void) | undefined;
+  const sizes: { cols: number; rows: number }[] = [];
+  await page.routeWebSocket('**/ws/terminal?*', socket => {
+    sendFrame = value => socket.send(JSON.stringify(value));
+    const server = socket.connectToServer();
+    socket.onMessage(message => {
+      const value = JSON.parse(String(message));
+      if (value.type === 'terminal.resize') sizes.push(value);
+      server.send(message);
+    });
+    server.onMessage(message => {
+      const value = JSON.parse(String(message));
+      if (value.type === 'terminal.frame') latest = value;
+      socket.send(message);
+    });
+  });
+  try {
+    await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
+    await expect.poll(() => sizes.length).toBeGreaterThan(0);
+    await expect.poll(() => latest.width).toBe(sizes.at(-1)!.cols);
+    const width = latest.width, height = latest.height;
+    const cell = (await page.locator('.pane-active canvas').boundingBox())!.width / width;
+    expect(cell).toBeGreaterThan(0);
+    // A native frame changes the renderer without changing requested geometry.
+    sendFrame!({ ...latest, width: width + 1, bytes: '', full: false });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    sizes.length = 0;
+    const viewport = page.viewportSize()!;
+    await page.setViewportSize({ ...viewport, width: viewport.width + Math.ceil(cell) });
+    await expect.poll(() => sizes.some(size => size.cols === width + 1 && size.rows === height)).toBe(true);
+    await expect.poll(() => latest.width).toBe(width + 1);
+    await expect(page.locator('#shield')).toBeHidden();
+  } finally { await runtime.close(); }
+});
+
 test('all desktop panes recover after exhausting attachment retries during a gateway outage', async ({ page }) => {
   test.setTimeout(90000);
   const runtime = await fixture();

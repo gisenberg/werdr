@@ -108,6 +108,7 @@ export class TerminalController {
     const term = new library.Terminal(this.options()); this.terminal = term;
     const fit = new library.FitAddon(); term.loadAddon(fit); term.open(this.content);
     let desired = { cols: term.cols, rows: term.rows };
+    let sendSize = () => {};
     const fitVisible = () => {
       if (!this.visible || this.content.clientWidth <= 0 || this.content.clientHeight <= 0) return;
       // FitAddon reserves 15px for a scrollbar. Native popup chrome already
@@ -118,6 +119,10 @@ export class TerminalController {
         if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
       } else fit.fit();
       desired = { cols: term.cols, rows: term.rows }; this.scrollbar?.sync();
+      // A native frame can already have resized the renderer to the fitted
+      // size. FitAddon then emits no resize event, but the server still needs
+      // the new desired geometry if our last request was different.
+      sendSize();
     };
     this.fit = fitVisible; fitVisible();
     const params = new URLSearchParams({ machine: this.machine, pane: this.pane, cols: String(term.cols), rows: String(term.rows), takeover: takeover ? '1' : '0', ...(this.target ? { target: 'popup', owner_tab_id: this.target.ownerTabId } : {}) });
@@ -126,7 +131,7 @@ export class TerminalController {
     this.imagePaste = images;
     const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) images.send(value); };
     let forwarded = { ...desired };
-    const sendSize = () => {
+    sendSize = () => {
       if (ws.readyState !== WebSocket.OPEN || desired.cols === forwarded.cols && desired.rows === forwarded.rows) return;
       send({ type: 'terminal.resize', ...desired }); forwarded = { ...desired };
     };
