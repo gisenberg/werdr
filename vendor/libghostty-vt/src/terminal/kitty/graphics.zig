@@ -29,6 +29,7 @@ pub const CommandParser = command.Parser;
 pub const Image = image.Image;
 pub const LoadingImage = image.LoadingImage;
 pub const ImageStorage = storage.ImageStorage;
+pub const storage_restore = @import("storage_restore.zig");
 pub const RenderPlacement = render.Placement;
 pub const Response = command.Response;
 pub const nextGeneration = storage.nextGeneration;

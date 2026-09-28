@@ -3,6 +3,49 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0026 transactional graphics installation into unpublished terminals
+
+status: active, coordinator prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0026-storage-unpublished-installation.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/storage_restore.zig`
+
+reason: Decoded graphics records need owned native maps, loading objects and policy backing before installation.
+Preparation uses the destination allocator and transfers decoded ownership without retaining any destination screen or binding pins.
+Installation requires exclusive access to an unpublished reconstructed terminal, exact screen presence and matching allocators.
+It rejects shallow storage aliases, wrong-screen records, missing image references and duplicate placement keys.
+Pin binding and rollback remain within one uninterrupted screen-lifetime scope; failure leaves existing stores and policy unchanged and preparation retryable.
+Both stores are swapped before old stores release their backing, and no creation API reassigns IDs, generations, counts or parent references.
+The returned directory allocation must be adopted by the host policy owner before publication and outlive the installed policy slices.
+Tests cover source and preparation destruction, continuation, combined generation/token remapping, final-pin failure, retry, allocation failures and host file-reference cleanup without reads.
+Only opt-in restoration work is added; render, parser and mutation fast paths are unchanged.
+This is not a production handoff API: clock rebasing, external producer coordination and C/Rust policy adoption remain separate requirements.
+
+remove when: upstream provides equivalent transactional installation and ownership, rollback, continuation, token and attachment tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=storage restore' --summary all
+zig build test-lib-vt -Demit-lib-vt=true -Dtarget=x86-linux-musl '-Dtest-filter=storage restore' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig commands inside `vendor/libghostty-vt`.
+
 ## 0024 both-screen graphics storage snapshots
 
 status: active, domain prerequisite; retained graphics gate remains closed
