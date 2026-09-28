@@ -59,10 +59,12 @@ fn layout(img: *const image.Image, limits: Limits) Error!Layout {
     const format: u8 = switch (img.format) {
         .rgb => 0,
         .rgba => 1,
+        .gray_alpha => 2,
+        .gray => 3,
         else => return error.InvalidSnapshot,
     };
     const pixels = try mul(img.width, img.height);
-    const expected = try mul(pixels, if (format == 0) 3 else 4);
+    const expected = try mul(pixels, formatBpp(format));
     var result: Layout = .{
         .kind = 0,
         .format = format,
@@ -103,6 +105,16 @@ fn layout(img: *const image.Image, limits: Limits) Error!Layout {
 
 fn put(comptime T: type, bytes: []u8, offset: usize, value: T) void {
     std.mem.writeInt(T, bytes[offset..][0..@sizeOf(T)], value, .little);
+}
+
+fn formatBpp(format: u8) usize {
+    return switch (format) {
+        0 => 3,
+        1 => 4,
+        2 => 2,
+        3 => 1,
+        else => unreachable, // Explicit format tags are validated first.
+    };
 }
 fn get(comptime T: type, bytes: []const u8, offset: usize) T {
     return std.mem.readInt(T, bytes[offset..][0..@sizeOf(T)], .little);
@@ -161,14 +173,14 @@ pub fn encode(alloc: Allocator, img: *const image.Image, limits: Limits) Error![
 fn preflight(bytes: []const u8, limits: Limits) Error!Layout {
     if (bytes.len > limits.encoded_bytes) return error.LimitExceeded;
     if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..6], magic)) return error.InvalidSnapshot;
-    if (bytes[6] > 3 or bytes[7] > 1 or bytes[60] > 1 or bytes[61] > 2 or bytes[84] > 1 or
+    if (bytes[6] > 3 or bytes[7] > 3 or bytes[60] > 1 or bytes[61] > 2 or bytes[84] > 1 or
         !std.mem.allEqual(u8, bytes[62..64], 0) or !std.mem.allEqual(u8, bytes[85..88], 0)) return error.InvalidSnapshot;
     if (bytes[60] == 0 and (!std.mem.allEqual(u8, bytes[61..84], 0) or !std.mem.allEqual(u8, bytes[84..96], 0))) return error.InvalidSnapshot;
     if (bytes[84] == 0 and get(u64, bytes, 88) != 0) return error.InvalidSnapshot;
     const expected = std.math.cast(usize, get(u64, bytes, 44)) orelse return error.InvalidSnapshot;
     const payload_len = std.math.cast(usize, get(u64, bytes, 52)) orelse return error.InvalidSnapshot;
     const pixels = try mul(get(u32, bytes, 16), get(u32, bytes, 20));
-    if (expected != try mul(pixels, if (bytes[7] == 0) 3 else 4)) return error.InvalidSnapshot;
+    if (expected != try mul(pixels, formatBpp(bytes[7]))) return error.InvalidSnapshot;
     const frame_bytes = try mul(pixels, 4);
     const frames: usize = get(u32, bytes, 64);
     if (get(u32, bytes, 72) > frames or (frames > 0 and bytes[7] != 1)) return error.InvalidSnapshot;
@@ -206,7 +218,13 @@ pub fn decode(alloc: Allocator, bytes: []const u8, limits: Limits, resolver: ?Fi
         .number = get(u32, bytes, 12),
         .width = get(u32, bytes, 16),
         .height = get(u32, bytes, 20),
-        .format = if (v.format == 0) .rgb else .rgba,
+        .format = switch (v.format) {
+            0 => .rgb,
+            1 => .rgba,
+            2 => .gray_alpha,
+            3 => .gray,
+            else => unreachable,
+        },
         .generation = get(u64, bytes, 28),
         .metadata = .{ .transient = metadata & 1 != 0, .implicit_id = metadata & 2 != 0, .placement_count = @intCast(metadata >> 2) },
     };
@@ -332,6 +350,56 @@ test "image snapshot RGB and absent versus empty animation" {
     try testing.expectEqualDeep(source, empty);
     source.width = 3;
     try testing.expectError(error.InvalidSnapshot, encode(testing.failing_allocator, &source, test_limits));
+}
+
+test "image snapshot native grayscale loading and storage" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const command = @import("graphics_command.zig");
+    const terminal = @import("../main.zig");
+    const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+    var t = try terminal.Terminal.init(testing.io, alloc, .{ .cols = 10, .rows = 10 });
+    defer t.deinit(alloc);
+    inline for (.{ command.Transmission.Format.gray, command.Transmission.Format.gray_alpha }) |format| {
+        const pixels: []const u8 = if (format == .gray) &.{ 0, 255 } else &.{ 0, 255, 128, 0 };
+        const cmd: command.Command = .{
+            .control = .{ .transmit = .{ .image_id = 9, .width = 2, .height = 1, .format = format } },
+            .data = @constCast(pixels),
+        };
+        var loading = try image.LoadingImage.init(testing.io, alloc, &cmd, .direct);
+        defer loading.deinit(alloc);
+        var img = try loading.complete(alloc);
+        var storage: ImageStorage = .{};
+        defer storage.deinit(alloc, t.screens.active);
+        storage.addImage(testing.io, alloc, t.screens.active, img) catch |err| {
+            img.deinit(alloc);
+            return err;
+        };
+        const source = storage.images.getPtr(9).?;
+        var restored = try copyImage(source);
+        defer restored.deinit(alloc);
+        try testing.expectEqualDeep(source.*, restored);
+        try testing.expectEqual(format, restored.format);
+        try testing.expectEqualSlices(u8, pixels, restored.data.complete);
+
+        const bytes = try encode(alloc, source, test_limits);
+        defer alloc.free(bytes);
+        try testing.checkAllAllocationFailures(alloc, decodeFailing, .{bytes});
+        try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, .{
+            .encoded_bytes = bytes.len,
+            .backing_bytes = pixels.len - 1,
+        }, null));
+        // A valid tag cannot disguise an incompatible pixel byte count.
+        bytes[7] = if (format == .gray) 2 else 3;
+        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, test_limits, null));
+        bytes[7] = 4;
+        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, test_limits, null));
+
+        var pending: image.Image = .{ .width = 2, .height = 1, .format = format, .data = .{ .pending = pixels.len } };
+        var restored_pending = try copyImage(&pending);
+        defer restored_pending.deinit(alloc);
+        try testing.expectEqualDeep(pending, restored_pending);
+    }
 }
 
 fn decodeFailing(alloc: Allocator, bytes: []const u8) !void {

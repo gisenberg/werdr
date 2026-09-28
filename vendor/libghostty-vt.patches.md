@@ -25,6 +25,7 @@ local files:
 
 reason: Complete graphics restoration needs an owned image representation before storage references and placement pins can be installed.
 IMGST1 preserves image identifiers, dimensions, format, metadata, source generation, complete/pending/encoded-PNG/native-file variants and full animation state and frames.
+Explicit format tags include native grayscale and grayscale-alpha images, characterized through direct command loading and storage without relying on the byte parser's narrower format set.
 Capture never decodes PNGs, reads files, invokes protocol commands or changes source ownership.
 Native-file records retain only identity and expected length; separately retained/exported host attachments and a destination-provenance resolver are mandatory to restore them.
 The resolver transfers one valid destination reference, runs after local allocations, and is never called for malformed or over-budget input.
