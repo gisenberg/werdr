@@ -273,6 +273,161 @@ mod tests {
         assert_eq!(text, vec!["one", "two", "three", "four", "five"]);
     }
 
+    // Deliberately restores only this subsystem plus native/callback state.
+    // Fixtures below use plain output, repaint and screen switching, not the
+    // other caller-owned protocols needed by the eventual complete envelope.
+    fn restore_fallback_fixture(
+        source: &GhosttyPaneTerminal,
+        tx: &mpsc::Sender<bytes::Bytes>,
+    ) -> GhosttyPaneTerminal {
+        let core = source.core.lock().unwrap();
+        let native = core.terminal.snapshot_bytes().unwrap();
+        let observer = core.terminal.tracked_row_snapshot().unwrap();
+        let callbacks = core.terminal.callback_snapshot(4096).unwrap();
+        let cache = serde_json::to_vec(&core.recent_fallback).unwrap();
+        let mut terminal = crate::ghostty::Terminal::from_snapshot(&native, 4096).unwrap();
+        terminal.restore_callback_snapshot(callbacks, 4096).unwrap();
+        terminal.restore_tracked_row_snapshot(observer).unwrap();
+        let restored = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        restored.core.lock().unwrap().recent_fallback = serde_json::from_slice(&cache).unwrap();
+        assert_eq!(core.terminal.snapshot_bytes().unwrap(), native);
+        assert_eq!(core.terminal.tracked_row_snapshot().unwrap(), observer);
+        assert_eq!(serde_json::to_vec(&core.recent_fallback).unwrap(), cache);
+        restored
+    }
+
+    fn assert_fallback_equivalent(source: &GhosttyPaneTerminal, restored: &GhosttyPaneTerminal) {
+        let mut source = source.core.lock().unwrap();
+        let mut restored = restored.core.lock().unwrap();
+        assert_eq!(source.recent_fallback, restored.recent_fallback);
+        assert_eq!(
+            source.terminal.tracked_row_snapshot().unwrap(),
+            restored.terminal.tracked_row_snapshot().unwrap()
+        );
+        refresh_if_needed(&mut source);
+        refresh_if_needed(&mut restored);
+        assert_eq!(source.recent_fallback, restored.recent_fallback);
+        assert_eq!(
+            source.terminal.tracked_row_snapshot().unwrap(),
+            restored.terminal.tracked_row_snapshot().unwrap()
+        );
+        for unwrap in [false, true] {
+            assert_eq!(
+                recent_text(&source, CACHE_LINES, unwrap),
+                recent_text(&restored, CACHE_LINES, unwrap)
+            );
+        }
+        assert_eq!(
+            source
+                .terminal
+                .screen_vt(crate::ghostty::ActiveScreen::Primary)
+                .unwrap(),
+            restored
+                .terminal
+                .screen_vt(crate::ghostty::ActiveScreen::Primary)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn windows_fallback_combined_snapshot_continues_pending_pruning_repaint_and_resize() {
+        for resize in [None, Some((2, 40)), Some((2, 20))] {
+            for alternate in [false, true] {
+                for cut_after_batch in [false, true] {
+                    let (tx, _rx) = mpsc::channel(4);
+                    let terminal =
+                        crate::ghostty::Terminal::new_with_snapshot_tracking(40, 1, 1, 4096)
+                            .unwrap();
+                    let source = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+                    let pane_id = PaneId::from_raw(1);
+                    let feed = |pane: &GhosttyPaneTerminal, bytes: &[u8]| {
+                        pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+                    };
+                    let total = || {
+                        source
+                            .core
+                            .lock()
+                            .unwrap()
+                            .terminal
+                            .scrollbar()
+                            .unwrap()
+                            .total
+                    };
+                    feed(&source, b"line-0000");
+                    let mut prune = None;
+                    for line in 1..=5000 {
+                        feed(&source, format!("\rrepaint-{line:04}").as_bytes());
+                        let before = total();
+                        feed(&source, format!("\r\nline-{line:04}").as_bytes());
+                        let after = total();
+                        if after < before {
+                            prune = Some((before, after));
+                            break;
+                        }
+                    }
+                    let (before, after) = prune.expect("real scrollback pruning");
+                    for line in 0..before - after {
+                        feed(&source, format!("\r\nrefill-{line:04}").as_bytes());
+                    }
+                    assert_eq!(total(), before);
+                    feed(&source, b"\rnet-zero-repaint");
+                    let batch = (0..before + 1 - after)
+                        .map(|line| format!("\r\nbatch-{line:04}"))
+                        .collect::<String>();
+                    if cut_after_batch {
+                        feed(&source, batch.as_bytes());
+                        assert_eq!(total(), before);
+                    }
+                    assert!(source.core.lock().unwrap().recent_fallback.needs_refresh);
+                    if alternate {
+                        feed(&source, b"\x1b[?1049hALT");
+                    }
+                    let restored = restore_fallback_fixture(&source, &tx);
+                    let restored = restore_fallback_fixture(&restored, &tx);
+                    if alternate {
+                        for pane in [&source, &restored] {
+                            feed(pane, b"\x1b[?1049l");
+                        }
+                    }
+                    if !cut_after_batch {
+                        for pane in [&source, &restored] {
+                            feed(pane, batch.as_bytes());
+                        }
+                    }
+                    if let Some((rows, cols)) = resize {
+                        assert_eq!(
+                            source.resize(rows, cols, 8, 16),
+                            restored.resize(rows, cols, 8, 16)
+                        );
+                    }
+                    assert_fallback_equivalent(&source, &restored);
+                    let page_rows = before + 1 - after;
+                    for pane in [&source, &restored] {
+                        let core = pane.core.lock().unwrap();
+                        let text = recent_text(&core, CACHE_LINES, false).text;
+                        for expected in [
+                            "net-zero-repaint".to_string(),
+                            "batch-0000".to_string(),
+                            format!("batch-{:04}", page_rows / 2),
+                            format!("batch-{:04}", page_rows - 1),
+                        ] {
+                            assert!(text.lines().any(|line| line == expected), "lost {expected}: resize={resize:?}, alternate={alternate}, cut_after_batch={cut_after_batch}");
+                        }
+                    }
+                    for output in [
+                        b"\rfinal-repaint".as_slice(),
+                        b"\r\nnext-line",
+                        b"\x1b[2J\x1b[Hclean",
+                    ] {
+                        feed(&source, output);
+                        feed(&restored, output);
+                        assert_fallback_equivalent(&source, &restored);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn unwraps_soft_wrapped_rows() {
         let snapshot = vec![
