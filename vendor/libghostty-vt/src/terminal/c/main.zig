@@ -229,6 +229,7 @@ pub const search_get = search.get;
 pub const search_get_multi = search.get_multi;
 pub const terminal_grid_ref = terminal.grid_ref;
 pub const terminal_grid_ref_track = terminal.grid_ref_track;
+pub const terminal_grid_ref_track_screen = terminal.grid_ref_track_screen;
 pub const terminal_point_from_grid_ref = terminal.point_from_grid_ref;
 
 pub const snapshot_encode = snapshot.encode;
@@ -257,6 +258,7 @@ pub const grid_ref_style = grid_ref.grid_ref_style;
 pub const tracked_grid_ref_free = grid_ref_tracked.tracked_grid_ref_free;
 pub const tracked_grid_ref_has_value = grid_ref_tracked.tracked_grid_ref_has_value;
 pub const tracked_grid_ref_point = grid_ref_tracked.tracked_grid_ref_point;
+pub const tracked_grid_ref_screen_point = grid_ref_tracked.tracked_grid_ref_screen_point;
 pub const tracked_grid_ref_set = grid_ref_tracked.tracked_grid_ref_set;
 pub const tracked_grid_ref_snapshot = grid_ref_tracked.tracked_grid_ref_snapshot;
 

@@ -371,6 +371,7 @@ comptime {
         }
         if (features.grid_introspection) {
             @export(&c.terminal_grid_ref_track, .{ .name = "ghostty_terminal_grid_ref_track" });
+            @export(&c.terminal_grid_ref_track_screen, .{ .name = "ghostty_terminal_grid_ref_track_screen" });
         }
         if (features.snapshot) {
             @export(&c.snapshot_encode, .{ .name = "ghostty_snapshot_encode" });
@@ -413,6 +414,7 @@ comptime {
             @export(&c.tracked_grid_ref_free, .{ .name = "ghostty_tracked_grid_ref_free" });
             @export(&c.tracked_grid_ref_has_value, .{ .name = "ghostty_tracked_grid_ref_has_value" });
             @export(&c.tracked_grid_ref_point, .{ .name = "ghostty_tracked_grid_ref_point" });
+            @export(&c.tracked_grid_ref_screen_point, .{ .name = "ghostty_tracked_grid_ref_screen_point" });
             @export(&c.tracked_grid_ref_set, .{ .name = "ghostty_tracked_grid_ref_set" });
         }
         if (features.grid_introspection and features.snapshot) {

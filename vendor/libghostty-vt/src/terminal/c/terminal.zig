@@ -1827,12 +1827,38 @@ pub fn grid_ref_track(
     out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
 ) callconv(lib.calling_conv) Result {
     const wrapper = terminal_ orelse return .invalid_value;
+    // Preserve the active-screen API's current-width bounds.
+    if (point.Point.fromC(pt).coord().x >= wrapper.terminal.screens.active.pages.cols) {
+        if (out_ref) |out| out.* = null;
+        return .invalid_value;
+    }
+    return grid_ref_track_screen(terminal_, @intFromEnum(wrapper.terminal.screens.active_key), pt, out_ref);
+}
+
+pub fn grid_ref_track_screen(
+    terminal_: Terminal,
+    screen_raw: c_int,
+    pt: point.Point.C,
+    out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
+) callconv(lib.calling_conv) Result {
+    const wrapper = terminal_ orelse return .invalid_value;
     const out = out_ref orelse return .invalid_value;
     out.* = null;
 
     const t: *ZigTerminal = wrapper.terminal;
-    const list = &t.screens.active.pages;
-    const p = list.pin(.fromC(pt)) orelse return .invalid_value;
+    const key = std.enums.fromInt(TerminalScreen, screen_raw) orelse return .invalid_value;
+    const screen = t.screens.get(key) orelse return .invalid_value;
+    const list = &screen.pages;
+    const requested = point.Point.fromC(pt);
+    const p = if (requested == .screen) value: {
+        // Historical pages may retain widths different from the current grid.
+        // Resolve full-screen coordinates against the addressed page, matching
+        // the coordinate exported from an existing tracked reference.
+        var pin = list.getTopLeft(.screen).down(requested.screen.y) orelse return .invalid_value;
+        if (requested.screen.x >= pin.node.cols()) return .invalid_value;
+        pin.x = requested.screen.x;
+        break :value pin;
+    } else list.pin(requested) orelse return .invalid_value;
     const tracked_pin = list.trackPin(p) catch return .out_of_memory;
 
     const alloc = t.gpa();
@@ -1843,8 +1869,8 @@ pub fn grid_ref_track(
     ref.* = .{
         .alloc = alloc,
         .terminal = wrapper,
-        .screen_key = t.screens.active_key,
-        .screen_generation = t.screens.generation(t.screens.active_key),
+        .screen_key = key,
+        .screen_generation = t.screens.generation(key),
         .pin = tracked_pin,
     };
 

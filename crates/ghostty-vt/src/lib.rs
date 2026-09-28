@@ -31,7 +31,11 @@ mod native_image_sources;
 mod native_source;
 pub mod pane_graphics_files;
 mod snapshot;
+#[cfg(any(windows, test))]
+mod tracked_row_snapshot;
 pub use callback_snapshot::TerminalCallbackSnapshot;
+#[cfg(any(windows, test))]
+pub use tracked_row_snapshot::TrackedRowSnapshot;
 
 /// Terminfo entry the terminal emulates; child processes should see it as TERM.
 pub const TERM: &str = "xterm-256color";
@@ -851,7 +855,7 @@ pub struct LinkRegion {
 pub struct Terminal {
     raw: ffi::GhosttyTerminal,
     max_scrollback: usize,
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     tracked_row: ffi::GhosttyTrackedGridRef,
     callback_state: Box<TerminalCallbackState>,
     kitty_fingerprints: Mutex<HashMap<u32, KittyImageFingerprintEntry>>,
@@ -902,7 +906,7 @@ impl Terminal {
         Self {
             raw,
             max_scrollback: 0,
-            #[cfg(windows)]
+            #[cfg(any(windows, test))]
             tracked_row: ptr::null_mut(),
             callback_state: Box::new(TerminalCallbackState::default()),
             kitty_fingerprints: Mutex::new(HashMap::new()),
@@ -1059,7 +1063,7 @@ impl Terminal {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> Result<(), Error> {
-        #[cfg(windows)]
+        #[cfg(any(windows, test))]
         if self.cols()? != cols || self.rows()? != rows {
             // The recent-output cache observes the last viewport row. Keeping
             // that pin across reflow makes Ghostty retain trailing blank rows,
@@ -1286,7 +1290,7 @@ impl Terminal {
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     pub fn track_row(&mut self, y: u32) -> Option<usize> {
         let mut point = ffi::GhosttyPointCoordinate::default();
         let tag = ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN;
@@ -2395,7 +2399,7 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         // SAFETY: freeing a null or live handle is allowed by the C API.
         unsafe {
-            #[cfg(windows)]
+            #[cfg(any(windows, test))]
             ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
             ffi::ghostty_terminal_free(self.raw);
         }

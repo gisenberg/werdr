@@ -2447,6 +2447,29 @@ GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track(
     GhosttyTrackedGridRef *out_ref);
 
 /**
+ * Track a point on an existing selected screen without activating it.
+ * Missing screens, invalid screen identifiers and out-of-range points return
+ * GHOSTTY_INVALID_VALUE. Allocation and ownership match grid_ref_track.
+ * The screen is never initialized as a side effect.
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track_screen(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    GhosttyPoint point,
+    GhosttyTrackedGridRef *out_ref);
+
+/**
+ * Export the owning screen and full-screen coordinate of a tracked reference.
+ * Does not change the active screen, viewport or reference. Null references
+ * return GHOSTTY_INVALID_VALUE; stale or garbage references return GHOSTTY_NO_VALUE.
+ * Output pointers may be NULL and are written only on success.
+ */
+GHOSTTY_API GhosttyResult ghostty_tracked_grid_ref_screen_point(
+    GhosttyTrackedGridRef ref,
+    GhosttyTerminalScreen *out_screen,
+    GhosttyPointCoordinate *out_point);
+
+/**
  * Convert a grid reference back to a point in the given coordinate system.
  *
  * This is the inverse of ghostty_terminal_grid_ref(): given a grid reference,

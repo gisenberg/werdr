@@ -3441,6 +3441,23 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Track a point on an existing selected screen without activating it.\n Missing screens, invalid screen identifiers and out-of-range points return\n GHOSTTY_INVALID_VALUE. Allocation and ownership match grid_ref_track.\n The screen is never initialized as a side effect."]
+    pub fn ghostty_terminal_grid_ref_track_screen(
+        terminal: GhosttyTerminal,
+        screen: GhosttyTerminalScreen,
+        point: GhosttyPoint,
+        out_ref: *mut GhosttyTrackedGridRef,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Export the owning screen and full-screen coordinate of a tracked reference.\n Does not change the active screen, viewport or reference. Null references\n return GHOSTTY_INVALID_VALUE; stale or garbage references return GHOSTTY_NO_VALUE.\n Output pointers may be NULL and are written only on success."]
+    pub fn ghostty_tracked_grid_ref_screen_point(
+        ref_: GhosttyTrackedGridRef,
+        out_screen: *mut GhosttyTerminalScreen,
+        out_point: *mut GhosttyPointCoordinate,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Convert a grid reference back to a point in the given coordinate system.\n\n This is the inverse of ghostty_terminal_grid_ref(): given a grid reference,\n it returns the x/y coordinates in the requested coordinate system (active,\n viewport, screen, or history).\n\n The grid reference must have been obtained from the same terminal instance.\n Like all grid references, it is only valid until the next mutating terminal\n call.\n\n Not every grid reference is representable in every coordinate system. For\n example, a cell in scrollback history cannot be expressed in active\n coordinates, and a cell that has scrolled off the visible area cannot be\n expressed in viewport coordinates. In these cases, the function returns\n GHOSTTY_NO_VALUE.\n\n @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)\n @param ref Pointer to the grid reference to convert\n @param tag The target coordinate system\n @param[out] out On success, set to the coordinate in the requested system (may be NULL)\n @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if the terminal\n         or ref is NULL/invalid, GHOSTTY_NO_VALUE if the ref falls outside\n         the requested coordinate system\n\n @ingroup terminal"]
     pub fn ghostty_terminal_point_from_grid_ref(
         terminal: GhosttyTerminal,

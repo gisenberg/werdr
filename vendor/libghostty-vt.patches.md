@@ -3,6 +3,39 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0010 explicit-screen tracked references
+
+status: active, restore prerequisite; not wired into runtime handoff
+
+patch: `vendor/patches/libghostty-vt/0010-explicit-screen-tracked-reference.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+- `vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+
+reason: Restoring the Windows recent-output observer requires its owning screen and full-screen coordinate, including when the primary screen is inactive.
+Expose read-only screen/coordinate capture and explicit-screen tracking without initializing or activating a screen.
+Reuse existing allocation, registration, rollback and retained decode-budget ownership.
+
+remove when: upstream exposes equivalent non-mutating observer capture and explicit-screen tracking, and inactive-screen restoration and transactional rejection tests pass without this patch.
+
+verification: Full `just check` passed, including 3,973 Rust tests, maintenance patch validation and Windows cross-target lint.
+The five Rust tracked-row snapshot tests passed as part of that run.
+The native `zig build test-lib-vt -Demit-lib-vt=true -Dtest-filter='tracked observer snapshot'` build passed 71 tests across two artifacts, including support tests.
+Native Windows pending-refresh continuation validation remains a separate gate.
+
 ## 0009 snapshot allocation budget and page allocator policy
 
 status: active, restore prerequisite; not wired into runtime handoff
