@@ -1786,7 +1786,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_handoff_drains_user_writes_already_in_command_queue() {
+    fn begin_handoff_drains_partial_writes_queued_input_and_terminal_replies() {
         let (actor_socket, mut peer) = UnixStream::pair().expect("socket pair");
         actor_socket
             .set_nonblocking(true)
@@ -1818,12 +1818,31 @@ mod tests {
             poll_observer: None,
         };
 
+        // The already-written prefix must not be sent again, and replies
+        // waiting outside the terminal core must arrive before quiesce ACK.
+        runner.enqueue_write(Bytes::from_static(b"xxpending"));
+        runner.current_write_offset = 2;
+        runner
+            .controls
+            .lock()
+            .expect("controls lock")
+            .terminal_responses
+            .push(Bytes::from_static(b"reply"));
         runner.begin_handoff().expect("handoff drains queued write");
 
-        let mut buf = [0u8; 17];
+        let expected = b"pendingqueued-before-ackreply";
+        let mut buf = [0u8; b"pendingqueued-before-ackreply".len()];
         peer.read_exact(&mut buf)
             .expect("queued write reaches peer before quiesce ack");
-        assert_eq!(&buf, b"queued-before-ack");
+        assert_eq!(&buf, expected);
+        assert!(runner.pending_writes.is_empty());
+        assert_eq!(runner.current_write_offset, 0);
+        assert!(runner
+            .controls
+            .lock()
+            .expect("controls lock")
+            .terminal_responses
+            .is_empty());
         assert_eq!(runner.state, ActorState::Quiesced);
     }
 
