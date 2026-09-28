@@ -17,6 +17,7 @@ use crate::protocol::CellData;
 
 #[cfg(test)]
 mod migration_tests;
+mod policy_snapshot;
 #[cfg(windows)]
 mod windows_recent_fallback;
 #[cfg(any(windows, test))]
