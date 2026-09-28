@@ -20,6 +20,7 @@ pub const animation = @import("graphics_animation.zig");
 pub const pixel = @import("graphics_pixel.zig");
 pub const unicode = @import("graphics_unicode.zig");
 pub const Animation = animation.Animation;
+pub const image_snapshot = @import("image_snapshot.zig");
 pub const Command = command.Command;
 pub const CommandParser = command.Parser;
 pub const Image = image.Image;

@@ -1142,7 +1142,9 @@ pub const ImageStorage = struct {
 
                         // Each wrap completes a loop; a finite budget
                         // that just ran out parks on the last frame.
-                        anim.current_loop += 1;
+                        // Infinite playback can outlive the counter. Keep its
+                        // monotonic history if a finite budget is later set.
+                        anim.current_loop +|= 1;
                         if (anim.max_loops > 0 and
                             anim.current_loop >= anim.max_loops) break :advance;
                     }

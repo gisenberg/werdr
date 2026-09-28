@@ -3,6 +3,54 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0020 owned image-domain snapshots
+
+status: active, domain prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0020-image-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/image_snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig`
+
+reason: Complete graphics restoration needs an owned image representation before storage references and placement pins can be installed.
+IMGST1 preserves image identifiers, dimensions, format, metadata, source generation, complete/pending/encoded-PNG/native-file variants and full animation state and frames.
+Capture never decodes PNGs, reads files, invokes protocol commands or changes source ownership.
+Native-file records retain only identity and expected length; separately retained/exported host attachments and a destination-provenance resolver are mandatory to restore them.
+The resolver transfers one valid destination reference, runs after local allocations, and is never called for malformed or over-budget input.
+Pending bytes are a logical reservation, not a payload or a transferred producer.
+Preflight bounds encoded bytes and logical backing, including decoded PNG reservation, pending/file reservation, animation objects, frame entries and pixels, before allocation.
+Allocator overhead, retained capacities and host attachment implementation overhead are not total-RSS bounded by these logical budgets.
+Generations and nullable animation timestamps remain source-domain values; coordinated storage restoration must remap generations, dependent references and clocks before installation.
+This codec handles stored image values, not partially initialized loading images, placement graphs or ownership of external completion jobs.
+The codec adds only opt-in snapshot work and no render, input or fanout work.
+Review exposed an infinite-playback loop counter overflow; the native ticker now saturates that counter once per wrapping animation frame, preserving monotonic finite-budget behavior.
+Herdr does not currently call the native animation ticker, so this repair adds no work to its pane-scaled render paths.
+No C/Rust handoff API or graphics exclusion gate is changed by this patch.
+
+remove when: upstream provides equivalent owned image preservation and non-overflowing animation loop accounting, and ownership, bounds, deferred-backing, failure and animation-continuation tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=image snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Same-clock tick tests characterize image state only; they do not prove cross-process clock rebasing or placement restoration.
+
 ## 0019 authoritative APC handler snapshots
 
 status: active, private pane draft integration; retained graphics remain unsupported
