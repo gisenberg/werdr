@@ -37,3 +37,5 @@ pub const loading_snapshot = @import("loading_snapshot.zig");
 test {
     @import("std").testing.refAllDecls(@This());
 }
+
+pub const placement_snapshot = @import("placement_snapshot.zig");

@@ -3,6 +3,49 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0022 screen-qualified graphics placement snapshots
+
+status: active, domain prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0022-placement-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/placement_snapshot.zig`
+
+reason: Graphics placements own screen-specific tracked pins or resolved relative-parent references that cannot be restored by replaying creation commands.
+PLCST1 preserves screen identity, internal/external key namespaces, all placement geometry and virtual, relative or pin location in a fixed 96-byte record.
+Live and garbage pins retain global physical rows and columns because even garbage coordinates participate in later reflow.
+Capture checks tracked-pointer membership before dereferencing it, then validates live-page membership and row/column bounds without slow-runtime-safety-only helpers.
+Binding requires an already reconstructed screen and checks the addressed page width rather than desired terminal width, preserving mixed-width history.
+Each bound pin has explicit destination-screen ownership and rollback cleanup; capture and decoding allocate nothing.
+Neither capture nor binding creates screens, changes image counts, reaps garbage, assigns IDs/generations or re-resolves parent preference.
+Native ancestor replacement can create over-depth chains, and anonymous internal-ID wrap can create cycles; records preserve their bounded unresolved behavior rather than rejecting these reachable states.
+The coordinator still owns aggregate limits, duplicate-key/reference/count validation, atomic map installation and generation/clock mapping.
+Only opt-in snapshot work is added, not render, input or fanout work; no C/Rust handoff API or graphics exclusion gate changes.
+
+remove when: upstream provides equivalent placement preservation and ownership, mixed-width, reflow, graph and lazy-reaping tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=placement snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Native tests bind individual records or replace placement values in existing storage; this is not evidence of complete cross-process storage installation.
+
 ## 0021 retained graphics loading snapshots
 
 status: active, domain prerequisite; retained graphics gate remains closed
