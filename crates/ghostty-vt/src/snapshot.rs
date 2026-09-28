@@ -256,6 +256,85 @@ mod tests {
     }
 
     #[test]
+    fn binary_snapshot_continues_query_replies_at_every_cut() {
+        use std::sync::{Arc, Mutex};
+        for query in [b"\x1b[6n".as_slice(), b"\x1bP$qm\x1b\\", b"\x1b[?u"] {
+            for cut in 0..=query.len() {
+                let mut source = terminal();
+                source.write(b"\x1b[31m\x1b[3;7H\x1b[>3u");
+                source.write(&query[..cut]);
+                let mut restored =
+                    Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+                let mut replies = Vec::new();
+                for terminal in [&mut source, &mut restored] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let sink = output.clone();
+                    terminal
+                        .set_write_pty_callback(move |bytes| {
+                            sink.lock().unwrap().extend_from_slice(bytes)
+                        })
+                        .unwrap();
+                    terminal.write(&query[cut..]);
+                    replies.push(output.lock().unwrap().clone());
+                }
+                if cut == 0 {
+                    assert!(!replies[0].is_empty(), "query={query:?}");
+                }
+                assert_eq!(replies[1], replies[0], "query={query:?} cut={cut}");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_snapshot_preserves_saved_modes_and_reset_defaults() {
+        let mut source = terminal();
+        let default = ffi::GhosttyTerminalModeConfig {
+            mode: crate::MODE_GRAPHEME_CLUSTER,
+            value: false,
+        };
+        // SAFETY: the live handle and option value have the C API's exact types.
+        unsafe {
+            ffi::ghostty_terminal_set(
+                source.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
+                (&default as *const ffi::GhosttyTerminalModeConfig).cast(),
+            )
+            .into_result()
+            .unwrap();
+        }
+        source.write(b"\x1b[?7l\x1b[?7s\x1b[?7h");
+        let mut restored =
+            Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+        for terminal in [&mut source, &mut restored] {
+            assert!(terminal.mode_get(7).unwrap());
+            terminal.write(b"\x1b[?7r");
+            assert!(!terminal.mode_get(7).unwrap());
+            terminal.write(b"\x1bc");
+            assert!(terminal.mode_get(7).unwrap());
+            assert!(!terminal.mode_get(crate::MODE_GRAPHEME_CLUSTER).unwrap());
+        }
+    }
+
+    #[test]
+    fn binary_snapshot_preserves_each_screen_keyboard_stack() {
+        let mut source = terminal();
+        source.write(b"\x1b[>1u\x1b[>3u\x1b[?1049h\x1b[>4u\x1b[>8u");
+        let mut restored =
+            Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+        for terminal in [&mut source, &mut restored] {
+            assert_eq!(terminal.kitty_keyboard_flags().unwrap(), 8);
+            terminal.write(b"\x1b[<u");
+            assert_eq!(terminal.kitty_keyboard_flags().unwrap(), 4);
+            terminal.write(b"\x1b[?1049l");
+            assert_eq!(terminal.kitty_keyboard_flags().unwrap(), 3);
+            terminal.write(b"\x1b[<u");
+            assert_eq!(terminal.kitty_keyboard_flags().unwrap(), 1);
+            terminal.write(b"\x1b[<u");
+            assert_eq!(terminal.kitty_keyboard_flags().unwrap(), 0);
+        }
+    }
+
+    #[test]
     fn binary_snapshot_bounds_continuation_without_losing_source_input() {
         let mut source = Terminal::new_with_snapshot_tracking(40, 5, 4096, 16).unwrap();
         source.write(b"\x1b]2;abcdefghijklmnopqrstuvwxyz");
