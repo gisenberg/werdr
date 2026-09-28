@@ -767,7 +767,7 @@ function renderMobileSwitcher() {
       if (action === 'refresh') element('refresh').click();
       if (action === 'sign-out') element('logout').click();
     },
-  }));
+  }), preferences.shortcuts);
 }
 function switchMobileTarget(kind: MobileTargetKind, machine: string, id: string) {
   const host = fleetState.hosts.find(host => host.machine.id === machine);

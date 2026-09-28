@@ -13,6 +13,27 @@ async function open(page: Page, search = false) {
 }
 async function find(page: Page, query: string) { await page.locator('#panes .copy-search input').fill(query); await page.locator('#panes .copy-search').getByRole('button', { name: 'FIND', exact: true }).click(); }
 
+test('copy hints track selection, search cancellation and Escape clearing on narrow screens', async ({ page }, testInfo) => {
+  await login(page); await create(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const input = await page.locator('.pane-active textarea').elementHandle();
+  await open(page);
+  const hints = page.locator('.copy-hints');
+  await expect(hints).toContainText('q / Escape exit');
+  await page.keyboard.press('v'); await expect(hints).toContainText('selecting'); await expect(hints).toContainText('Escape clear');
+  await page.keyboard.press('Escape'); await expect(hints).toContainText('q / Escape exit');
+  await page.keyboard.press('/'); await expect(hints).toHaveText('Enter searchEscape cancel search');
+  await expect(page.locator('.copy-search input')).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath('copy-search-hints-phone.png') });
+  await page.keyboard.press('Escape'); await expect(hints).toContainText('q / Escape exit');
+  await expect(page.locator('.copy-layer')).toBeFocused();
+  for (const hint of await hints.locator('.mode-hint').all()) await expect(hint).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('copy-hints-phone.png') });
+  expect(await input!.evaluate(node => node.isConnected)).toBe(true);
+  await page.keyboard.press('Escape'); await expect(hints).toHaveCount(0);
+  await expect(page.locator('.pane-active textarea')).toBeFocused();
+});
+
 test('copy mode searches native history without resizing, copies Unicode and restores the original scroll position', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']); await login(page); const id = await create(page);
   await runtime.cli('pane', 'send-text', id, "for i in $(seq 1 200); do printf 'BROWSER_COPY_%03d 東京\\n' \"$i\"; done\n");

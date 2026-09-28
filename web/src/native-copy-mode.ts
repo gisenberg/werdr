@@ -2,6 +2,8 @@ import type { Terminal } from 'ghostty-web';
 import { matchesNativeViewport, type NativeViewport } from './terminal-viewport';
 import { writeTerminalClipboard } from './terminal-clipboard';
 import { paintTerminalSelection } from './terminal-selection';
+import { copyModeHints } from './mode-hints';
+import { modeHintElements } from './mode-hint-elements';
 
 type Point = { row: number; col: number };
 type Range = { start: Point; end: Point };
@@ -18,6 +20,8 @@ export class NativeCopyMode {
   private toolbarScroll = 0;
   private initialSearch?: { query: string; direction: Direction; repeat: boolean; generation: number };
   private readonly marks = document.createElement('div');
+  private readonly hints = document.createElement('div');
+  private hintState = '';
   private readonly status: HTMLElement;
   private readonly query: HTMLInputElement;
   private readonly form: HTMLFormElement;
@@ -52,7 +56,8 @@ export class NativeCopyMode {
 
   constructor(private host: HTMLElement, private content: HTMLElement, private toolbarHost: HTMLElement, private terminal: () => Terminal | undefined, private request: Request, private focusTerminal: () => void, private report: (message: string, failed?: boolean) => void, private copied: () => void, private beforeStart: () => void = () => {}) {
     this.layer.className = 'copy-layer'; this.layer.tabIndex = 0; this.layer.setAttribute('role', 'region'); this.layer.setAttribute('aria-label', 'Terminal copy mode');
-    this.marks.className = 'copy-marks'; this.layer.append(this.marks);
+    this.marks.className = 'copy-marks'; this.hints.className = 'copy-hints';
+    this.hints.setAttribute('aria-label', 'Copy keyboard hints'); this.layer.append(this.marks, this.hints);
     this.toolbar.className = 'copy-toolbar'; this.toolbar.setAttribute('role', 'toolbar'); this.toolbar.setAttribute('aria-label', 'Terminal copy controls');
     this.toolbar.innerHTML = '<span class="copy-status" role="status"></span><button type="button" data-copy="find" title="Search native scrollback (/ or ?)">FIND</button><button type="button" data-copy="previous" title="Previous search match (N)">PREV</button><button type="button" data-copy="next" title="Next search match (n)">NEXT</button><button type="button" data-copy="select" title="Select characters (v), or whole lines (Shift+V)">SELECT</button><button type="button" data-copy="copy" title="Copy selection or current match (y or Enter)">COPY</button><button type="button" data-copy="exit" title="Restore the original scroll position (q)">EXIT</button><form class="copy-search" hidden><label>FIND <input type="search" aria-label="Search native scrollback" autocomplete="off" spellcheck="false"></label><button type="submit">FIND</button><button type="button" data-copy="cancel-search">CANCEL</button></form>';
     this.status = this.toolbar.querySelector('.copy-status')!; this.query = this.toolbar.querySelector('input')!; this.form = this.toolbar.querySelector('form')!;
@@ -114,6 +119,7 @@ export class NativeCopyMode {
     this.beforeStart();
     this.active = true; const generation = ++this.generation;
     this.context = undefined; this.entryOffset = undefined; this.dirty = false; this.awaitingFrame = false; this.startSearch = search; this.clearSelection(); this.form.hidden = true; this.notice.hidden = true;
+    this.updateHints();
     this.host.classList.add('copy-active'); this.content.append(this.layer); this.host.append(this.notice, this.help); this.toolbarScroll = this.toolbarHost.scrollLeft; this.toolbarHost.scrollLeft = 0; this.toolbarHost.append(this.toolbar); this.toolbarHost.classList.add('copy-controls-open'); this.status.textContent = 'COPY...'; this.focus();
     this.enqueue(async () => {
       const context: Context = await this.request('pane.copy_context');
@@ -210,8 +216,8 @@ export class NativeCopyMode {
     await this.setOffset(Math.max(0, Math.min(this.context.scroll.max_offset_from_bottom, this.context.scroll.offset_from_bottom - direction * lines))); this.draw();
   }).catch(() => {}); }
   private move(rows: number, cols: number) { void this.enqueue(async () => { this.cursor = { row: this.cursor.row + rows, col: this.cursor.col + cols }; await this.reveal(); }).catch(() => {}); }
-  private openSearch(direction: Direction) { this.direction = direction; this.form.hidden = false; this.query.value = this.searchQuery; this.query.focus({ preventScroll: true }); this.query.select(); }
-  private closeSearch() { this.form.hidden = true; this.focus(); }
+  private openSearch(direction: Direction) { this.direction = direction; this.form.hidden = false; this.updateHints(); this.query.value = this.searchQuery; this.query.focus({ preventScroll: true }); this.query.select(); }
+  private closeSearch() { this.form.hidden = true; this.updateHints(); this.focus(); }
   private repeat(reverse: boolean) { if (this.searchQuery) this.search(this.searchQuery, reverse ? (this.direction === 'forward' ? 'backward' : 'forward') : this.direction, true); }
   private resumeInitialSearch() {
     const pending = this.initialSearch; this.initialSearch = undefined;
@@ -221,6 +227,7 @@ export class NativeCopyMode {
   }
   private search(query: string, direction: Direction, repeat: boolean) {
     const searchGeneration = this.searchGeneration; this.searchRequested = true;
+    this.updateHints();
     void this.enqueue(async () => {
       if (searchGeneration !== this.searchGeneration) return;
       if (!this.context) { this.initialSearch = { query, direction, repeat, generation: searchGeneration }; this.afterFrame(); return; }
@@ -302,8 +309,16 @@ export class NativeCopyMode {
     return { row: this.top + Math.max(0, Math.min((this.context?.scroll.viewport_rows || 1) - 1, Math.floor((y - rect.top) / metrics.height))), col: Math.max(0, Math.min((this.terminal()?.cols || 1) - 1, Math.floor((x - rect.left) / metrics.width))) };
   }
   private clearPaint() { this.marks.replaceChildren(); this.terminal()?.clearSelection(); delete this.layer.dataset.selection; this.layer.removeAttribute('aria-description'); }
+  private updateHints() {
+    const search = !this.form.hidden, clearable = !!(this.anchor || this.searchQuery || this.searchRequested), selecting = !!this.anchor;
+    const state = `${search}/${clearable}/${selecting}`;
+    if (state === this.hintState) return;
+    this.hintState = state;
+    this.hints.replaceChildren(...modeHintElements(copyModeHints(search, clearable, selecting)));
+  }
   private draw() {
     if (!this.active || !this.context) return;
+    this.updateHints();
     const term = this.terminal(), metrics = term?.renderer?.getMetrics();
     this.status.textContent = `COPY ${this.cursor.row + 1}:${this.cursor.col + 1}${this.searchQuery ? ` ${this.currentGlobal === undefined ? 0 : this.currentGlobal + 1}/${this.total}` : ''}`;
     this.status.title = this.status.textContent; this.layer.dataset.row = String(this.cursor.row); this.layer.dataset.col = String(this.cursor.col);

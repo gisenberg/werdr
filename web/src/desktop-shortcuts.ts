@@ -1,5 +1,7 @@
 import { shortcutActions, type ShortcutAction, type Shortcuts } from '../shared/shortcuts';
 import { ShortcutMode } from './shortcut-mode';
+import { modeHints } from './mode-hints';
+import { modeHintElements } from './mode-hint-elements';
 import type { NativeCommand } from '../shared/commands';
 export interface ShortcutCommand { id?: ShortcutAction; label: string; disabled?: boolean; palette?: boolean; run(): void }
 interface Context { identity: string; attachment: unknown; available: boolean; navigateIdentity: string; ready: boolean }
@@ -20,7 +22,8 @@ export class DesktopShortcuts {
     this.value = value; this.encoded = JSON.stringify(value); this.mode = new ShortcutMode(value);
     this.indicator.id = 'shortcut-status'; this.indicator.setAttribute('role', 'status'); this.indicator.hidden = true;
     this.help.id = 'shortcut-help'; this.help.setAttribute('aria-label', 'Keyboard shortcuts');
-    document.body.append(this.indicator, this.help);
+    document.querySelector('#terminal')!.append(this.indicator);
+    document.body.append(this.help);
     this.help.addEventListener('close', () => this.focus());
     document.addEventListener('keydown', this.down, true);
     document.addEventListener('keyup', event => { if (this.mode.up(event.code)) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
@@ -72,7 +75,12 @@ export class DesktopShortcuts {
   private paint() {
     if (this.navigating && !this.isNavigating) { this.navigating = false; this.navigate.exit(); }
     this.indicator.hidden = this.mode.mode === 'terminal';
-    this.indicator.textContent = this.isNavigating ? `[NAVIGATE] ${this.value.bindings.navigate_workspace_up.join('/')} / ${this.value.bindings.navigate_workspace_down.join('/')} workspace - Enter select - Tab pane - Escape back` : this.mode.mode === 'resize' ? '[RESIZE] h j k l / ARROWS - Enter or Escape to finish' : `[PREFIX ${this.value.prefix}] ${this.value.bindings.help.join(' / ') || 'Command palette: keyboard help'} - Escape to cancel`;
+    this.indicator.dataset.mode = this.mode.mode;
+    this.indicator.replaceChildren();
+    if (this.mode.mode === 'terminal') return;
+    const label = document.createElement('strong'); label.className = 'mode-hint-label'; label.textContent = `[${this.mode.mode.toUpperCase()}]`;
+    this.indicator.append(label);
+    this.indicator.append(...modeHintElements(modeHints(this.mode.mode, this.value)));
   }
   private down = (event: KeyboardEvent) => {
     if (event.defaultPrevented) return;

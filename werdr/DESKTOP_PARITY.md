@@ -39,6 +39,12 @@ A forced move-response race verifies destination selection after automatic nativ
 The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.
 Existing Kitty, copy-mode, layout, context-menu, and reconnect tests remain characterization coverage for this browser-owned input layer.
 Help keeps its heading and close control visible on desktop and phone layouts.
+Contextual Prefix, Navigate and Resize hints use configured bindings and native semantic key, description and mode-label colors.
+The desktop hint overlay is anchored to the terminal surface, keeping footer controls unobscured without resizing or remounting the terminal.
+Mobile Navigate exposes touch and keyboard hints inside its own switcher instead of relying on the hidden desktop overlay.
+Copy hints distinguish selection, search cancellation, Escape clearing and exit while retaining the mouse-first toolbar.
+`web/test/mode-hints.test.ts` covers hint state and remapped labels, while `web/test/mode-hints.spec.ts` checks dark/light desktop and phone layouts, footer separation, focus and retained terminal identity.
+These checks and browser screenshots do not establish complete native-reference visual parity across every mode and palette.
 Configured native commands are implemented and verified against the candidate runtime as described below.
 Complete keyboard-layout/protocol coverage remains outstanding.
 Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.

@@ -13,13 +13,16 @@ async function capture(page: Page, inputs: string[]) {
     socket.onMessage(message => { const record = JSON.parse(String(message)); if (record.type === 'terminal.input') inputs.push(record.text); else server.send(message); });
   });
 }
-test('native prefix, resize, held-key leases and browser aliases control real panes', async ({ page }) => {
+test('native prefix, resize, held-key leases and browser aliases control real panes', async ({ page }, testInfo) => {
   test.setTimeout(120_000); const runtime = await fixture(); const inputs: string[] = [];
   try {
     await capture(page, inputs); await login(page, runtime);
     const originalInput = await page.locator('.pane-active .pane-content textarea').elementHandle();
-    await prefix(page); await expect(page.locator('#shortcut-status')).toContainText('[PREFIX');
-    await page.keyboard.press('f'); await expect(page.locator('#shortcut-status')).toBeHidden(); expect(inputs).toEqual([]);
+    await prefix(page); await expect(page.locator('#shortcut-status')).toBeVisible();
+    await expect(page.locator('#shortcut-status')).toHaveAttribute('data-mode', 'prefix');
+    await expect(page.locator('#shortcut-status kbd')).toHaveText(['Escape', 'ctrl+b', 'w', '?']);
+    await page.screenshot({ path: testInfo.outputPath('prefix-hints.png') });
+    await page.keyboard.press('f'); await expect(page.locator('#shortcut-status')).toBeHidden(); await expect(page.locator('#shortcut-status')).toBeEmpty(); expect(inputs).toEqual([]);
     await prefix(page); await prefix(page); await expect.poll(() => inputs.join('')).toBe('\x02'); inputs.length = 0;
     await prefix(page, 'Shift+?'); await expect(page.locator('#shortcut-help')).toBeVisible();
     await expect(page.locator('#shortcut-help h1')).toBeInViewport(); await expect(page.locator('#shortcut-help')).toContainText('prefix+shift+n'); await page.screenshot({ path: 'test-results/shortcuts-help-desktop.png' });
@@ -30,6 +33,8 @@ test('native prefix, resize, held-key leases and browser aliases control real pa
     await expect(page.locator('#shield')).toBeHidden(); await focus(page);
     const before = await page.locator('.pane-active').boundingBox();
     await prefix(page, 'r'); await expect(page.locator('#shortcut-status')).toContainText('[RESIZE]');
+    await expect(page.locator('#shortcut-status .mode-hint')).toHaveText(['h / l / ← / → width', 'j / k / ↓ / ↑ height', 'Escape / Enter done']);
+    await page.screenshot({ path: testInfo.outputPath('resize-hints.png') });
     await page.keyboard.press('ArrowLeft'); await expect.poll(async () => (await page.locator('.pane-active').boundingBox())!.width).not.toBe(before!.width);
     await expect(page.locator('#shortcut-status')).toContainText('[RESIZE]'); await page.keyboard.press('Enter'); await expect(page.locator('#shortcut-status')).toBeHidden();
     await prefix(page); await page.locator('#panes > button.active').focus(); await expect(page.locator('#shortcut-status')).toBeHidden();
@@ -68,11 +73,20 @@ test('keybinding remaps persist through restart with validation, preview cancell
     await login(page, runtime); await prefix(page, 's'); await expect(page.locator('#settings-dialog')).toBeVisible(); await page.locator('#settings-keybindings summary').click();
     await page.locator('[data-shortcut=close_pane]').fill('x'); await expect(page.locator('#settings-error')).toContainText('intercept terminal typing');
     await page.locator('[data-shortcut=close_pane]').fill('prefix+x'); await page.locator('#settings-prefix').fill('ctrl+a');
-    await page.locator('#settings-cancel').click(); await focus(page); await prefix(page); await expect(page.locator('#shortcut-status')).toContainText('ctrl+b'); await page.keyboard.press('Escape');
+    // Closing a dialog queues its close event, which restores the saved preview.
+    await page.evaluate(() => new Promise<void>(resolve => {
+      document.querySelector('#settings-dialog')!.addEventListener('close', () => resolve(), { once: true });
+      document.querySelector<HTMLButtonElement>('#settings-cancel')!.click();
+    }));
+    await focus(page); await prefix(page); await expect(page.locator('#shortcut-status')).toBeVisible();
+    await expect(page.locator('#shortcut-status')).toHaveAttribute('data-mode', 'prefix');
+    await expect(page.locator('#shortcut-status')).toContainText('ctrl+b'); await page.keyboard.press('Escape');
     await prefix(page, 's'); await page.locator('#settings-keybindings summary').click(); await page.locator('#settings-prefix').fill('ctrl+a'); await page.locator('[data-shortcut=help]').fill('prefix+f1');
     await page.locator('[data-shortcut=split_vertical]').fill('prefix+v'); await page.locator('#settings-form button[type=submit]').click(); await expect(page.locator('#settings-dialog')).toBeHidden();
     await runtime.restartGateway(); await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden(); await focus(page);
-    await prefix(page, 'F1', 'Control+a'); await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(page.locator('#shortcut-help')).toContainText('Prefix: ctrl+a');
+    await prefix(page, undefined, 'Control+a'); await expect(page.locator('#shortcut-status')).toBeVisible();
+    await expect(page.locator('#shortcut-status kbd')).toHaveText(['Escape', 'ctrl+a', 'w', 'f1']);
+    await page.keyboard.press('F1'); await expect(page.locator('#shortcut-help')).toBeVisible(); await expect(page.locator('#shortcut-help')).toContainText('Prefix: ctrl+a');
     await expect(page.locator('#shortcut-help')).not.toContainText('Ctrl/Cmd+D');
     await page.setViewportSize({ width: 390, height: 844 }); await expect(page.locator('#shortcut-help h1')).toBeInViewport(); await page.screenshot({ path: 'test-results/shortcuts-help-mobile.png' });
     const bounds = await page.locator('#shortcut-help').boundingBox(); expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
@@ -229,6 +243,11 @@ test('mobile Navigate switches workspaces and tabs, keeps terminals mounted, and
     const textarea = await page.locator('.pane-active .pane-content textarea').elementHandle();
     await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#navigate-toggle').click();
     const switcher = page.locator('#navigate-switcher'); await expect(switcher).toBeVisible();
+    await expect(switcher.locator('.switcher-hints')).toBeVisible();
+    await expect(switcher.locator('.switcher-hints')).toContainText('Tap select');
+    await expect(switcher.locator('.switcher-hints')).toContainText('Escape back');
+    await expect(switcher.locator('.switcher-hints')).toContainText('? keybinds');
+    for (const hint of await switcher.locator('.switcher-hints .mode-hint').all()) await expect(hint).toBeInViewport();
     await expect(page.locator('#app')).toHaveAttribute('inert', '');
     expect(await textarea!.evaluate(node => node.isConnected)).toBe(true);
     await expect(switcher.locator('[data-section=workspaces] button')).toHaveCount(3);

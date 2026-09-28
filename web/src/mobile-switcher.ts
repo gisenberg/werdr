@@ -1,3 +1,7 @@
+import type { Shortcuts } from '../shared/shortcuts';
+import { modeHints } from './mode-hints';
+import { modeHintElements } from './mode-hint-elements';
+
 export interface SwitcherItem {
   id: string;
   label: string;
@@ -14,6 +18,8 @@ export class MobileSwitcher {
   readonly element = document.createElement('section');
   private content = document.createElement('div');
   private notice = document.createElement('p');
+  private hints = document.createElement('div');
+  private hintBindings = '';
   private preview?: string;
   constructor(private background: HTMLElement, close: () => void, private restoreFocus: () => void) {
     this.element.id = 'navigate-switcher'; this.element.hidden = true; this.element.tabIndex = -1;
@@ -23,7 +29,8 @@ export class MobileSwitcher {
     const done = document.createElement('button'); done.textContent = '[X] CLOSE'; done.onclick = close;
     header.append(title, done); this.content.className = 'switcher-content';
     this.notice.className = 'switcher-notice'; this.notice.setAttribute('role', 'status'); this.notice.hidden = true;
-    this.element.append(header, this.notice, this.content); document.body.append(this.element);
+    this.hints.className = 'switcher-hints'; this.hints.setAttribute('aria-label', 'Navigate keyboard hints');
+    this.element.append(header, this.notice, this.content, this.hints); document.body.append(this.element);
     for (const type of ['pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'wheel']) {
       this.element.addEventListener(type, event => event.stopPropagation(), { passive: true });
     }
@@ -35,7 +42,12 @@ export class MobileSwitcher {
     if (focused) this.restoreFocus();
   }
   report(text: string) { this.notice.textContent = text; this.notice.hidden = !text; }
-  render(sections: SwitcherSection[]) {
+  render(sections: SwitcherSection[], shortcuts: Shortcuts) {
+    const bindings = JSON.stringify(shortcuts);
+    if (bindings !== this.hintBindings) {
+      this.hintBindings = bindings;
+      this.hints.replaceChildren(...modeHintElements([{ keys: 'Tap', description: 'select' }, ...modeHints('navigate', shortcuts)]));
+    }
     const opening = this.element.hidden;
     this.element.hidden = false; this.background.inert = true;
     if (opening) { this.report(''); this.content.scrollTop = 0; this.element.focus({ preventScroll: true }); }
