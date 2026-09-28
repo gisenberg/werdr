@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { fixture } from './fixture';
+import { soundAgents } from '../shared/agent-sounds';
 
 test('native per-agent sound overrides preserve visual alerts, global mute, cancellation and restart persistence', async ({ page }) => {
   test.setTimeout(90000);
@@ -46,7 +47,8 @@ test('native per-agent sound overrides preserve visual alerts, global mute, canc
     await expect(page.locator('[data-setting=notificationSound]')).not.toBeChecked();
     await expect(page.locator('[data-agent-sound=droid]')).toHaveValue('on');
     await expect(page.locator('[data-agent-sound=claude]')).toHaveValue('off');
-    expect(await page.locator('[data-agent-sound]').count()).toBe(21);
+    await expect(page.locator('[data-agent-sound]')).toHaveCount(soundAgents.length);
+    await expect(page.locator('[data-agent-sound=letta]')).toHaveValue('default');
     await page.locator('[data-agent-sound=claude]').scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/agent-sounds-mobile.png' });

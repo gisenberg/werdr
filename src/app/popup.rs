@@ -401,6 +401,7 @@ mod tests {
         );
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: first_pane,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(app.popup_session_info().is_none());
         let second = spawn(&mut app);
@@ -408,6 +409,7 @@ mod tests {
         // Delayed process-exit and browser-close messages cannot close a replacement.
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: first_pane,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
         for stale in [
             PopupCloseExactParams {

@@ -10,7 +10,6 @@ fn queued_request(method: &str) -> (api::ApiRequestMessage, std::sync::mpsc::Rec
             .unwrap(),
             respond_to,
             response_write_complete: None,
-            stream_active: None,
         },
         response_rx,
     )

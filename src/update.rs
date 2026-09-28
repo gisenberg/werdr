@@ -698,8 +698,7 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
     Ok(())
 }
 
-#[cfg(windows)]
-const WINDOWS_INSTALLER: &str = include_str!("../distribution/install.ps1");
+pub(crate) const WINDOWS_INSTALLER: &str = include_str!("../distribution/install.ps1");
 
 #[cfg(windows)]
 struct DownloadedWindowsUpdate {
@@ -2861,6 +2860,7 @@ mod tests {
                 surface_interest: true,
                 passive_metadata: false,
                 health_check: true,
+                ssh_agent_registration: false,
             }),
         };
         let missing_baseline = crate::api::RuntimeStatus {
@@ -2942,6 +2942,7 @@ mod tests {
                     surface_interest: true,
                     passive_metadata: false,
                     health_check: true,
+                    ssh_agent_registration: false,
                 }),
             },
         };
@@ -3207,6 +3208,7 @@ mod tests {
                     surface_interest: true,
                     passive_metadata: false,
                     health_check: true,
+                    ssh_agent_registration: false,
                 }),
             },
         };

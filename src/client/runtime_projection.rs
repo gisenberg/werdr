@@ -86,6 +86,7 @@ pub fn run_runtime_projection(watch: bool) -> io::Result<()> {
         false,
         false,
         false,
+        true,
     )
     .map_err(io::Error::other)?;
     if !handshake
