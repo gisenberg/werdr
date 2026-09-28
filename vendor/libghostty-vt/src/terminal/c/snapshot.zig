@@ -16,6 +16,36 @@ const apc = @import("../apc.zig");
 const default_max_continuation_bytes = apc.Protocol.maxDefaultBytes();
 const terminal_c = @import("terminal.zig");
 
+/// Read-only graphics/glyph exclusions, NOT a complete snapshot eligibility
+/// check. Empty-storage policy and caller-owned effects are separate concerns.
+pub fn graphics_exclusions(
+    terminal: terminal_c.Terminal,
+    out_flags: ?*u64,
+) callconv(lib.calling_conv) Result {
+    const flags = out_flags orelse return .invalid_value;
+    flags.* = 0;
+    const wrapper = terminal orelse return .invalid_value;
+    const t = wrapper.terminal;
+    if (comptime @import("terminal_options").kitty_graphics) {
+        const defaults: @import("../kitty/graphics_storage.zig").ImageStorage = .{};
+        var screens = t.screens.all.iterator();
+        while (screens.next()) |entry| {
+            const storage = &entry.value.*.kitty_images;
+            if (storage.images.count() != 0) flags.* |= 1 << 0;
+            if (storage.placements.count() != 0) flags.* |= 1 << 1;
+            if (storage.loading != null) flags.* |= 1 << 2;
+            if (storage.next_image_id != defaults.next_image_id or
+                storage.next_internal_placement_id != defaults.next_internal_placement_id) flags.* |= 1 << 3;
+            if (storage.total_bytes != 0) flags.* |= 1 << 4;
+        }
+    }
+    if (t.glyph_glossary.entries.count() != 0) flags.* |= 1 << 5;
+    // Replay uses default recognition before caller policy is rebound. Even
+    // ignored or unidentified APC prefixes can therefore change semantics.
+    if (wrapper.stream.handler.apc_handler.state != .inactive) flags.* |= 1 << 6;
+    return .success;
+}
+
 /// C: GhosttySnapshotDecoderOption.
 ///
 /// Options configure validation and returned-terminal policy before snapshot
@@ -712,6 +742,74 @@ fn testEnableContinuation(terminal: terminal_c.Terminal) !void {
         .continuation_max_bytes,
         &limit,
     ));
+}
+
+test "snapshot graphics exclusions invalid arguments and retained counters" {
+    var flags: u64 = 99;
+    try testing.expectEqual(Result.invalid_value, graphics_exclusions(null, &flags));
+    try testing.expectEqual(@as(u64, 0), flags);
+    var source: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    try testing.expectEqual(Result.invalid_value, graphics_exclusions(source, null));
+    const t = source.?.terminal;
+    try testing.expect(t.screens.get(.alternate) == null);
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, 0), flags);
+    try testing.expect(t.screens.get(.alternate) == null);
+    if (comptime !@import("terminal_options").kitty_graphics) return;
+    const storage = &t.screens.active.kitty_images;
+    storage.total_limit = 123;
+    storage.image_limits = .direct;
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, 0), flags);
+    storage.next_image_id += 1;
+    storage.next_internal_placement_id += 1;
+    storage.total_bytes = 1;
+    defer storage.total_bytes = 0;
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, (1 << 3) | (1 << 4)), flags);
+}
+
+test "snapshot graphics exclusions APC states and glossary" {
+    var source: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    const handler = &source.?.stream.handler.apc_handler;
+    handler.unknown_max_bytes = 100;
+    var flags: u64 = 0;
+    for ([_][]const u8{ "\x1b_", "\x1b_G", "\x1b_25a1;r;", "\x1b_other;" }) |prefix| {
+        terminal_c.vt_write(source, prefix.ptr, prefix.len);
+        try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+        try testing.expectEqual(@as(u64, 1 << 6), flags);
+        terminal_c.vt_write(source, "\x1b\\", 2);
+        try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+        try testing.expectEqual(@as(u64, 0), flags);
+    }
+    handler.enable(.glyph, false);
+    const prefix = "\x1b_25a1;r;";
+    terminal_c.vt_write(source, prefix, prefix.len);
+    try testing.expect(handler.state == .ignore);
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, 1 << 6), flags);
+    terminal_c.vt_write(source, "\x1b\\", 2);
+    handler.enable(.glyph, true);
+    handler.max_bytes.put(.kitty, 1);
+    const oversized = "\x1b_Ga=T,f=32;AAAAAAAAAAAA";
+    terminal_c.vt_write(source, oversized, oversized.len);
+    try testing.expect(handler.state == .ignore);
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, 1 << 6), flags);
+    terminal_c.vt_write(source, "\x1b\\", 2);
+    const register = "\x1b_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1b\\";
+    terminal_c.vt_write(source, register, register.len);
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    if (comptime @import("terminal_options").glyph_protocol) {
+        try testing.expectEqual(@as(u64, 1 << 5), flags);
+    }
+    source.?.terminal.fullReset();
+    try testing.expectEqual(Result.success, graphics_exclusions(source, &flags));
+    try testing.expectEqual(@as(u64, 0), flags);
 }
 
 test "decoder option and empty source" {

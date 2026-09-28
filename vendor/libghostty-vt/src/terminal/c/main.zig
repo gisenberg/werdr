@@ -235,6 +235,7 @@ pub const terminal_point_from_grid_ref = terminal.point_from_grid_ref;
 pub const snapshot_encode = snapshot.encode;
 pub const snapshot_encode_buf = snapshot.encode_buf;
 pub const snapshot_encode_alloc = snapshot.encode_alloc;
+pub const snapshot_graphics_exclusions = snapshot.graphics_exclusions;
 pub const snapshot_decoder_new = snapshot.decoder_new;
 pub const snapshot_decoder_new_buf = snapshot.decoder_new_buf;
 pub const snapshot_decoder_free = snapshot.decoder_free;

@@ -350,6 +350,26 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_encode_alloc(
     uint8_t** out_ptr,
     size_t* out_len);
 
+/** Graphics/glyph state omitted or unsafely replayed by the snapshot codec. */
+#define GHOSTTY_SNAPSHOT_GRAPHICS_IMAGES (1ULL << 0)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS (1ULL << 1)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_LOADING (1ULL << 2)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_AUTO_IDS (1ULL << 3)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_BYTES (1ULL << 4)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_GLYPHS (1ULL << 5)
+#define GHOSTTY_SNAPSHOT_GRAPHICS_APC (1ULL << 6)
+
+/**
+ * Query graphics/glyph exclusions on both existing screens without allocating,
+ * activating a screen, or invoking callbacks. The caller must exclude mutation.
+ * Zero is NOT proof of complete snapshot eligibility: graphics policy, caller
+ * effects and other state still require separate preservation contracts.
+ * out_flags is zeroed before rejecting a NULL terminal. NULL outputs are invalid.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_graphics_exclusions(
+    GhosttyTerminal terminal,
+    uint64_t* out_flags);
+
 /**
  * Create a snapshot decoder that reads from a caller-provided reader.
  *

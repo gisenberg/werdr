@@ -377,6 +377,7 @@ comptime {
             @export(&c.snapshot_encode, .{ .name = "ghostty_snapshot_encode" });
             @export(&c.snapshot_encode_buf, .{ .name = "ghostty_snapshot_encode_buf" });
             @export(&c.snapshot_encode_alloc, .{ .name = "ghostty_snapshot_encode_alloc" });
+            @export(&c.snapshot_graphics_exclusions, .{ .name = "ghostty_snapshot_graphics_exclusions" });
             @export(&c.snapshot_decoder_new, .{ .name = "ghostty_snapshot_decoder_new" });
             @export(&c.snapshot_decoder_new_buf, .{ .name = "ghostty_snapshot_decoder_new_buf" });
             @export(&c.snapshot_decoder_free, .{ .name = "ghostty_snapshot_decoder_free" });

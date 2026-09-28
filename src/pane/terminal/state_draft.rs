@@ -1,6 +1,7 @@
 //! Coordinated in-memory capture primitive, NOT a handoff-ready format.
 //!
-//! Native graphics/glyph exclusions still need an explicit gate. The caller
+//! Retained graphics/glyph state is rejected, but empty graphics policy still
+//! needs preservation before this can become a handoff format. The caller
 //! must fence readers and control producers: replies/notifications already
 //! returned from process_pty_bytes or queued in PTY actors are outside this lock.
 //! Do not expose this draft through runtime negotiation or transport.
@@ -129,6 +130,15 @@ impl GhosttyPaneTerminal {
         limits: DraftLimits,
     ) -> Result<PaneStateDraft, String> {
         let core = self.core.lock().map_err(|_| "poisoned terminal core")?;
+        let exclusions = core
+            .terminal
+            .snapshot_graphics_exclusions()
+            .map_err(|e| e.to_string())?;
+        if exclusions != 0 {
+            return Err(format!(
+                "unsupported graphics/glyph snapshot state: {exclusions:#x}"
+            ));
+        }
         // This order is the existing core -> callback-reply order. Never reverse it.
         // Native encode_alloc copies continuation and calls the pure core encoder
         // with an allocating writer; it does not invoke terminal callbacks.
@@ -281,6 +291,41 @@ mod tests {
         assert_eq!(left.terminal_bells, right.terminal_bells);
         assert_eq!(left.reported_cwd, right.reported_cwd);
         assert_eq!(left.clipboard_writes, right.clipboard_writes);
+    }
+
+    #[test]
+    fn pane_state_draft_rejects_graphics_without_mutation() {
+        let (tx, mut rx) = mpsc::channel(32);
+        for prefix in [b"\x1b_".as_slice(), b"\x1b_G", b"\x1b_25a1;r;"] {
+            let source = pane(&tx);
+            source.core.lock().unwrap().terminal.write(prefix);
+            let before = source
+                .core
+                .lock()
+                .unwrap()
+                .terminal
+                .snapshot_bytes()
+                .unwrap();
+            assert!(source
+                .capture_state_draft(limits())
+                .err()
+                .unwrap()
+                .contains("unsupported graphics/glyph"));
+            assert_eq!(
+                source
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .snapshot_bytes()
+                    .unwrap(),
+                before
+            );
+            assert!(source.pending_pty_responses.lock().unwrap().is_empty());
+            assert!(rx.try_recv().is_err());
+            source.core.lock().unwrap().terminal.write(b"\x1b\\");
+            source.capture_state_draft(limits()).unwrap();
+        }
     }
 
     #[test]

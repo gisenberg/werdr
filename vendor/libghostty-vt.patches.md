@@ -3,6 +3,47 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0011 snapshot graphics and glyph exclusions
+
+status: active, private restore prerequisite; not runtime handoff eligibility
+
+patch: `vendor/patches/libghostty-vt/0011-snapshot-graphics-exclusions.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/snapshot.zig`
+
+reason: Native snapshots omit images, placements, in-progress loading, automatic IDs and glyph registrations.
+Continuation replay also occurs before caller APC recognition policy is restored, so even ignored partial APC can change behavior.
+Expose an allocation-free read-only query over both existing screens and the APC handler so the private pane draft can reject these exclusions before encoding.
+Zero flags do not establish full eligibility: empty-storage graphics policy, other protocol state and external I/O ownership still require preservation.
+
+remove when: upstream exposes an equivalent conservative query or faithfully preserves these states, and the native and Rust graphics exclusion regressions pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=snapshot graphics exclusions' --summary all
+just test-one snapshot_graphics_exclusions
+just test-one pane_state_draft
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+The Zig command runs inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0010 explicit-screen tracked references
 
 status: active, restore prerequisite; not wired into runtime handoff

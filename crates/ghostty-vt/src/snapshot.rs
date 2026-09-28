@@ -27,6 +27,21 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Query graphics/glyph state that the native snapshot cannot preserve.
+    ///
+    /// Returns a reason mask, including unknown future bits, without allocating,
+    /// changing screens or emitting callbacks. Any nonzero value must reject a
+    /// preservation-dependent capture. Zero is not complete eligibility: graphics
+    /// policy and caller-owned state still need independent preservation.
+    pub fn snapshot_graphics_exclusions(&self) -> Result<u64, Error> {
+        let mut flags = 0;
+        // SAFETY: live terminal and correctly typed, exclusive output pointer.
+        unsafe {
+            ffi::ghostty_snapshot_graphics_exclusions(self.raw, &mut flags).into_result()?;
+        }
+        Ok(flags)
+    }
+
     /// Create a terminal with bounded continuation tracking before any input.
     /// Overflow makes snapshot export unavailable until parser recovery; it
     /// never silently truncates a partial sequence. Production constructors
@@ -192,6 +207,109 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn snapshot_graphics_exclusions_cover_both_screens_and_loading() {
+        let image = b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\";
+        for alternate in [false, true] {
+            let mut source = terminal();
+            source.enable_kitty_graphics().unwrap();
+            // Empty configured storage is deliberately not an exclusion. Its
+            // policy still needs preservation outside this payload-only query.
+            assert_eq!(source.snapshot_graphics_exclusions().unwrap(), 0);
+            if alternate {
+                source.write(b"\x1b[?1049h");
+            }
+            source.write(image);
+            let expected = u64::from(
+                ffi::GHOSTTY_SNAPSHOT_GRAPHICS_IMAGES
+                    | ffi::GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS
+                    | ffi::GHOSTTY_SNAPSHOT_GRAPHICS_BYTES,
+            );
+            assert_eq!(
+                source.snapshot_graphics_exclusions().unwrap() & expected,
+                expected
+            );
+            source.write(if alternate {
+                b"\x1b[?1049l"
+            } else {
+                b"\x1b[?1049h"
+            });
+            let before = source.snapshot_bytes().unwrap();
+            let flags = source.snapshot_graphics_exclusions().unwrap();
+            assert_eq!(flags & expected, expected);
+            assert_eq!(source.snapshot_graphics_exclusions().unwrap(), flags);
+            assert_eq!(source.snapshot_bytes().unwrap(), before);
+        }
+        let mut source = terminal();
+        source.enable_kitty_graphics().unwrap();
+        source.write(b"\x1b_Ga=t,f=32,s=1,v=1,m=1,q=2;/wAA\x1b\\");
+        assert_ne!(
+            source.snapshot_graphics_exclusions().unwrap()
+                & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_LOADING),
+            0
+        );
+    }
+
+    #[test]
+    fn snapshot_graphics_exclusions_cover_unplaced_virtual_and_deleted_images() {
+        for action in ["a=t", "a=T,U=1"] {
+            let mut source = terminal();
+            source.enable_kitty_graphics().unwrap();
+            source.write(format!("\x1b_G{action},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").as_bytes());
+            let flags = source.snapshot_graphics_exclusions().unwrap();
+            assert_ne!(flags & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_IMAGES), 0);
+            assert_ne!(
+                flags & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_AUTO_IDS),
+                0
+            );
+            if action == "a=t" {
+                assert_eq!(
+                    flags & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS),
+                    0
+                );
+            } else {
+                assert_ne!(
+                    flags & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS),
+                    0
+                );
+            }
+            source.write(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+            // Delete-all only deletes placed images. Address the automatic ID
+            // explicitly as well to clear an unplaced transmission.
+            source.write(b"\x1b_Ga=d,d=I,i=2147483647,q=2\x1b\\");
+            assert_eq!(
+                source.snapshot_graphics_exclusions().unwrap(),
+                u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_AUTO_IDS)
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_graphics_exclusions_reject_active_apc_not_other_continuations() {
+        for prefix in [
+            b"\x1b_".as_slice(),
+            b"\x1b_G",
+            b"\x1b_unknown;",
+            b"\x1b_25a1;r;",
+        ] {
+            let mut source = terminal();
+            source.write(prefix);
+            assert_ne!(
+                source.snapshot_graphics_exclusions().unwrap()
+                    & u64::from(ffi::GHOSTTY_SNAPSHOT_GRAPHICS_APC),
+                0,
+                "{prefix:?}"
+            );
+            source.write(b"\x1b\\");
+            assert_eq!(source.snapshot_graphics_exclusions().unwrap(), 0);
+        }
+        for prefix in [b"\x1b".as_slice(), b"\x1b[31", b"\x1b]2;title", b"\xe7\x95"] {
+            let mut source = terminal();
+            source.write(prefix);
+            assert_eq!(source.snapshot_graphics_exclusions().unwrap(), 0);
+        }
     }
 
     #[test]

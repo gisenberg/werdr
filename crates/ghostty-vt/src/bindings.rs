@@ -78,6 +78,13 @@ pub const GHOSTTY_KITTY_KEY_REPORT_ALTERNATES: u32 = 4;
 pub const GHOSTTY_KITTY_KEY_REPORT_ALL: u32 = 8;
 pub const GHOSTTY_KITTY_KEY_REPORT_ASSOCIATED: u32 = 16;
 pub const GHOSTTY_KITTY_KEY_ALL: u32 = 31;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_IMAGES: u32 = 1;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS: u32 = 2;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_LOADING: u32 = 4;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_AUTO_IDS: u32 = 8;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_BYTES: u32 = 16;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_GLYPHS: u32 = 32;
+pub const GHOSTTY_SNAPSHOT_GRAPHICS_APC: u32 = 64;
 #[doc = " Operation completed successfully"]
 pub const GhosttyResult_GHOSTTY_SUCCESS: GhosttyResult = 0;
 #[doc = " Operation failed due to failed allocation"]
@@ -5329,6 +5336,13 @@ unsafe extern "C" {
         allocator: *const GhosttyAllocator,
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Query graphics/glyph exclusions on both existing screens without allocating,\n activating a screen, or invoking callbacks. The caller must exclude mutation.\n Zero is NOT proof of complete snapshot eligibility: graphics policy, caller\n effects and other state still require separate preservation contracts.\n out_flags is zeroed before rejecting a NULL terminal. NULL outputs are invalid."]
+    pub fn ghostty_snapshot_graphics_exclusions(
+        terminal: GhosttyTerminal,
+        out_flags: *mut u64,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
