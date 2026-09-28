@@ -3,6 +3,48 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0016 authoritative DCS domain snapshots
+
+status: active, domain codec only; coordinated handler restoration remains pending
+
+patch: `vendor/patches/libghostty-vt/0016-dcs-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/dcs.zig`
+- `vendor/libghostty-vt/src/terminal/dcs_snapshot.zig`
+
+reason: Successful parser continuation replay can recreate a DCS query that the source discarded after an allocation failure.
+The DCSST1 domain codec preserves inactive, ignore, XTGETTCAP and initialized DECRQSS state plus the exact byte limit.
+Tmux-enabled builds additionally preserve parser state, retained idle bytes, independent buffer limit and in-progress payloads without reading already-freed broken-state buffers.
+Unsupported builds reject tmux records instead of changing their meaning.
+Malformed and over-budget records reject before allocation, and decoding constructs destination-owned writers without emitting commands.
+This codec must be applied authoritatively after outer parser reconstruction; it does not itself integrate handler state into pane restoration.
+Encoded size bounds variable payload, not allocator overhead, retained capacities or total RSS.
+
+remove when: upstream provides equivalent authoritative DCS preservation and allocation-failure, every-cut, initialized-buffer and tmux continuation tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=dcs snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+The standard library build disables tmux, so its tmux continuation test is skipped and unsupported-state rejection is exercised.
+Also qualify the same filtered library suite with Oniguruma enabled and linked in the isolated test configuration; production build settings remain unchanged.
+The full Ghostty application test target is unavailable in this trimmed vendor tree because its GLAD source is not vendored.
+
 ## 0015 transactional DND snapshot C boundary
 
 status: active, private pane draft integration; not complete runtime preservation

@@ -7,6 +7,12 @@ const DCS = terminal.DCS;
 
 const log = std.log.scoped(.terminal_dcs);
 
+pub const snapshot = @import("dcs_snapshot.zig");
+
+test {
+    _ = snapshot;
+}
+
 /// DCS command handler. This should be hooked into a terminal.Stream handler.
 /// The hook/put/unhook functions are meant to be called from the
 /// terminal.stream dcsHook, dcsPut, and dcsUnhook functions, respectively.
