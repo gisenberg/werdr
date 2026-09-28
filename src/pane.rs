@@ -29,6 +29,7 @@ mod cursor;
 mod input;
 mod kitty_keyboard;
 mod osc;
+mod snapshot_decode;
 mod state;
 mod terminal;
 mod xtgettcap;

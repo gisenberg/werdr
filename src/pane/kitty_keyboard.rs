@@ -1,3 +1,5 @@
+mod snapshot;
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KittyKeyboardTracker {
     pending: Vec<u8>,
