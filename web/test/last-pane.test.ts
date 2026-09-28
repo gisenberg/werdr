@@ -30,3 +30,48 @@ test('last pane rejects pending selection, reused terminal IDs, unavailable host
     if (change === 'current-terminal') { history.observe('scope', 'b', state); assert.equal(history.target('scope', 'b', state), undefined); }
   }
 });
+
+test('known boot history suspends through missing metadata and resumes only on an online snapshot', () => {
+  const history = new LastPane(), state = snapshot();
+  const context = { endpoint: 'host/session/platform', enabled: true, online: true, boot: 'boot-a', gateway: 'gateway-a', connection: 'connection-a' };
+  let scope = history.connection(context);
+  const staleScope = scope;
+  history.observe(scope, 'a', state); history.observe(scope, 'b', state);
+  for (const boot of ['boot-a', undefined, 'untrusted-offline-boot']) {
+    scope = history.connection({ ...context, online: false, boot });
+    history.observe(scope, 'a', state);
+    assert.equal(history.target(scope, 'b', state), undefined);
+    history.observe(staleScope, 'a', state);
+    assert.equal(history.target(staleScope, 'b', state), undefined);
+  }
+  scope = history.connection({ ...context, gateway: 'gateway-b', connection: 'connection-b' });
+  history.observe(scope, 'b', state);
+  assert.equal(history.target(scope, 'b', state)?.pane_id, 'a');
+});
+
+test('reused pane identities cannot retain history after boot, endpoint, availability or capability replacement', () => {
+  const state = snapshot();
+  const context = { endpoint: 'host/session/platform', enabled: true, online: true, boot: 'boot-a', gateway: 'gateway-a', connection: 'connection-a' };
+  for (const change of [{ boot: 'boot-b' }, { boot: undefined }, { boot: '' }, { boot: 'x'.repeat(257) }, { endpoint: 'other/session/platform' }, { enabled: false }, { endpoint: undefined }]) {
+    const history = new LastPane(); let scope = history.connection(context);
+    history.observe(scope, 'a', state); history.observe(scope, 'b', state);
+    history.connection({ ...context, online: false });
+    scope = history.connection({ ...context, ...change });
+    history.observe(scope, 'b', state);
+    assert.equal(history.target(scope, 'b', state), undefined, JSON.stringify(change));
+  }
+});
+
+test('legacy reconnect remains conservative and independent viewers never share last-pane history', () => {
+  const state = snapshot(), legacy = new LastPane(), viewer = new LastPane();
+  const context = { endpoint: 'host', enabled: true, online: true, gateway: 'gateway', connection: 'connection' };
+  let scope = legacy.connection(context);
+  legacy.observe(scope, 'a', state); legacy.observe(scope, 'b', state);
+  const viewerScope = viewer.connection({ ...context, boot: 'known' });
+  viewer.observe(viewerScope, 'b', state); viewer.observe(viewerScope, 'a', state);
+  legacy.connection({ ...context, online: false });
+  scope = legacy.connection(context); legacy.observe(scope, 'b', state);
+  assert.equal(legacy.target(scope, 'b', state), undefined);
+  assert.equal(viewer.target(viewerScope, 'a', state)?.pane_id, 'b');
+  viewer.reset(); assert.equal(viewer.target(viewerScope, 'a', state), undefined);
+});

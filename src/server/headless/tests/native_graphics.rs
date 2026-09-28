@@ -328,6 +328,10 @@ fn inline_commit_updates_bank_only_for_a_new_asset_revision() {
     // uploaded at the logical base ID. The next native revision must therefore
     // stage into bank 1 rather than collide with that visible base image.
     let mut revised = test_headless_server();
+    let base = crate::kitty_graphics::surface::native_host_image_id(
+        &revised.client_shell_boot_id,
+        &scene().placements[0].asset,
+    );
     let (_control, _render) = add_client(&mut revised, 7);
     let (first_transfer, first_image) = prepare_scene_and_commit(&mut revised, 7, scene());
     ack_native(&mut revised, 7, first_transfer, first_image);

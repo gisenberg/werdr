@@ -12017,6 +12017,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "runtime_boot_id": {
+              "description": "Opaque owning-runtime incarnation, stable across client reconnects.\nMissing on older runtimes; never infer identity from pane IDs or version.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "tabs": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/TabInfo"

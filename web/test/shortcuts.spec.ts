@@ -334,8 +334,9 @@ test('Navigate survives the expected attachment of a previously hidden pane', as
   } finally { hold = false; for (const release of queued.splice(0)) release(); await runtime.close(); }
 });
 
-test('last-pane binding toggles scoped selections and clears uncertain reconnect history', async ({ page }) => {
+for (const identity of ['same-boot', 'legacy', 'replacement'] as const) test(`last-pane binding toggles scoped selections across ${identity} reconnect`, async ({ page }) => {
   test.setTimeout(120_000); const runtime = await fixture(); const inputs: string[] = [];
+  let replaceBoot = false;
   let observedGeneration = '';
   page.on('websocket', socket => { if (socket.url().endsWith('/ws/fleet')) socket.on('framereceived', frame => {
     const event = JSON.parse(String(frame.payload)); if (event.type === 'fleet.snapshot') observedGeneration = event.state.generation;
@@ -343,6 +344,31 @@ test('last-pane binding toggles scoped selections and clears uncertain reconnect
   const selected = () => new URL(page.url()).searchParams.get('pane');
   const last = async () => { await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'F2'); };
   try {
+    const boot = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.runtime_boot_id;
+    test.skip(identity !== 'legacy' && !boot, 'Requires a runtime advertising boot identity.');
+    if (identity !== 'legacy') expect(boot).toMatch(/^[0-9a-f]{32}$/);
+    const rewriteHost = (host: { snapshot?: { runtime_boot_id?: string } }) => {
+      if (!host.snapshot) return;
+      if (identity === 'legacy') delete host.snapshot.runtime_boot_id;
+      else if (replaceBoot) host.snapshot.runtime_boot_id = 'replacement-runtime-boot';
+    };
+    if (identity !== 'same-boot') await page.route('**/api/fleet', async route => {
+      // Preserve a real network failure while the fixture gateway is stopped.
+      const response = await route.fetch().catch(() => undefined);
+      if (!response) { await route.abort('connectionrefused'); return; }
+      const state = await response.json();
+      state.hosts.forEach(rewriteHost); await route.fulfill({ response, json: state });
+    });
+    if (identity !== 'same-boot') await page.routeWebSocket('**/ws/fleet', socket => {
+      const server = socket.connectToServer();
+      server.onMessage(message => {
+        const event = JSON.parse(String(message));
+        if (event.type === 'fleet.snapshot') event.state.hosts.forEach(rewriteHost);
+        else if (event.type === 'fleet.catalog') event.hosts.forEach(rewriteHost);
+        else if (event.type === 'fleet.host') rewriteHost(event.host);
+        socket.send(JSON.stringify(event));
+      });
+    });
     await capture(page, inputs); await login(page, runtime);
     const first = selected();
     await prefix(page, 's'); await page.locator('#settings-keybindings summary').click();
@@ -372,14 +398,22 @@ test('last-pane binding toggles scoped selections and clears uncertain reconnect
     await last(); expect(selected()).toBe(third);
     await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
     const beforeReconnect = selected(); await last(); await expect.poll(selected).toBe(third);
+    // Keep identical pane and terminal IDs while simulating a replaced runtime.
+    replaceBoot = identity === 'replacement';
     const previousGeneration = observedGeneration; await runtime.restartGateway();
     // Reconnection can already be at its 15-second backoff ceiling. Allow the
-    // next attempt and snapshot to arrive before checking the cleared history.
+    // next attempt and snapshot to arrive before checking reconnect history.
     await expect.poll(() => observedGeneration, { timeout: 30_000 }).not.toBe(previousGeneration);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(page.locator('#hosts button').first()).toHaveAttribute('data-badge', 'ONLINE');
     await expect(page.locator('#shield')).toBeHidden();
-    await last(); expect(selected()).toBe(third); expect(selected()).not.toBe(beforeReconnect);
+    await last();
+    if (identity === 'same-boot') {
+      await expect.poll(selected).toBe(beforeReconnect);
+      await last(); await expect.poll(selected).toBe(third);
+    } else {
+      expect(selected()).toBe(third); expect(selected()).not.toBe(beforeReconnect);
+    }
     // A host without metadata must clear history before choose() can reconcile a pane.
     await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
     await last(); await expect.poll(selected).toBe(third);
@@ -393,5 +427,22 @@ test('last-pane binding toggles scoped selections and clears uncertain reconnect
     expect(inputs).toEqual([]);
     await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('Last pane');
     await expect(page.locator('#command-list button').filter({ hasText: 'Last pane' })).toBeDisabled();
+    if (identity === 'same-boot') {
+      await page.locator('#command-done').click(); await expect(page.locator('#command-dialog')).toBeHidden();
+      for (const boundary of ['detach', 'logout']) {
+        await focus(page); await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
+        await last(); await expect.poll(selected).toBe(third);
+        if (boundary === 'detach') {
+          await prefix(page, 'q'); await expect(page.locator('#detached-dialog')).toBeVisible();
+          await page.locator('#resume-client').click(); await expect(page.locator('#detached-dialog')).toBeHidden();
+        } else {
+          await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
+          await expect(page.locator('#boot')).toBeVisible(); await consoleInput(page, 'token', runtime.token);
+          await expect(page.locator('#boot')).toBeHidden();
+        }
+        await expect(page.locator('#shield')).toBeHidden();
+        const resumed = selected(); await last(); expect(selected()).toBe(resumed);
+      }
+    }
   } finally { await runtime.close(); }
 });

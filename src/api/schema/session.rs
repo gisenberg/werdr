@@ -9,6 +9,10 @@ use super::workspaces::WorkspaceInfo;
 pub struct SessionSnapshot {
     pub version: String,
     pub protocol: u32,
+    /// Opaque owning-runtime incarnation, stable across client reconnects.
+    /// Missing on older runtimes; never infer identity from pane IDs or version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_boot_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -60,6 +60,23 @@ fn test_headless_server() -> HeadlessServer {
     test_headless_server_with_event_hub(api::EventHub::default())
 }
 
+#[test]
+fn json_and_native_snapshots_share_runtime_boot_identity() {
+    let server = test_headless_server();
+    let json_snapshot = server.app.session_snapshot();
+    let native_snapshot = crate::server::client_shell::snapshot(
+        &server.app,
+        &server.client_shell_boot_id,
+        1,
+        None,
+        None,
+    );
+    assert_eq!(
+        json_snapshot.runtime_boot_id.as_deref(),
+        Some(native_snapshot.boot_id.as_str())
+    );
+}
+
 fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
     let config = crate::config::Config::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -96,6 +113,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
     let server_keybindings = app_keybindings(&app);
     let headless_size = app.state.headless_size;
+    let client_shell_boot_id = app.runtime_boot_id.clone().expect("OS entropy available");
 
     HeadlessServer {
         app,
@@ -112,7 +130,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         next_client_id: 1,
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
-        client_shell_boot_id: "test-boot".into(),
+        client_shell_boot_id,
         sent_window_title: None,
         api_window_title: None,
         server_keybindings,

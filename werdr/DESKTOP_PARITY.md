@@ -114,8 +114,11 @@ Last-pane switching is implemented with the native unbound default and conservat
 
 Native last-pane history is updated by focused-pane transitions in `src/client/shell/state.rs` and cleared by endpoint projection reset, including native boot changes.
 The browser intentionally owns its selection, so following unrelated global native focus changes would violate the existing independent-viewer behavior.
-Neither the public `SessionSnapshot` nor the browser `Snapshot` currently includes native boot identity.
-A browser implementation must invalidate history across an uncertain connection replacement instead of assuming reused pane IDs belong to the same runtime.
+The candidate public `SessionSnapshot` and browser `Snapshot` expose optional `runtime_boot_id`, an OS-random identity created once per runtime and never persisted or transferred during handoff.
+Browser last-pane history is suspended while disconnected and resumes only when an online snapshot confirms the same endpoint and boot identity.
+A changed boot, endpoint, logout, or detach clears history, even if pane and terminal IDs are reused.
+Older runtimes without boot identity retain conservative connection-scoped invalidation.
+This capability requires owning-runtime adoption; a gateway or companion deployment alone does not enable it on older endpoints.
 Gateway event generation is not native boot identity.
 
 The browser activity implementation uses `src/client/shell/notification_policy.rs` as its queue and delivery reference.

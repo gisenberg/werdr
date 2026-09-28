@@ -329,6 +329,19 @@ impl HeadlessServer {
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
         let _ = api_tx;
+        // JSON and native clients observe the same owning-runtime incarnation.
+        // Retain the existing native fallback if OS entropy is unavailable;
+        // JSON clients then receive no identity and must not retain history.
+        let client_shell_boot_id = app.runtime_boot_id.clone().unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            )
+        });
         Ok(Self {
             app,
             #[cfg(unix)]
@@ -344,14 +357,7 @@ impl HeadlessServer {
             next_client_id: 1,
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
-            client_shell_boot_id: format!(
-                "{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
+            client_shell_boot_id,
             sent_window_title: None,
             api_window_title: None,
             server_keybindings,

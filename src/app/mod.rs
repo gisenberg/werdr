@@ -102,6 +102,7 @@ impl AppPolicy {
 
 pub struct App {
     pub state: AppState,
+    pub(crate) runtime_boot_id: Option<String>,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
@@ -566,6 +567,7 @@ impl App {
             custom_commands::EndpointCommandRegistry::new(&state.keybinds.custom_commands);
 
         let mut app = Self {
+            runtime_boot_id: ids::new_runtime_boot_id(),
             config_diagnostic_deadline: None,
             toast_deadline: None,
             last_api_notification_at: None,

@@ -81,7 +81,7 @@ let gatewayOnline = false;
 const lastPane = new LastPane();
 const fleet = new FleetClient(applyFleet, online => {
   const recovered = online && !gatewayOnline; gatewayOnline = online;
-  if (!online) lastPane.reset();
+  if (!online) lastPaneScope();
   if (!authenticated || !lifecycle.active) return;
   if (!online) { statusLine.update('[RECONNECTING] GATEWAY'); void refresh(); }
   else if (recovered) {
@@ -125,8 +125,14 @@ function machineContext(id: string) {
 }
 function lastPaneScope() {
   const host = selectedHost();
-  return authenticated && gatewayOnline && host?.connection === 'online'
-    ? JSON.stringify([fleetState.generation, machineContext(machineId), host.connectionGeneration]) : undefined;
+  return lastPane.connection({
+    endpoint: host ? JSON.stringify([machineContext(machineId), host.machine.platform || 'posix']) : undefined,
+    enabled: authenticated && lifecycle.active && !!host?.machine.enabled,
+    online: gatewayOnline && host?.connection === 'online',
+    boot: host?.snapshot?.runtime_boot_id,
+    gateway: fleetState.generation,
+    connection: host?.connectionGeneration,
+  });
 }
 function selectHost(id: string, fulfill = false) {
   if (!lifecycle.active) return;
@@ -174,8 +180,8 @@ function waitForPane(machine: string, pane: string, tab: string, closedNotice = 
 }
 function applyFleet(state: FleetState, added?: Notice) {
   if (!lifecycle.active) return;
-  const previous = selectedHost()?.connection, previousScope = lastPaneScope(); fleetState = state;
-  if (previousScope !== lastPaneScope()) lastPane.reset();
+  const previous = selectedHost()?.connection; fleetState = state;
+  lastPaneScope();
   if (pendingHost && pendingHost.intent !== selectionIntent) pendingHost = undefined;
   if (pendingHost && state.hosts.some(host => host.machine.id === pendingHost!.id)) { const { id } = pendingHost; pendingHost = undefined; selectHost(id, true); }
   if (!restoration.active && !selectedHost()?.machine.enabled && state.hosts.some(host => host.machine.enabled)) {
