@@ -2,6 +2,7 @@
 // requests are answered exclusively by libghostty. Keep bytes untouched: C1
 // normalization across the stream could corrupt UTF-8 or binary string payloads.
 use bytes::Bytes;
+mod snapshot;
 
 #[derive(Debug, Default)]
 pub(super) struct C1XtgettcapQueryTracker {
