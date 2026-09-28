@@ -256,6 +256,10 @@ pub const type_json = types.get_json;
 pub const unicode_codepoint_width = unicode.codepoint_width;
 pub const unicode_grapheme_width = unicode.grapheme_width;
 
+pub const dnd_snapshot = @import("dnd_snapshot.zig");
+pub const snapshot_dnd_encode_alloc = dnd_snapshot.encode_alloc;
+pub const snapshot_dnd_restore = dnd_snapshot.restore;
+
 pub const grid_ref_cell = grid_ref.grid_ref_cell;
 pub const grid_ref_row = grid_ref.grid_ref_row;
 pub const grid_ref_graphemes = grid_ref.grid_ref_graphemes;
@@ -280,6 +284,7 @@ test {
     _ = kitty_graphics;
     _ = row;
     _ = focus;
+    _ = dnd_snapshot;
     _ = formatter;
     _ = modes;
     _ = osc;

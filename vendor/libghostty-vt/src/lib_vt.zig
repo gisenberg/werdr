@@ -363,6 +363,10 @@ comptime {
             @export(&c.search_get, .{ .name = "ghostty_search_get" });
             @export(&c.search_get_multi, .{ .name = "ghostty_search_get_multi" });
         }
+        if (features.snapshot) {
+            @export(&c.snapshot_dnd_encode_alloc, .{ .name = "ghostty_snapshot_dnd_encode_alloc" });
+            @export(&c.snapshot_dnd_restore, .{ .name = "ghostty_snapshot_dnd_restore" });
+        }
         // Selections are expressed in grid references, so the untracked
         // reference constructors are required by both features.
         if (features.grid_introspection or features.selection) {

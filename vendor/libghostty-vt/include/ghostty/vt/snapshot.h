@@ -267,6 +267,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttySnapshotDecoderData;
 
+/** Capture sensitive DND state without events. Empty bytes mean absent state.
+ * Both encoded bytes and logical variable backing storage must fit limit.
+ * Free the returned allocation with ghostty_free and the same allocator.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_dnd_encode_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
+    uint8_t** out_ptr, size_t* out_len);
+/** Replace DND state atomically without events or native drag ownership transfer.
+ * Empty input explicitly clears it. Failure leaves existing state intact.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_dnd_restore(
+    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
+
 /**
  * Encode a complete terminal snapshot to a writer.
  *

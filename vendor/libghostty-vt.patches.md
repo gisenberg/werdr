@@ -3,9 +3,51 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0015 transactional DND snapshot C boundary
+
+status: active, private pane draft integration; not complete runtime preservation
+
+patch: `vendor/patches/libghostty-vt/0015-dnd-snapshot-boundary.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/dnd_snapshot.zig`
+
+reason: Expose the native DND domain codec through snapshot-gated capture and atomic replacement so the private Rust pane draft can preserve its omitted state.
+Empty bytes represent absent state and explicitly clear a destination registration.
+Replacement decodes all owned data before releasing the original state, including held drop data and MIME arrays.
+Restoration never emits historical replies, callbacks or native drag events, and does not transfer external drag ownership.
+Limits bound encoded bytes and logical variable backing independently, not allocator overhead or total RSS.
+Payloads may contain private dropped data and must not be logged.
+
+remove when: upstream exposes equivalent transactional DND capture and restoration and C allocation-failure, Rust every-cut and coordinated pane draft tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=dnd snapshot' --summary all
+just test-one dnd
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0014 native DND domain snapshots
 
-status: active, domain codec only; C/Rust/private pane draft integration remains pending
+status: active, native domain codec; boundary and private pane draft integration tracked by patch 0015
 
 patch: `vendor/patches/libghostty-vt/0014-dnd-domain-snapshots.patch`
 

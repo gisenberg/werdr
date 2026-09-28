@@ -27,6 +27,48 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Capture owned DND registration, chunking and dropped data.
+    /// Empty bytes mean no state. Sensitive payload, not a full snapshot.
+    /// Limit bounds encoded bytes and logical backing, not allocator overhead.
+    pub fn dnd_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = EncodedBytes {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        // SAFETY: live handle, exact output types, native allocation owned by guard.
+        unsafe {
+            ffi::ghostty_snapshot_dnd_encode_alloc(
+                self.raw,
+                ptr::null(),
+                limit,
+                &mut bytes.ptr,
+                &mut bytes.len,
+            )
+            .into_result()?;
+            if bytes.len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(bytes.len)
+                .map_err(|_| Error(ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY))?;
+            result.extend_from_slice(slice::from_raw_parts(bytes.ptr, bytes.len));
+            Ok(result)
+        }
+    }
+
+    /// Replace an unpublished terminal's DND state without historical effects.
+    /// The native decoder validates before allocation and commits only on success.
+    /// This does not transfer ownership of an external native drag session.
+    /// Limit bounds encoded bytes and logical backing, not allocator overhead.
+    pub fn restore_dnd_snapshot(&mut self, bytes: &[u8], limit: usize) -> Result<(), Error> {
+        // SAFETY: input borrow outlives synchronous decode, handle exclusively held.
+        unsafe {
+            ffi::ghostty_snapshot_dnd_restore(self.raw, bytes.as_ptr(), bytes.len(), limit)
+                .into_result()
+        }
+    }
+
     /// Capture the active OSC 5522 transaction, including partial base64 carry.
     /// Empty bytes mean no transaction. Sensitive payload, not a full snapshot.
     pub fn clipboard_write_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
@@ -256,6 +298,76 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn dnd_snapshot_continues_every_cut_and_preserves_future_replies() {
+        use std::sync::{Arc, Mutex};
+        let sequence = b"\x1b]72;t=a:i=42:m=1;text/\x1b\\\x1b]72;m=0;plain\x1b\\\x1b]72;t=m:o=2:m=1;text/\x1b\\\x1b]72;m=0;plain\x1b\\";
+        for cut in 0..=sequence.len() {
+            let mut source = terminal();
+            source.write(&sequence[..cut]);
+            let core = source.snapshot_bytes().unwrap();
+            let dnd = source.dnd_snapshot(4096).unwrap();
+            let mut restored = Terminal::from_snapshot(&core, 4096).unwrap();
+            let a = Arc::new(Mutex::new(Vec::new()));
+            let b = Arc::new(Mutex::new(Vec::new()));
+            for (terminal, output) in [(&mut source, a.clone()), (&mut restored, b.clone())] {
+                terminal
+                    .set_write_pty_callback(move |bytes| {
+                        output.lock().unwrap().extend_from_slice(bytes)
+                    })
+                    .unwrap();
+            }
+            let callbacks = restored.callback_snapshot(4096).unwrap();
+            restored.restore_dnd_snapshot(&dnd, 4096).unwrap();
+            let repeated = restored.dnd_snapshot(4096).unwrap();
+            restored.restore_dnd_snapshot(&repeated, 4096).unwrap();
+            assert_eq!(dnd, repeated);
+            assert_eq!(restored.callback_snapshot(4096).unwrap(), callbacks);
+            assert!(b.lock().unwrap().is_empty());
+            source.write(&sequence[cut..]);
+            restored.write(&sequence[cut..]);
+            assert_eq!(
+                source.dnd_snapshot(4096).unwrap(),
+                restored.dnd_snapshot(4096).unwrap(),
+                "cut {cut}"
+            );
+            for suffix in [
+                b"\x1b]72;t=r:x=1:i=7\x1b\\".as_slice(),
+                b"\x1bc",
+                b"\x1b]72;t=r:x=1\x1b\\",
+                b"\x1b]72;t=A\x1b\\",
+            ] {
+                source.write(suffix);
+                restored.write(suffix);
+                assert_eq!(*a.lock().unwrap(), *b.lock().unwrap(), "cut {cut}");
+                assert_eq!(
+                    source.dnd_snapshot(4096).unwrap(),
+                    restored.dnd_snapshot(4096).unwrap()
+                );
+            }
+            assert!(b.lock().unwrap().windows(4).any(|bytes| bytes == b"i=42"));
+            assert!(restored.dnd_snapshot(0).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn dnd_snapshot_rejects_corruption_atomically_and_clears_explicitly() {
+        let mut source = terminal();
+        assert!(source.dnd_snapshot(0).unwrap().is_empty());
+        source.write(b"\x1b]72;t=a:i=42;text/plain\x1b\\");
+        let before = source.dnd_snapshot(4096).unwrap();
+        assert!(source.dnd_snapshot(before.len() - 1).is_err());
+        assert!(source
+            .restore_dnd_snapshot(&before, before.len() - 1)
+            .is_err());
+        for cut in 1..before.len() {
+            assert!(source.restore_dnd_snapshot(&before[..cut], 4096).is_err());
+            assert_eq!(source.dnd_snapshot(4096).unwrap(), before);
+        }
+        source.restore_dnd_snapshot(&[], 0).unwrap();
+        assert!(source.dnd_snapshot(0).unwrap().is_empty());
     }
 
     #[test]

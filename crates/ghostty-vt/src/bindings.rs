@@ -5314,6 +5314,25 @@ pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE:
 #[doc = " Queryable snapshot decoder data.\n\n Each variant documents the output pointer type expected by\n ghostty_snapshot_decoder_get()."]
 pub type GhosttySnapshotDecoderData = ::std::os::raw::c_uint;
 unsafe extern "C" {
+    #[doc = " Capture sensitive DND state without events. Empty bytes mean absent state.\n Both encoded bytes and logical variable backing storage must fit limit.\n Free the returned allocation with ghostty_free and the same allocator."]
+    pub fn ghostty_snapshot_dnd_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limit: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Replace DND state atomically without events or native drag ownership transfer.\n Empty input explicitly clears it. Failure leaves existing state intact."]
+    pub fn ghostty_snapshot_dnd_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limit: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Encode a complete terminal snapshot to a writer.\n\n The terminal's persistent VT stream supplies the continuation bytes needed\n to reconstruct unfinished parser state. The caller must prevent concurrent\n writes or other terminal mutation for the duration of this call. The writer\n callback must not call terminal APIs with the same terminal handle.\n A terminal can be encoded with tracking disabled when its VT parser and\n UTF-8 decoder are both at ground. If either is unfinished, tracking must\n have been enabled before the input that produced that state was written;\n otherwise this returns GHOSTTY_INVALID_VALUE.\n\n Encoding begins at the writer's current position. If an error occurs, the\n writer may contain a partial snapshot without a valid FINISH marker.\n Calls to the writer are synchronous; this function does not flush or make\n the caller's destination durable.\n\n @param terminal Terminal to encode (must not be NULL)\n @param writer Destination writer whose write callback must not be NULL\n @return GHOSTTY_SUCCESS on success, GHOSTTY_IO_ERROR if the writer rejects\n         output, GHOSTTY_LIMIT_EXCEEDED if output accounting overflows, or\n         another error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_encode(
         terminal: GhosttyTerminal,

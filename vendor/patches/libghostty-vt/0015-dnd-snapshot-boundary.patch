@@ -1,0 +1,185 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/snapshot.h b/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
+index caf879b6..66dfa955 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
+@@ -267,6 +267,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttySnapshotDecoderData;
+ 
++/** Capture sensitive DND state without events. Empty bytes mean absent state.
++ * Both encoded bytes and logical variable backing storage must fit limit.
++ * Free the returned allocation with ghostty_free and the same allocator.
++ */
++GHOSTTY_API GhosttyResult ghostty_snapshot_dnd_encode_alloc(
++    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
++    uint8_t** out_ptr, size_t* out_len);
++/** Replace DND state atomically without events or native drag ownership transfer.
++ * Empty input explicitly clears it. Failure leaves existing state intact.
++ */
++GHOSTTY_API GhosttyResult ghostty_snapshot_dnd_restore(
++    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
++
+ /**
+  * Encode a complete terminal snapshot to a writer.
+  *
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index ef73b2e9..84fe044d 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -363,6 +363,10 @@ comptime {
+             @export(&c.search_get, .{ .name = "ghostty_search_get" });
+             @export(&c.search_get_multi, .{ .name = "ghostty_search_get_multi" });
+         }
++        if (features.snapshot) {
++            @export(&c.snapshot_dnd_encode_alloc, .{ .name = "ghostty_snapshot_dnd_encode_alloc" });
++            @export(&c.snapshot_dnd_restore, .{ .name = "ghostty_snapshot_dnd_restore" });
++        }
+         // Selections are expressed in grid references, so the untracked
+         // reference constructors are required by both features.
+         if (features.grid_introspection or features.selection) {
+diff --git a/vendor/libghostty-vt/src/terminal/c/dnd_snapshot.zig b/vendor/libghostty-vt/src/terminal/c/dnd_snapshot.zig
+new file mode 100644
+index 00000000..1be1c312
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/c/dnd_snapshot.zig
+@@ -0,0 +1,117 @@
++//! Owned DND state omitted by the core codec. No native drag ownership transfer.
++const lib = @import("../lib.zig");
++const terminal_c = @import("terminal.zig");
++const dnd = @import("../kitty/dnd.zig");
++const Result = @import("result.zig").Result;
++
++fn mapError(err: dnd.snapshot.Error) Result {
++    return switch (err) {
++        error.InvalidSnapshot => .invalid_value,
++        error.LimitExceeded => .limit_exceeded,
++        error.OutOfMemory => .out_of_memory,
++    };
++}
++
++pub fn encode_alloc(
++    terminal_: terminal_c.Terminal,
++    allocator: ?*const lib.alloc.Allocator,
++    limit: usize,
++    out_ptr_: ?*?[*]u8,
++    out_len_: ?*usize,
++) callconv(lib.calling_conv) Result {
++    const out_ptr = out_ptr_ orelse return .invalid_value;
++    const out_len = out_len_ orelse return .invalid_value;
++    out_ptr.* = null;
++    out_len.* = 0;
++    const terminal = terminal_ orelse return .invalid_value;
++    const state = terminal.terminal.kitty_dnd orelse return .success;
++    const bytes = dnd.snapshot.encode(lib.alloc.default(allocator), state, limit) catch |err| return mapError(err);
++    out_ptr.* = bytes.ptr;
++    out_len.* = bytes.len;
++    return .success;
++}
++
++pub fn restore(
++    terminal_: terminal_c.Terminal,
++    input: ?[*]const u8,
++    len: usize,
++    limit: usize,
++) callconv(lib.calling_conv) Result {
++    const terminal = terminal_ orelse return .invalid_value;
++    if (len > limit) return .limit_exceeded;
++    if (len != 0 and input == null) return .invalid_value;
++    const alloc = terminal.terminal.gpa();
++    const replacement = if (len == 0) null else dnd.snapshot.decode(alloc, input.?[0..len], limit) catch |err| return mapError(err);
++    // Decode owns all data before committing. Never replay events or callbacks.
++    if (terminal.terminal.kitty_dnd) |old| old.destroy(alloc);
++    terminal.terminal.kitty_dnd = replacement;
++    return .success;
++}
++
++test "dnd snapshot C allocation failures leave original state intact" {
++    const std = @import("std");
++    const testing = std.testing;
++    const next = try testing.allocator.create(dnd.State);
++    next.* = .{};
++    defer next.destroy(testing.allocator);
++    next.drop.client_id = 42;
++    try next.drop.registered_mimes.appendSlice(testing.allocator, "text/plain");
++    var output: std.Io.Writer.Allocating = .init(testing.allocator);
++    defer output.deinit();
++    try next.dragDrop(testing.allocator, &output.writer, .{
++        .cell_x = 1,
++        .cell_y = 2,
++        .pixel_x = 3,
++        .pixel_y = 4,
++        .operations = .{ .copy = true },
++    }, &.{.{ .mime = "text/plain", .data = "private\x00\xff" }});
++    const encoded = try dnd.snapshot.encode(testing.allocator, next, 4096);
++    defer testing.allocator.free(encoded);
++    var succeeded = false;
++    for (0..32) |offset| {
++        var failing = testing.FailingAllocator.init(testing.allocator, .{});
++        const zig_alloc = failing.allocator();
++        const c_alloc: lib.alloc.Allocator = .fromZig(&zig_alloc);
++        var terminal: terminal_c.Terminal = null;
++        try testing.expectEqual(Result.success, terminal_c.new(&c_alloc, &terminal, 20, 4));
++        defer terminal_c.free(terminal);
++        const alloc = terminal.?.terminal.gpa();
++        const old = try alloc.create(dnd.State);
++        old.* = .{};
++        old.drop.client_id = 7;
++        terminal.?.terminal.kitty_dnd = old;
++        failing.fail_index = failing.alloc_index + offset;
++        const result = restore(terminal, encoded.ptr, encoded.len, 4096);
++        if (result == .success) {
++            try testing.expectEqual(@as(u32, 42), terminal.?.terminal.kitty_dnd.?.drop.client_id);
++            try testing.expectEqualStrings("private\x00\xff", terminal.?.terminal.kitty_dnd.?.drop.items.?[0].data);
++            try testing.expect(offset > 0);
++            succeeded = true;
++            break;
++        }
++        try testing.expectEqual(Result.out_of_memory, result);
++        try testing.expect(terminal.?.terminal.kitty_dnd == old);
++        try testing.expectEqual(@as(u32, 7), old.drop.client_id);
++    }
++    try testing.expect(succeeded);
++}
++
++test "dnd snapshot C invalid arguments and absent state" {
++    const testing = @import("std").testing;
++    var terminal: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 20, 4));
++    defer terminal_c.free(terminal);
++    var output: ?[*]u8 = null;
++    var len: usize = 99;
++    try testing.expectEqual(Result.invalid_value, encode_alloc(null, null, 0, &output, &len));
++    try testing.expectEqual(@as(usize, 0), len);
++    try testing.expectEqual(Result.invalid_value, encode_alloc(terminal, null, 0, null, &len));
++    try testing.expectEqual(Result.invalid_value, encode_alloc(terminal, null, 0, &output, null));
++    try testing.expectEqual(Result.success, encode_alloc(terminal, null, 0, &output, &len));
++    try testing.expect(output == null);
++    try testing.expectEqual(@as(usize, 0), len);
++    try testing.expectEqual(Result.invalid_value, restore(null, null, 0, 0));
++    try testing.expectEqual(Result.invalid_value, restore(terminal, null, 1, 1));
++    try testing.expectEqual(Result.limit_exceeded, restore(terminal, null, 1, 0));
++    try testing.expectEqual(Result.success, restore(terminal, null, 0, 0));
++}
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index aa7d76c4..be070160 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -256,6 +256,10 @@ pub const type_json = types.get_json;
+ pub const unicode_codepoint_width = unicode.codepoint_width;
+ pub const unicode_grapheme_width = unicode.grapheme_width;
+ 
++pub const dnd_snapshot = @import("dnd_snapshot.zig");
++pub const snapshot_dnd_encode_alloc = dnd_snapshot.encode_alloc;
++pub const snapshot_dnd_restore = dnd_snapshot.restore;
++
+ pub const grid_ref_cell = grid_ref.grid_ref_cell;
+ pub const grid_ref_row = grid_ref.grid_ref_row;
+ pub const grid_ref_graphemes = grid_ref.grid_ref_graphemes;
+@@ -280,6 +284,7 @@ test {
+     _ = kitty_graphics;
+     _ = row;
+     _ = focus;
++    _ = dnd_snapshot;
+     _ = formatter;
+     _ = modes;
+     _ = osc;

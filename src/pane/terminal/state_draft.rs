@@ -23,6 +23,7 @@ pub(super) struct DraftLimits {
     pub continuation_bytes: usize,
     pub graphics_policy_bytes: usize,
     pub clipboard_write_bytes: usize,
+    pub dnd_bytes: usize,
 }
 
 pub(super) struct PaneStateDraft {
@@ -31,6 +32,7 @@ pub(super) struct PaneStateDraft {
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
     graphics_policy: crate::ghostty::GraphicsPolicySnapshot,
     clipboard_write: Vec<u8>,
+    dnd: Vec<u8>,
     replies: Vec<Bytes>,
     #[cfg(windows)]
     observer: Option<crate::ghostty::TrackedRowSnapshot>,
@@ -188,6 +190,10 @@ impl GhosttyPaneTerminal {
             return Err("native snapshot exceeds limit".into());
         }
         Ok(PaneStateDraft {
+            dnd: core
+                .terminal
+                .dnd_snapshot(limits.dnd_bytes)
+                .map_err(|e| e.to_string())?,
             clipboard_write: core
                 .terminal
                 .clipboard_write_snapshot(limits.clipboard_write_bytes)
@@ -235,6 +241,9 @@ impl GhosttyPaneTerminal {
             .map_err(|e| e.to_string())?;
         terminal
             .restore_clipboard_write_snapshot(&draft.clipboard_write, limits.clipboard_write_bytes)
+            .map_err(|e| e.to_string())?;
+        terminal
+            .restore_dnd_snapshot(&draft.dnd, limits.dnd_bytes)
             .map_err(|e| e.to_string())?;
         terminal
             .restore_callback_snapshot(draft.callbacks, limits.callback_bytes)
@@ -286,6 +295,7 @@ mod tests {
             continuation_bytes: 4096,
             graphics_policy_bytes: 16384,
             clipboard_write_bytes: 1 << 20,
+            dnd_bytes: 1 << 20,
         }
     }
 
@@ -311,6 +321,44 @@ mod tests {
         assert_eq!(left.terminal_bells, right.terminal_bells);
         assert_eq!(left.reported_cwd, right.reported_cwd);
         assert_eq!(left.clipboard_writes, right.clipboard_writes);
+    }
+
+    #[test]
+    fn pane_state_draft_preserves_dnd_chunks_and_future_responses() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let source = pane(&tx);
+        feed(&source, &tx, b"\x1b]72;t=a:i=42:m=1;text/\x1b\\");
+        let restricted = DraftLimits {
+            dnd_bytes: 0,
+            ..limits()
+        };
+        assert!(source.capture_state_draft(restricted).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        assert!(GhosttyPaneTerminal::restore_state_draft(draft, restricted, tx.clone()).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        let restored =
+            GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+        assert!(rx.try_recv().is_err());
+        let suffix = b"\x1b]72;m=0;plain\x1b\\\x1b]72;t=r:x=1:i=7\x1b\\";
+        let expected = feed(&source, &tx, suffix);
+        assert!(!expected.terminal_responses.is_empty());
+        assert_effects(expected, feed(&restored, &tx, suffix));
+        assert_eq!(
+            source
+                .core
+                .lock()
+                .unwrap()
+                .terminal
+                .dnd_snapshot(4096)
+                .unwrap(),
+            restored
+                .core
+                .lock()
+                .unwrap()
+                .terminal
+                .dnd_snapshot(4096)
+                .unwrap()
+        );
     }
 
     #[test]
