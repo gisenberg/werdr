@@ -934,16 +934,17 @@ async fn quiet_native_producer_geometry_retirement_schedules_full_inline_recover
 async fn native_file_render_scale_profile() {
     use base64::Engine as _;
     use ratatui::layout::Direction;
+    use std::os::fd::AsRawFd as _;
 
     const WARMUP: usize = 5;
     const SAMPLES: usize = 35;
     const IMAGE_WIDTH: u32 = 800;
     const IMAGE_HEIGHT: u32 = 480;
     for count in [1, 15] {
-        for (native, source_retention) in [(false, false), (true, false), (true, true)] {
+        for (native, file_input) in [(false, false), (true, false), (true, true)] {
             let (mut server, _control, _render, root) =
                 retained_test_server_with_control(b"populated root terminal\r\n");
-            if source_retention {
+            if file_input {
                 // Test runtimes normally leave file transmission disabled. Enable
                 // it and the snapshot callback only for this source-producing pane.
                 server
@@ -1007,8 +1008,29 @@ async fn native_file_render_scale_profile() {
             // Private /var/tmp native-store generation owns the producer path:
             // bounded to one image and removed even if an assertion unwinds.
             let producer_store = crate::pane_graphics_files::FileStore::native_sources();
-            let producer = source_retention
-                .then(|| producer_store.export(&rgba).expect("private producer file"));
+            let producer =
+                file_input.then(|| producer_store.export(&rgba).expect("private producer file"));
+            // The production callback falls back to decoded pixels when the
+            // filesystem cannot clone files. Profile that real path as well,
+            // without labeling it as successful immutable-source retention.
+            let source_retention = producer.as_ref().is_some_and(|producer| {
+                let file = std::fs::File::open(producer.path()).unwrap();
+                match producer_store.snapshot(i64::from(file.as_raw_fd()), rgba.len()) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        assert!(
+                            error.kind() == std::io::ErrorKind::Unsupported
+                                || matches!(
+                                    error.raw_os_error(),
+                                    Some(libc::EOPNOTSUPP | libc::ENOTTY | libc::EXDEV | libc::EINVAL | libc::ENOSYS)
+                                ),
+                            "unexpected snapshot failure: {error}"
+                        );
+                        eprintln!("native source retention unavailable; profiling decoded file fallback: {error}");
+                        false
+                    }
+                }
+            });
             let mut previous_source_path: Option<PathBuf> = None;
             let mut times = Vec::with_capacity(SAMPLES);
             for sample in 0..WARMUP + SAMPLES {
@@ -1147,7 +1169,7 @@ async fn native_file_render_scale_profile() {
             }
             times.sort_unstable();
             println!(
-                "native_file_render_scale retained=true native_files={native} source_retention={source_retention} viewport=160x48 populated_panes={count} changing_images=1 image=800x480 warmup={WARMUP} samples={SAMPLES} median_us={} p95_us={}",
+                "native_file_render_scale retained=true native_files={native} file_input={file_input} source_retention={source_retention} viewport=160x48 populated_panes={count} changing_images=1 image=800x480 warmup={WARMUP} samples={SAMPLES} median_us={} p95_us={}",
                 times[SAMPLES / 2].as_micros(), times[SAMPLES * 95 / 100].as_micros(),
             );
             shutdown_test_runtimes(&mut server);
