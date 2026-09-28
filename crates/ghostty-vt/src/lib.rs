@@ -29,6 +29,7 @@ use crate::pane_graphics_files::OwnedExport;
 mod native_image_sources;
 mod native_source;
 pub mod pane_graphics_files;
+mod snapshot;
 
 /// Terminfo entry the terminal emulates; child processes should see it as TERM.
 pub const TERM: &str = "xterm-256color";
@@ -864,42 +865,15 @@ impl Terminal {
             ffi::ghostty_terminal_new(ptr::null(), &mut raw, cols, rows).into_result()?;
         }
 
-        let mut terminal = Self {
-            raw,
-            max_scrollback,
-            #[cfg(windows)]
-            tracked_row: ptr::null_mut(),
-            callback_state: Box::new(TerminalCallbackState {
-                size_report: ffi::GhosttySizeReportSize {
-                    rows,
-                    columns: cols,
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            kitty_fingerprints: Mutex::new(HashMap::new()),
-            kitty_empty_generation: Cell::new(None),
-            kitty_png_forwarding: false,
-        };
-        let userdata = (&mut *terminal.callback_state as *mut TerminalCallbackState).cast();
-        let glyph_protocol = false;
-        let terminfo_name = ffi::GhosttyString {
-            ptr: TERM.as_ptr().cast(),
-            len: TERM.len(),
-        };
+        // SAFETY: successful creation returned a live, uniquely owned handle.
+        let mut terminal = unsafe { Self::own_raw(raw) };
         let grapheme_default = ffi::GhosttyTerminalModeConfig {
             mode: MODE_GRAPHEME_CLUSTER,
             value: true,
         };
-        let clipboard_callback: ffi::GhosttyTerminalClipboardWriteFn =
-            Some(clipboard_write_trampoline);
+        // SAFETY: the handle is owned by terminal and the option values have
+        // the exact C API types. These defaults apply only to new terminals.
         unsafe {
-            ffi::ghostty_terminal_set(
-                terminal.raw,
-                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
-                (&terminfo_name as *const ffi::GhosttyString).cast(),
-            )
-            .into_result()?;
             ffi::ghostty_terminal_set(
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
@@ -910,6 +884,51 @@ impl Terminal {
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
                 (&grapheme_default as *const ffi::GhosttyTerminalModeConfig).cast(),
+            )
+            .into_result()?;
+        }
+        terminal.bind_callbacks()?;
+        Ok(terminal)
+    }
+
+    /// Take ownership before performing any fallible initialization.
+    ///
+    /// # Safety
+    /// `raw` must be a non-null live terminal with ownership transferred to us.
+    /// No other owner may free it or retain references that outlive this owner.
+    unsafe fn own_raw(raw: ffi::GhosttyTerminal) -> Self {
+        Self {
+            raw,
+            max_scrollback: 0,
+            #[cfg(windows)]
+            tracked_row: ptr::null_mut(),
+            callback_state: Box::new(TerminalCallbackState::default()),
+            kitty_fingerprints: Mutex::new(HashMap::new()),
+            kitty_empty_generation: Cell::new(None),
+            kitty_png_forwarding: false,
+        }
+    }
+
+    /// Bind caller-local behavior without replacing captured emulator policy.
+    fn bind_callbacks(&mut self) -> Result<(), Error> {
+        let terminal = self;
+        terminal.max_scrollback = terminal
+            .get_usize(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES)?;
+        terminal.callback_state.size_report.rows = terminal.rows()?;
+        terminal.callback_state.size_report.columns = terminal.cols()?;
+        let userdata = (&mut *terminal.callback_state as *mut TerminalCallbackState).cast();
+        let glyph_protocol = false;
+        let terminfo_name = ffi::GhosttyString {
+            ptr: TERM.as_ptr().cast(),
+            len: TERM.len(),
+        };
+        let clipboard_callback: ffi::GhosttyTerminalClipboardWriteFn =
+            Some(clipboard_write_trampoline);
+        unsafe {
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
+                (&terminfo_name as *const ffi::GhosttyString).cast(),
             )
             .into_result()?;
             ffi::ghostty_terminal_set(
@@ -955,7 +974,7 @@ impl Terminal {
             )
             .into_result()?;
         }
-        Ok(terminal)
+        Ok(())
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
