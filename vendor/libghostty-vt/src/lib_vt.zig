@@ -382,6 +382,8 @@ comptime {
             @export(&c.snapshot_decoder_new_buf, .{ .name = "ghostty_snapshot_decoder_new_buf" });
             @export(&c.snapshot_decoder_free, .{ .name = "ghostty_snapshot_decoder_free" });
             @export(&c.snapshot_decoder_set, .{ .name = "ghostty_snapshot_decoder_set" });
+            @export(&c.snapshot_clipboard_write_encode_alloc, .{ .name = "ghostty_snapshot_clipboard_write_encode_alloc" });
+            @export(&c.snapshot_clipboard_write_restore, .{ .name = "ghostty_snapshot_clipboard_write_restore" });
             @export(&c.snapshot_decoder_get, .{ .name = "ghostty_snapshot_decoder_get" });
             @export(&c.snapshot_decoder_get_multi, .{ .name = "ghostty_snapshot_decoder_get_multi" });
             @export(&c.snapshot_decoder_ready, .{ .name = "ghostty_snapshot_decoder_ready" });

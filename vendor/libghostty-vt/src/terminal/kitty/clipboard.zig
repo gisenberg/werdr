@@ -64,6 +64,7 @@ pub const WriteState = write.WriteState;
 pub const max_write_size = write.max_write_size;
 pub const max_write_mimes = write.max_write_mimes;
 pub const max_write_aliases = write.max_write_aliases;
+pub const snapshot = @import("clipboard_snapshot.zig");
 
 pub const Response = response.Response;
 pub const ReadSuccess = response.ReadSuccess;

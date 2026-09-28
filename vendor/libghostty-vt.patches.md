@@ -3,6 +3,52 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0013 in-flight clipboard write snapshots
+
+status: active, private pane draft integration; not complete runtime preservation
+
+patch: `vendor/patches/libghostty-vt/0013-clipboard-write-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/clipboard_snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/clipboard.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/clipboard_snapshot.zig`
+
+reason: A completed OSC 5522 packet can leave a clipboard transaction alive at parser ground, so core terminal snapshots and continuation alone lose pending clipboard contents.
+The CLIPW1 codec preserves metadata, complete spool including overwritten MIME data, ordered mappings and aliases, captured size limit, current entry and initialized base64 carry.
+Encoding uses one bounded exact allocation; decoding validates bounded borrowed views before constructing a new owned transaction.
+C replacement commits only after all allocations succeed and never emits historical callbacks or responses.
+IDs must obey the parser's sanitized alphabet because future replies interpolate them verbatim.
+Payloads include sensitive clipboard contents and passwords and must not be logged.
+Encoded-byte limits bound variable payload, not arena slack, allocator bookkeeping or total process memory.
+Clipboard grants, DND state and future-write handler policy remain separate preservation obligations.
+
+remove when: upstream provides equivalent exact in-flight write preservation and transactional restoration, and every-cut, budget, failure-cleanup and future-commit tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=clipboard snapshot' --summary all
+just test-one clipboard
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0012 exact empty-storage graphics policy restoration
 
 status: active, private restore prerequisite; retained graphics and partial APC remain excluded

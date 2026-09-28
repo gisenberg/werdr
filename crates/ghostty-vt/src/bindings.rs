@@ -5386,6 +5386,25 @@ unsafe extern "C" {
     pub fn ghostty_snapshot_decoder_next(decoder: GhosttySnapshotDecoder) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Capture an in-flight OSC 5522 write without callbacks or queue mutation.\n Empty output means no active transaction. Free nonempty output with\n ghostty_free using the same allocator. The limit bounds encoded payload\n bytes, not arena slack or total process memory. Contains sensitive data."]
+    pub fn ghostty_snapshot_clipboard_write_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limit: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Restore onto an unpublished terminal. Validation and allocation precede\n replacement; no replies/callbacks occur. Empty input clears a transaction.\n This does not preserve clipboard grants or configured future-write limits."]
+    pub fn ghostty_snapshot_clipboard_write_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limit: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Decode and validate one complete snapshot.\n\n This is the one-shot form of READY followed by all history pages through\n FINISH. It may only be called before decoding starts. Bytes following FINISH\n are left unread. On success terminal receives a caller-owned terminal with\n its persistent VT stream restored. Continuation tracking on the returned\n terminal is disabled by default. When\n GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION is true, the decoder's\n maximum continuation size is applied to the terminal, and the terminal\n continuation APIs export the exact current continuation when that limit is\n nonzero. Tracking remains enabled even if the exported continuation is\n empty. Callers that do not need ongoing tracking must set\n GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES to zero after export and before\n writing any post-snapshot bytes, because later input may change it.\n terminal is set to NULL on every error.\n A decoding, I/O, or allocation error after input consumption begins poisons\n the decoder, after which it must be freed. An invalid argument or\n lifecycle error detected before the operation consumes input does not\n poison it.\n\n @param decoder Decoder handle (must not be NULL)\n @param[out] terminal Pointer to receive the terminal (must not be NULL)\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_decoder_decode(
         decoder: GhosttySnapshotDecoder,

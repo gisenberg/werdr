@@ -516,6 +516,22 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_decoder_ready(
 GHOSTTY_API GhosttyResult ghostty_snapshot_decoder_next(
     GhosttySnapshotDecoder decoder);
 
+/** Capture an in-flight OSC 5522 write without callbacks or queue mutation.
+ * Empty output means no active transaction. Free nonempty output with
+ * ghostty_free using the same allocator. The limit bounds encoded payload
+ * bytes, not arena slack or total process memory. Contains sensitive data.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_clipboard_write_encode_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
+    uint8_t** out_ptr, size_t* out_len);
+
+/** Restore onto an unpublished terminal. Validation and allocation precede
+ * replacement; no replies/callbacks occur. Empty input clears a transaction.
+ * This does not preserve clipboard grants or configured future-write limits.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_clipboard_write_restore(
+    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
+
 /**
  * Decode and validate one complete snapshot.
  *

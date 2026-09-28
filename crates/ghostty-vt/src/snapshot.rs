@@ -27,6 +27,55 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Capture the active OSC 5522 transaction, including partial base64 carry.
+    /// Empty bytes mean no transaction. Sensitive payload, not a full snapshot.
+    pub fn clipboard_write_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = EncodedBytes {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        // SAFETY: live handle, exact output types, native allocation owned by guard.
+        unsafe {
+            ffi::ghostty_snapshot_clipboard_write_encode_alloc(
+                self.raw,
+                ptr::null(),
+                limit,
+                &mut bytes.ptr,
+                &mut bytes.len,
+            )
+            .into_result()?;
+            if bytes.len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(bytes.len)
+                .map_err(|_| Error(ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY))?;
+            result.extend_from_slice(slice::from_raw_parts(bytes.ptr, bytes.len));
+            Ok(result)
+        }
+    }
+
+    /// Replace an unpublished terminal's transaction without historical effects.
+    /// The native decoder validates before allocation and commits only on success.
+    /// Clipboard grants and future-write policy require independent preservation.
+    pub fn restore_clipboard_write_snapshot(
+        &mut self,
+        bytes: &[u8],
+        limit: usize,
+    ) -> Result<(), Error> {
+        // SAFETY: input borrow outlives synchronous decode, handle exclusively held.
+        unsafe {
+            ffi::ghostty_snapshot_clipboard_write_restore(
+                self.raw,
+                bytes.as_ptr(),
+                bytes.len(),
+                limit,
+            )
+            .into_result()
+        }
+    }
+
     /// Query graphics/glyph state that the native snapshot cannot preserve.
     ///
     /// Returns a reason mask, including unknown future bits, without allocating,
@@ -207,6 +256,72 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn clipboard_write_snapshot_continues_every_cut_without_emitting_history() {
+        let sequence = b"\x1b]5522;type=write:id=c1\x1b\\\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGV\x1b\\\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;sbG8=\x1b\\";
+        let commit =
+            b"\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;V29ybGQ=\x1b\\\x1b]5522;type=wdata\x1b\\";
+        for cut in 0..=sequence.len() {
+            let mut source = terminal();
+            source.write(&sequence[..cut]);
+            let core = source.snapshot_bytes().unwrap();
+            let transaction = source.clipboard_write_snapshot(1 << 20).unwrap();
+            let mut restored = Terminal::from_snapshot(&core, 4096).unwrap();
+            let callbacks = restored.callback_snapshot(4096).unwrap();
+            restored
+                .restore_clipboard_write_snapshot(&transaction, 1 << 20)
+                .unwrap();
+            assert_eq!(restored.callback_snapshot(4096).unwrap(), callbacks);
+            assert_eq!(
+                source.clipboard_write_snapshot(1 << 20).unwrap(),
+                transaction
+            );
+            let repeated = restored.clipboard_write_snapshot(1 << 20).unwrap();
+            restored
+                .restore_clipboard_write_snapshot(&repeated, 1 << 20)
+                .unwrap();
+            source.write(&sequence[cut..]);
+            restored.write(&sequence[cut..]);
+            source.write(commit);
+            restored.write(commit);
+            assert_eq!(
+                source.take_clipboard_writes(),
+                vec![b"HelloWorld".to_vec()],
+                "cut {cut}"
+            );
+            assert_eq!(
+                restored.take_clipboard_writes(),
+                vec![b"HelloWorld".to_vec()],
+                "cut {cut}"
+            );
+            assert!(restored.clipboard_write_snapshot(0).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn clipboard_write_snapshot_rejects_bad_input_atomically_and_clears_explicitly() {
+        let mut source = terminal();
+        assert!(source.clipboard_write_snapshot(0).unwrap().is_empty());
+        source.write(
+            b"\x1b]5522;type=write:id=c1\x1b\\\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGV\x1b\\",
+        );
+        let before = source.clipboard_write_snapshot(4096).unwrap();
+        assert!(!before.is_empty());
+        assert!(source.clipboard_write_snapshot(before.len() - 1).is_err());
+        assert!(source
+            .restore_clipboard_write_snapshot(&before, before.len() - 1)
+            .is_err());
+        for cut in 1..before.len() {
+            assert!(source
+                .restore_clipboard_write_snapshot(&before[..cut], 4096)
+                .is_err());
+            assert_eq!(source.clipboard_write_snapshot(4096).unwrap(), before);
+        }
+        source.restore_clipboard_write_snapshot(&[], 0).unwrap();
+        assert!(source.clipboard_write_snapshot(0).unwrap().is_empty());
+        assert!(source.take_clipboard_writes().is_empty());
     }
 
     #[test]
