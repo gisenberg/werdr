@@ -32,6 +32,8 @@ pub const nextGeneration = storage.nextGeneration;
 
 pub const execute = exec.execute;
 
+pub const loading_snapshot = @import("loading_snapshot.zig");
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

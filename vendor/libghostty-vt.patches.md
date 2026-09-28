@@ -3,6 +3,49 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0021 retained graphics loading snapshots
+
+status: active, domain prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0021-loading-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/loading_snapshot.zig`
+
+reason: A chunked graphics upload retains its initial command and raw payload independently of stored images and later continuation commands.
+LDGST1 preserves unresolved image metadata, accumulated bytes, quiet mode, response identifiers, deferred display and complete animation-frame command plus source target generation.
+Explicit field and enum schemas avoid native layout dependence and force review when upstream adds command fields.
+Validation checks tags, booleans, reserved bytes, exact size and encoded/payload budgets before allocating one owned payload.
+The record is restricted to quiescent storage.loading values, whose image has empty complete backing and no animation, generation or placements.
+It deliberately does not validate incomplete PNG, compression or dimensions because completion and its errors are future behavior.
+Initialization-only temporary-directory slices can already dangle after wrapper policy replacement; capture never dereferences them and decode canonicalizes both directory and file hook to null.
+Neither capture nor decode invokes file operations, callbacks, decompression or command execution.
+Generation remapping, aggregate storage budgets, placement references and atomic installation remain coordinator work; no C/Rust restore API or graphics exclusion gate changes.
+Only opt-in snapshot paths are added, with no render, input or fanout work.
+
+remove when: upstream provides equivalent owned quiescent loading preservation and the field, ownership, failure and command-continuation tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=loading snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Native executor tests replace only loading state in an existing terminal and do not prove whole-storage or cross-process restoration.
+
 ## 0020 owned image-domain snapshots
 
 status: active, domain prerequisite; retained graphics gate remains closed
