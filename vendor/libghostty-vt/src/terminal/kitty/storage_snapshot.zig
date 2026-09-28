@@ -1,0 +1,661 @@
+//! Owned both-screen graphics records. Not an installation or handoff API.
+//! Caller holds exclusive terminal access through capture. Generations and
+//! animation timestamps remain in the source domain until coordinated commit.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Terminal = @import("../Terminal.zig");
+const ScreenKey = @import("../ScreenSet.zig").Key;
+const image = @import("graphics_image.zig");
+const Animation = @import("graphics_animation.zig").Animation;
+const Storage = @import("graphics_storage.zig").ImageStorage;
+const images = @import("image_snapshot.zig");
+const loading = @import("loading_snapshot.zig");
+const placements = @import("placement_snapshot.zig");
+pub const Error = images.Error;
+pub const Limits = struct { encoded_bytes: usize, backing_bytes: usize, images: usize, placements: usize, policy_bytes: usize };
+const keys = [_]ScreenKey{ .primary, .alternate };
+const magic = "GSTOR1";
+const root_len = 16;
+const screen_len = 64;
+
+pub const Policy = struct {
+    file: bool,
+    shared_memory: bool,
+    preserve_png: bool,
+    snapshot_file: bool,
+    directory: ?[]const u8,
+};
+pub const Metadata = struct {
+    dirty: bool,
+    generation: u64,
+    next_image_id: u32,
+    next_internal_placement_id: u32,
+    total_bytes: usize,
+    total_limit: usize,
+    policy: Policy,
+};
+pub const ScreenState = struct {
+    metadata: Metadata,
+    images: std.ArrayListUnmanaged(image.Image) = .empty,
+    placements: std.ArrayListUnmanaged(placements.Record) = .empty,
+    loading: ?image.LoadingImage = null,
+
+    fn deinit(self: *ScreenState, alloc: Allocator) void {
+        if (self.metadata.policy.directory) |dir| alloc.free(dir);
+        for (self.images.items) |*img| img.deinit(alloc);
+        self.images.deinit(alloc);
+        self.placements.deinit(alloc);
+        if (self.loading) |*v| v.deinit(alloc);
+    }
+};
+pub const Snapshot = struct {
+    clock_cut: ?u64,
+    screens: [2]?ScreenState = .{ null, null },
+
+    pub fn deinit(self: *Snapshot, alloc: Allocator) void {
+        for (&self.screens) |*screen| if (screen.*) |*s| s.deinit(alloc);
+        self.* = undefined;
+    }
+};
+
+fn add(a: usize, b: usize) Error!usize {
+    return std.math.add(usize, a, b) catch error.LimitExceeded;
+}
+fn mul(a: usize, b: usize) Error!usize {
+    return std.math.mul(usize, a, b) catch error.LimitExceeded;
+}
+fn size(value: u64) Error!usize {
+    return std.math.cast(usize, value) orelse error.LimitExceeded;
+}
+fn put(comptime T: type, bytes: []u8, offset: usize, value: T) void {
+    std.mem.writeInt(T, bytes[offset..][0..@sizeOf(T)], value, .little);
+}
+fn get(comptime T: type, bytes: []const u8, offset: usize) T {
+    return std.mem.readInt(T, bytes[offset..][0..@sizeOf(T)], .little);
+}
+
+const Budget = struct {
+    limits: Limits,
+    backing: usize = @sizeOf(Snapshot),
+    image_count: usize = 0,
+    placement_count: usize = 0,
+    policy_bytes: usize = 0,
+
+    fn charge(self: *Budget, bytes: usize) Error!void {
+        const total = try add(self.backing, bytes);
+        if (total > self.limits.backing_bytes) return error.LimitExceeded;
+        self.backing = total;
+    }
+    fn remaining(self: *const Budget) usize {
+        return self.limits.backing_bytes - self.backing;
+    }
+    fn screen(self: *Budget, image_count: usize, placement_count: usize, directory_len: usize, has_loading: bool) Error!void {
+        self.image_count = try add(self.image_count, image_count);
+        self.placement_count = try add(self.placement_count, placement_count);
+        self.policy_bytes = try add(self.policy_bytes, directory_len);
+        if (self.image_count > self.limits.images or self.placement_count > self.limits.placements or self.policy_bytes > self.limits.policy_bytes) return error.LimitExceeded;
+        try self.charge(try add(try mul(image_count, @sizeOf(image.Image)), try mul(placement_count, @sizeOf(placements.Record))));
+        try self.charge(directory_len);
+        if (has_loading) try self.charge(@sizeOf(image.LoadingImage));
+    }
+};
+
+fn imageBytes(img: *const image.Image, include_objects: bool) Error!usize {
+    var bytes: usize = switch (img.data) {
+        .complete => |data| data.len,
+        .pending => |len| len,
+        .native_file => |file| file.len,
+        .encoded_png => |png| try add(png.bytes.len, png.decoded_len),
+    };
+    if (img.animation) |anim| {
+        if (include_objects) bytes = try add(bytes, try add(@sizeOf(Animation), try mul(anim.frames.items.len, @sizeOf(Animation.Frame))));
+        for (anim.frames.items) |frame| bytes = try add(bytes, frame.data.len);
+    }
+    return bytes;
+}
+
+// Temporary validation maps are count-bounded scratch, not retained backing.
+fn validate(alloc: Allocator, key: ScreenKey, metadata: Metadata, imgs: []const image.Image, places: []const placements.Record) Error!void {
+    var counts: std.AutoHashMapUnmanaged(u32, u32) = .{};
+    defer counts.deinit(alloc);
+    var parents: std.AutoHashMapUnmanaged(Storage.PlacementKey, void) = .{};
+    defer parents.deinit(alloc);
+    var total: usize = 0;
+    for (imgs) |*img| {
+        const gop = try counts.getOrPut(alloc, img.id);
+        if (gop.found_existing) return error.InvalidSnapshot;
+        gop.value_ptr.* = 0;
+        total = try add(total, try imageBytes(img, false));
+    }
+    if (total != metadata.total_bytes) return error.InvalidSnapshot;
+    // Native conversion can leave a store over its configured total_limit.
+    for (places) |place| {
+        if (place.screen != key) return error.InvalidSnapshot;
+        const count = counts.getPtr(place.key.image_id) orelse return error.InvalidSnapshot;
+        count.* = std.math.add(u32, count.*, 1) catch return error.InvalidSnapshot;
+        const gop = try parents.getOrPut(alloc, place.key);
+        if (gop.found_existing) return error.InvalidSnapshot;
+    }
+    for (imgs) |img| if (img.metadata.placement_count != counts.get(img.id).?) return error.InvalidSnapshot;
+    for (places) |place| switch (place.location) {
+        .relative => |rel| if (!parents.contains(rel.parent)) return error.InvalidSnapshot,
+        .pin, .virtual => {},
+    };
+    // Cycles and over-depth chains are valid unresolved native states.
+}
+
+const Writer = struct {
+    alloc: Allocator,
+    limit: usize,
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
+    fn append(self: *Writer, bytes: []const u8) Error!void {
+        if (try add(self.bytes.items.len, bytes.len) > self.limit) return error.LimitExceeded;
+        try self.bytes.appendSlice(self.alloc, bytes);
+    }
+    fn record(self: *Writer, bytes: []const u8) Error!void {
+        var len: [8]u8 = undefined;
+        put(u64, &len, 0, bytes.len);
+        try self.append(&len);
+        try self.append(bytes);
+    }
+};
+
+fn encodeScreen(writer: *Writer, budget: *Budget, key: ScreenKey, meta: Metadata, imgs: []const image.Image, places: []const placements.Record, pending: ?*const image.LoadingImage) Error!void {
+    try validate(writer.alloc, key, meta, imgs, places);
+    const dir = meta.policy.directory orelse "";
+    var header: [screen_len]u8 = @splat(0);
+    header[0] = @intFromBool(meta.dirty);
+    header[1] = @as(u8, @intFromBool(meta.policy.file)) | (@as(u8, @intFromBool(meta.policy.directory != null)) << 1) | (@as(u8, @intFromBool(meta.policy.shared_memory)) << 2) | (@as(u8, @intFromBool(meta.policy.preserve_png)) << 3) | (@as(u8, @intFromBool(meta.policy.snapshot_file)) << 4);
+    put(u32, &header, 4, meta.next_image_id);
+    put(u32, &header, 8, meta.next_internal_placement_id);
+    put(u32, &header, 12, std.math.cast(u32, imgs.len) orelse return error.LimitExceeded);
+    put(u32, &header, 16, std.math.cast(u32, places.len) orelse return error.LimitExceeded);
+    put(u64, &header, 24, meta.generation);
+    put(u64, &header, 32, meta.total_bytes);
+    put(u64, &header, 40, meta.total_limit);
+    put(u64, &header, 48, dir.len);
+    const loading_bytes = if (pending) |v| try loading.encode(writer.alloc, v, .{ .encoded_bytes = writer.limit, .backing_bytes = budget.remaining() }) else null;
+    defer if (loading_bytes) |bytes| writer.alloc.free(bytes);
+    if (pending) |v| try budget.charge(v.data.items.len);
+    put(u64, &header, 56, if (loading_bytes) |bytes| bytes.len else 0);
+    try writer.append(&header);
+    try writer.append(dir);
+    for (imgs) |*img| {
+        const bytes = try images.encode(writer.alloc, img, .{ .encoded_bytes = writer.limit, .backing_bytes = budget.remaining() });
+        defer writer.alloc.free(bytes);
+        try budget.charge(try imageBytes(img, true));
+        try writer.record(bytes);
+    }
+    for (places) |place| try writer.append(&placements.encode(place));
+    if (loading_bytes) |bytes| try writer.append(bytes);
+}
+
+/// Captures policy values, never callback pointers. File attachment bytes and
+/// pending producers must be retained separately at the same fenced cut.
+/// Budgets bound encoded size, logical backing/reservations and object counts,
+/// not allocator capacity, scratch maps, transient copies or total process RSS.
+pub fn capture(alloc: Allocator, terminal: *const Terminal, clock_cut: ?u64, limits: Limits) Error![]u8 {
+    comptime std.debug.assert(@typeInfo(Storage).@"struct".fields.len == 10);
+    var budget: Budget = .{ .limits = limits };
+    try budget.charge(0);
+    var writer: Writer = .{ .alloc = alloc, .limit = limits.encoded_bytes };
+    defer writer.bytes.deinit(alloc);
+    var root: [root_len]u8 = @splat(0);
+    @memcpy(root[0..magic.len], magic);
+    for (keys, 0..) |key, i| if (terminal.screens.get(key) != null) {
+        root[6] |= @as(u8, 1) << @intCast(i);
+    };
+    root[7] = @intFromBool(clock_cut != null);
+    put(u64, &root, 8, clock_cut orelse 0);
+    try writer.append(&root);
+    for (keys) |key| {
+        const screen = terminal.screens.get(key) orelse continue;
+        const s = &screen.kitty_images;
+        const policy = s.image_limits;
+        const directory: ?[]const u8 = switch (policy.temporary_file) {
+            .disabled => null,
+            .enabled => |v| v.directory,
+        };
+        try budget.screen(s.images.count(), s.placements.count(), if (directory) |v| v.len else 0, s.loading != null);
+        // These arrays borrow image payloads and policy from the locked source.
+        // Only their array allocations are released here, never source objects.
+        const imgs = try alloc.alloc(image.Image, s.images.count());
+        defer alloc.free(imgs);
+        var image_it = s.images.iterator();
+        var i: usize = 0;
+        while (image_it.next()) |entry| : (i += 1) {
+            if (entry.key_ptr.* != entry.value_ptr.id) return error.InvalidSnapshot;
+            imgs[i] = entry.value_ptr.*;
+        }
+        const places = try alloc.alloc(placements.Record, s.placements.count());
+        defer alloc.free(places);
+        var place_it = s.placements.iterator();
+        i = 0;
+        while (place_it.next()) |entry| : (i += 1) places[i] = try placements.capture(terminal, key, entry.key_ptr.*, entry.value_ptr.*);
+        try encodeScreen(&writer, &budget, key, .{
+            .dirty = s.dirty,
+            .generation = s.generation,
+            .next_image_id = s.next_image_id,
+            .next_internal_placement_id = s.next_internal_placement_id,
+            .total_bytes = s.total_bytes,
+            .total_limit = s.total_limit,
+            .policy = .{ .file = policy.file, .shared_memory = policy.shared_memory, .preserve_png = policy.preserve_png, .snapshot_file = policy.snapshot_file != null, .directory = directory },
+        }, imgs, places, s.loading);
+    }
+    return try writer.bytes.toOwnedSlice(alloc);
+}
+
+const Reader = struct {
+    bytes: []const u8,
+    offset: usize = 0,
+    fn take(self: *Reader, len: usize) Error![]const u8 {
+        if (len > self.bytes.len - self.offset) return error.InvalidSnapshot;
+        const result = self.bytes[self.offset..][0..len];
+        self.offset += len;
+        return result;
+    }
+};
+
+fn preflightStructure(bytes: []const u8, limits: Limits) Error!Budget {
+    if (bytes.len > limits.encoded_bytes) return error.LimitExceeded;
+    var budget: Budget = .{ .limits = limits };
+    try budget.charge(0);
+    var reader: Reader = .{ .bytes = bytes };
+    const root = try reader.take(root_len);
+    if (!std.mem.eql(u8, root[0..6], magic) or (root[6] != 1 and root[6] != 3) or root[7] > 1 or (root[7] == 0 and get(u64, root, 8) != 0)) return error.InvalidSnapshot;
+    for (keys, 0..) |_, index| {
+        if (root[6] & (@as(u8, 1) << @intCast(index)) == 0) continue;
+        const header = try reader.take(screen_len);
+        if (header[0] > 1 or header[1] & ~@as(u8, 31) != 0 or !std.mem.allEqual(u8, header[2..4], 0) or !std.mem.allEqual(u8, header[20..24], 0)) return error.InvalidSnapshot;
+        const image_count = get(u32, header, 12);
+        const placement_count = get(u32, header, 16);
+        const dir_len = try size(get(u64, header, 48));
+        const loading_len = try size(get(u64, header, 56));
+        _ = try size(get(u64, header, 32));
+        _ = try size(get(u64, header, 40));
+        if (header[1] & 2 == 0 and dir_len != 0) return error.InvalidSnapshot;
+        try budget.screen(image_count, placement_count, dir_len, loading_len != 0);
+        _ = try reader.take(dir_len);
+        const minimum = try add(try add(try mul(image_count, 8 + 96), try mul(placement_count, placements.encoded_len)), loading_len);
+        if (minimum > reader.bytes.len - reader.offset or (loading_len != 0 and loading_len < 256)) return error.InvalidSnapshot;
+        for (0..image_count) |_| {
+            const prefix = try reader.take(8);
+            const len = try size(get(u64, prefix, 0));
+            if (len < 96) return error.InvalidSnapshot;
+            _ = try reader.take(len);
+        }
+        for (0..placement_count) |_| _ = try placements.decode(try reader.take(placements.encoded_len));
+        _ = try reader.take(loading_len);
+    }
+    if (reader.offset != bytes.len) return error.InvalidSnapshot;
+    return budget;
+}
+
+/// Fully owned but uninstalled. Both screens' structure, scalar widths and
+/// count budgets are checked before allocation or resolving attachments.
+/// Nested semantic errors can still reject after earlier references resolve.
+/// Resolver references are released on ANY later
+/// rejection. No screen pins, runtime policies or source maps are changed.
+/// Caller must still bind attachments/producers, rebase clocks and generations,
+/// bind placements and install both screens atomically under a fenced cut.
+pub fn decode(alloc: Allocator, bytes: []const u8, limits: Limits, resolver: ?images.FileResolver) Error!Snapshot {
+    var budget = try preflightStructure(bytes, limits);
+    var reader: Reader = .{ .bytes = bytes };
+    const root = try reader.take(root_len);
+    if (!std.mem.eql(u8, root[0..6], magic) or (root[6] != 1 and root[6] != 3) or root[7] > 1 or (root[7] == 0 and get(u64, root, 8) != 0)) return error.InvalidSnapshot;
+    var result: Snapshot = .{ .clock_cut = if (root[7] == 1) get(u64, root, 8) else null };
+    errdefer result.deinit(alloc);
+    for (keys, 0..) |key, index| {
+        if (root[6] & (@as(u8, 1) << @intCast(index)) == 0) continue;
+        const header = try reader.take(screen_len);
+        if (header[0] > 1 or header[1] & ~@as(u8, 31) != 0 or !std.mem.allEqual(u8, header[2..4], 0) or !std.mem.allEqual(u8, header[20..24], 0)) return error.InvalidSnapshot;
+        const image_count = get(u32, header, 12);
+        const placement_count = get(u32, header, 16);
+        const dir_len = try size(get(u64, header, 48));
+        const loading_len = try size(get(u64, header, 56));
+        const has_directory = header[1] & 2 != 0;
+        if (!has_directory and dir_len != 0) return error.InvalidSnapshot;
+        const directory = try reader.take(dir_len);
+        // Reject count amplification against truncated input before reserving
+        // arrays, even when the caller supplied a very large backing budget.
+        const minimum_records = try add(try add(try mul(image_count, 8 + 96), try mul(placement_count, placements.encoded_len)), loading_len);
+        if (minimum_records > reader.bytes.len - reader.offset) return error.InvalidSnapshot;
+        // All fallible scalar conversions must precede optional publication.
+        // A partially initialized optional would make rollback inspect garbage.
+        const total_bytes = try size(get(u64, header, 32));
+        const total_limit = try size(get(u64, header, 40));
+        result.screens[index] = .{ .metadata = .{
+            .dirty = header[0] == 1,
+            .generation = get(u64, header, 24),
+            .next_image_id = get(u32, header, 4),
+            .next_internal_placement_id = get(u32, header, 8),
+            .total_bytes = total_bytes,
+            .total_limit = total_limit,
+            .policy = .{ .file = header[1] & 1 != 0, .shared_memory = header[1] & 4 != 0, .preserve_png = header[1] & 8 != 0, .snapshot_file = header[1] & 16 != 0, .directory = null },
+        } };
+        const s = &result.screens[index].?;
+        if (has_directory) s.metadata.policy.directory = try alloc.dupe(u8, directory);
+        s.images = try .initCapacity(alloc, image_count);
+        s.placements = try .initCapacity(alloc, placement_count);
+        for (0..image_count) |_| {
+            const prefix = try reader.take(8);
+            const record = try reader.take(try size(get(u64, prefix, 0)));
+            const img = try images.decode(alloc, record, .{ .encoded_bytes = limits.encoded_bytes, .backing_bytes = budget.remaining() }, resolver);
+            s.images.appendAssumeCapacity(img);
+            try budget.charge(try imageBytes(&img, true));
+        }
+        for (0..placement_count) |_| s.placements.appendAssumeCapacity(try placements.decode(try reader.take(placements.encoded_len)));
+        if (loading_len != 0) {
+            s.loading = try loading.decode(alloc, try reader.take(loading_len), .{ .encoded_bytes = limits.encoded_bytes, .backing_bytes = budget.remaining() });
+            try budget.charge(s.loading.?.data.items.len);
+        }
+        try validate(alloc, key, s.metadata, s.images.items, s.placements.items);
+    }
+    if (reader.offset != bytes.len) return error.InvalidSnapshot;
+    return result;
+}
+
+const test_limits: Limits = .{ .encoded_bytes = 1 << 20, .backing_bytes = 1 << 20, .images = 100, .placements = 100, .policy_bytes = 4096 };
+
+fn runCommand(t: *Terminal, text: []const u8) !void {
+    const command = @import("graphics_command.zig");
+    const cmd = try command.Parser.parseString(std.testing.allocator, text);
+    defer cmd.deinit(std.testing.allocator);
+    const response = @import("graphics_exec.zig").execute(std.testing.io, std.testing.allocator, t, &cmd);
+    if (response) |v| try std.testing.expect(v.ok());
+}
+
+fn fixture() !Terminal {
+    const alloc = std.testing.allocator;
+    var t = try Terminal.init(std.testing.io, alloc, .{ .cols = 8, .rows = 4 });
+    errdefer t.deinit(alloc);
+    try runCommand(&t, "a=t,f=24,s=1,v=1,i=1;AQID");
+    try runCommand(&t, "a=p,i=1,p=1");
+    try runCommand(&t, "a=p,i=1,p=2,P=1,Q=1,H=-3");
+    const primary = &t.screens.active.kitty_images;
+    primary.setLimit(std.testing.io, alloc, t.screens.active, 3);
+    try primary.convertImageToRgba(std.testing.io, alloc, primary.imagePtrByIdOrNumber(1, 0).?);
+    try runCommand(&t, "a=t,f=32,s=1,v=1,i=2,m=1;AQI=");
+    primary.placements.get(.{ .image_id = 1, .placement_id = .{ .tag = .external, .id = 1 } }).?.location.pin.garbage = true;
+    primary.dirty = false;
+    primary.image_limits = .{ .file = true, .shared_memory = true, .preserve_png = true, .temporary_file = .{ .enabled = .{ .directory = "captured-dir" } } };
+    _ = try t.screens.getInit(std.testing.io, alloc, .alternate, .{ .cols = 8, .rows = 4 });
+    t.screens.switchTo(.alternate);
+    try runCommand(&t, "a=t,f=32,s=1,v=1,i=3;AQIDBA==");
+    try runCommand(&t, "a=f,f=32,s=1,v=1,i=3,z=60;BAUGBw==");
+    t.screens.active.kitty_images.imagePtrByIdOrNumber(3, 0).?.animation.?.frame_shown_at_ms = 100;
+    return t;
+}
+
+test "storage snapshot both screens exact domains and source destruction" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try fixture();
+    defer t.deinit(alloc);
+    const bytes = try capture(alloc, &t, 999, test_limits);
+    defer alloc.free(bytes);
+    var snapshot = try decode(alloc, bytes, test_limits, null);
+    defer snapshot.deinit(alloc);
+    try testing.expectEqual(@as(?u64, 999), snapshot.clock_cut);
+    for (keys, 0..) |key, index| {
+        const source = &t.screens.get(key).?.kitty_images;
+        const result = &snapshot.screens[index].?;
+        try testing.expectEqual(source.total_bytes, result.metadata.total_bytes);
+        try testing.expectEqual(source.total_limit, result.metadata.total_limit);
+        try testing.expectEqual(source.generation, result.metadata.generation);
+        try testing.expectEqual(source.dirty, result.metadata.dirty);
+        try testing.expectEqual(source.next_image_id, result.metadata.next_image_id);
+        try testing.expectEqual(source.next_internal_placement_id, result.metadata.next_internal_placement_id);
+        for (result.images.items) |*img| {
+            const before = try images.encode(alloc, source.images.getPtr(img.id).?, .{ .encoded_bytes = 1 << 20, .backing_bytes = 1 << 20 });
+            defer alloc.free(before);
+            const after = try images.encode(alloc, img, .{ .encoded_bytes = 1 << 20, .backing_bytes = 1 << 20 });
+            defer alloc.free(after);
+            try testing.expectEqualSlices(u8, before, after);
+        }
+        for (result.placements.items) |place| try testing.expectEqualDeep(try placements.capture(&t, key, place.key, source.placements.get(place.key).?), place);
+    }
+    try testing.expect(snapshot.screens[0].?.metadata.total_bytes > snapshot.screens[0].?.metadata.total_limit);
+    try testing.expect(snapshot.screens[0].?.metadata.policy.directory != null);
+    try testing.expectEqualStrings("captured-dir", snapshot.screens[0].?.metadata.policy.directory.?);
+    try testing.expect(snapshot.screens[1].?.metadata.policy.directory == null);
+    try testing.expectEqualSlices(u8, &.{ 1, 2 }, snapshot.screens[0].?.loading.?.data.items);
+    // Decode again only after the source terminal and all its pins are gone.
+    const detached = blk: {
+        var source = try fixture();
+        defer source.deinit(alloc);
+        break :blk try capture(alloc, &source, null, test_limits);
+    };
+    defer alloc.free(detached);
+    var owned = try decode(alloc, detached, test_limits, null);
+    defer owned.deinit(alloc);
+    try testing.expectEqualSlices(u8, &.{ 1, 2 }, owned.screens[0].?.loading.?.data.items);
+    try testing.expectEqual(@as(usize, 2), owned.screens[0].?.placements.items.len);
+}
+
+fn decodeFailing(alloc: Allocator, bytes: []const u8) !void {
+    var result = try decode(alloc, bytes, test_limits, null);
+    defer result.deinit(alloc);
+}
+fn captureFailing(alloc: Allocator, t: *const Terminal) !void {
+    const bytes = try capture(alloc, t, 999, test_limits);
+    defer alloc.free(bytes);
+}
+
+test "storage snapshot every allocation failure and truncation" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try fixture();
+    defer t.deinit(alloc);
+    const bytes = try capture(alloc, &t, 999, test_limits);
+    defer alloc.free(bytes);
+    try testing.checkAllAllocationFailures(alloc, captureFailing, .{&t});
+    try testing.checkAllAllocationFailures(alloc, decodeFailing, .{bytes});
+    for (0..bytes.len) |len| try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes[0..len], test_limits, null));
+    const after = try capture(alloc, &t, 999, test_limits);
+    defer alloc.free(after);
+    try testing.expectEqualSlices(u8, bytes, after);
+    var bad = try alloc.dupe(u8, bytes);
+    defer alloc.free(bad);
+    for ([_]usize{ 0, 6, 7, root_len, root_len + 1, root_len + 2, root_len + 20 }) |offset| {
+        const saved = bad[offset];
+        bad[offset] = 255;
+        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bad, test_limits, null));
+        bad[offset] = saved;
+    }
+    put(u32, bad, root_len + 12, 99);
+    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bad, test_limits, null));
+}
+
+test "storage snapshot aggregate budgets span both screens" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try fixture();
+    defer t.deinit(alloc);
+    const bytes = try capture(alloc, &t, null, test_limits);
+    defer alloc.free(bytes);
+    var limits = test_limits;
+    limits.images = 1;
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, limits, null));
+    limits = test_limits;
+    limits.placements = 1;
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, limits, null));
+    limits = test_limits;
+    limits.encoded_bytes = bytes.len - 1;
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, limits, null));
+    limits = test_limits;
+    limits.policy_bytes = 1;
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, limits, null));
+    const fixed = (try preflightStructure(bytes, test_limits)).backing;
+    limits = test_limits;
+    limits.backing_bytes = fixed;
+    try testing.expectError(error.LimitExceeded, decode(alloc, bytes, limits, null));
+}
+
+const FileOwner = struct {
+    refs: usize = 1,
+    resolves: usize = 0,
+    reads: usize = 0,
+    releases: usize = 0,
+    fn backing(self: *@This(), identity: u64) image.FileBacking {
+        return .{ .context = self, .identity = identity, .len = 4, .read = read, .release = release };
+    }
+    fn read(ctx: ?*anyopaque, _: [*]u8, _: usize) callconv(.c) bool {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        self.reads += 1;
+        return false;
+    }
+    fn release(ctx: ?*anyopaque) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        self.refs -= 1;
+        self.releases += 1;
+    }
+    fn resolve(ctx: ?*anyopaque, identity: u64, len: usize) Error!image.FileBacking {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        if (identity != 77 or len != 4) return error.BackingUnavailable;
+        self.refs += 1;
+        self.resolves += 1;
+        return self.backing(88);
+    }
+    fn resolver(self: *@This()) images.FileResolver {
+        return .{ .context = self, .resolve = resolve };
+    }
+};
+
+fn decodeFileFailing(alloc: Allocator, bytes: []const u8, host: *FileOwner) !void {
+    const before = host.refs;
+    defer std.debug.assert(host.refs == before);
+    var result = try decode(alloc, bytes, test_limits, host.resolver());
+    defer result.deinit(alloc);
+}
+
+test "storage snapshot attachment rollback and structural preflight" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var host: FileOwner = .{};
+    const bytes = blk: {
+        var t = try Terminal.init(testing.io, alloc, .{ .cols = 8, .rows = 4 });
+        defer t.deinit(alloc);
+        // Transfer one of two fixture references to source storage.
+        host.refs += 1;
+        try t.screens.active.kitty_images.addImage(testing.io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = host.backing(77) } });
+        _ = try t.screens.getInit(testing.io, alloc, .alternate, .{ .cols = 8, .rows = 4 });
+        break :blk try capture(alloc, &t, null, test_limits);
+    };
+    defer alloc.free(bytes);
+    try testing.expectEqual(@as(usize, 1), host.refs);
+    try testing.checkAllAllocationFailures(alloc, decodeFileFailing, .{ bytes, &host });
+    try testing.expectEqual(@as(usize, 0), host.reads);
+    var bad = try alloc.dupe(u8, bytes);
+    defer alloc.free(bad);
+    const second_screen = root_len + screen_len + 8 + 96;
+    const resolved_before = host.resolves;
+    const released_before = host.releases;
+    // Structurally valid but semantically inconsistent second-screen accounting.
+    put(u64, bad, second_screen + 32, 1);
+    try testing.expectError(error.InvalidSnapshot, decode(alloc, bad, test_limits, host.resolver()));
+    try testing.expectEqual(resolved_before + 1, host.resolves);
+    try testing.expectEqual(released_before + 1, host.releases);
+    try testing.expectEqual(@as(usize, 1), host.refs);
+    const trailing = try alloc.alloc(u8, bytes.len + 1);
+    defer alloc.free(trailing);
+    @memcpy(trailing[0..bytes.len], bytes);
+    trailing[bytes.len] = 0;
+    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, trailing, test_limits, host.resolver()));
+    try testing.expectEqual(resolved_before + 1, host.resolves);
+    put(u64, bad, second_screen + 32, 0);
+    bad[second_screen] = 2;
+    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bad, test_limits, host.resolver()));
+    try testing.expectEqual(resolved_before + 1, host.resolves);
+    var owned = try decode(alloc, bytes, test_limits, host.resolver());
+    try testing.expectEqual(@as(u64, 88), owned.screens[0].?.images.items[0].data.native_file.identity);
+    owned.deinit(alloc);
+    try testing.expectEqual(@as(usize, 1), host.refs);
+}
+
+test "storage snapshot duplicate keys missing parents and counts" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try fixture();
+    defer t.deinit(alloc);
+    const bytes = try capture(alloc, &t, null, test_limits);
+    defer alloc.free(bytes);
+    var reader: Reader = .{ .bytes = bytes };
+    _ = try reader.take(root_len);
+    const header = try reader.take(screen_len);
+    _ = try reader.take(try size(get(u64, header, 48)));
+    for (0..get(u32, header, 12)) |_| {
+        const prefix = try reader.take(8);
+        _ = try reader.take(try size(get(u64, prefix, 0)));
+    }
+    const first = reader.offset;
+    const second = first + placements.encoded_len;
+    const bad = try alloc.dupe(u8, bytes);
+    defer alloc.free(bad);
+    @memcpy(bad[second + 8 ..][0..12], bad[first + 8 ..][0..12]);
+    try testing.expectError(error.InvalidSnapshot, decode(alloc, bad, test_limits, null));
+    @memcpy(bad, bytes);
+    const relative = if (bad[first + 7] == 2) first else second;
+    put(u32, bad, relative + 20, 999);
+    try testing.expectError(error.InvalidSnapshot, decode(alloc, bad, test_limits, null));
+    @memcpy(bad, bytes);
+    // The first image record starts after its length prefix.
+    put(u32, bad, root_len + screen_len + try size(get(u64, header, 48)) + 8 + 24, 0);
+    try testing.expectError(error.InvalidSnapshot, decode(alloc, bad, test_limits, null));
+}
+
+test "storage snapshot scalar width rejection before allocation" {
+    if (@bitSizeOf(usize) >= 64) return error.SkipZigTest;
+    const testing = std.testing;
+    var bytes: [root_len + screen_len]u8 = @splat(0);
+    @memcpy(bytes[0..magic.len], magic);
+    bytes[6] = 1;
+    put(u64, &bytes, root_len + 32, std.math.maxInt(u64));
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, &bytes, test_limits, null));
+    put(u64, &bytes, root_len + 32, 0);
+    put(u64, &bytes, root_len + 40, std.math.maxInt(u64));
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, &bytes, test_limits, null));
+}
+
+test "storage snapshot duplicate images and enabled empty policy" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try Terminal.init(testing.io, alloc, .{ .cols = 8, .rows = 4 });
+    defer t.deinit(alloc);
+    const s = &t.screens.active.kitty_images;
+    s.image_limits.temporary_file = .{ .enabled = .{ .directory = "" } };
+    try s.addImage(testing.io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(testing.io, alloc, t.screens.active, .{ .id = 2 });
+    const bytes = try capture(alloc, &t, null, test_limits);
+    defer alloc.free(bytes);
+    var snapshot = try decode(alloc, bytes, test_limits, null);
+    defer snapshot.deinit(alloc);
+    try testing.expect(snapshot.screens[1] == null);
+    try testing.expectEqualStrings("", snapshot.screens[0].?.metadata.policy.directory.?);
+    const first_id = get(u32, bytes, root_len + screen_len + 8 + 8);
+    put(u32, bytes, root_len + screen_len + (8 + 96) + 8 + 8, first_id);
+    try testing.expectError(error.InvalidSnapshot, decode(alloc, bytes, test_limits, null));
+}
+
+test "storage snapshot pending reservations share the backing budget" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try Terminal.init(testing.io, alloc, .{ .cols = 8, .rows = 4 });
+    defer t.deinit(alloc);
+    _ = try t.screens.getInit(testing.io, alloc, .alternate, .{ .cols = 8, .rows = 4 });
+    for (keys) |key| {
+        const screen = t.screens.get(key).?;
+        _ = try screen.kitty_images.addPendingImage(testing.io, alloc, screen, .{ .id = 1, .width = 1000, .height = 500, .format = .rgba, .data = .{ .pending = 2_000_000 } });
+    }
+    var limits = test_limits;
+    limits.backing_bytes = 5_000_000;
+    const bytes = try capture(alloc, &t, null, limits);
+    defer alloc.free(bytes);
+    try testing.expect(bytes.len < 1024);
+    var snapshot = try decode(alloc, bytes, limits, null);
+    defer snapshot.deinit(alloc);
+    try testing.expectEqual(@as(usize, 2_000_000), snapshot.screens[1].?.images.items[0].data.pending);
+    limits.backing_bytes = 3_000_000;
+    try testing.expectError(error.LimitExceeded, decode(alloc, bytes, limits, null));
+    try testing.expectError(error.LimitExceeded, capture(alloc, &t, null, limits));
+}

@@ -2003,7 +2003,9 @@ pub const Capacity = struct {
     fn availableBytesForGrid(self: Capacity) usize {
         comptime {
             assert(cells_align % Page.MetaLayout.alignment == 0);
-            assert(@sizeOf(Cell) % Page.MetaLayout.alignment == 0);
+            // Alignment's narrow integer type may not represent Cell's size
+            // on 32-bit targets. Perform the byte-size arithmetic as usize.
+            assert(@as(usize, @sizeOf(Cell)) % Page.MetaLayout.alignment == 0);
         }
 
         const l = Page.layout(self);

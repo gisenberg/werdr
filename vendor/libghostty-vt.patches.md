@@ -3,6 +3,81 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0024 both-screen graphics storage snapshots
+
+status: active, domain prerequisite; retained graphics gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0024-storage-domain-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/storage_snapshot.zig`
+
+reason: GSTOR1 owns both screens' graphics metadata, policy values, images, placements and loading continuations under aggregate limits.
+Nonallocating structural preflight validates both screens and reserves all structural metadata before payload allocation or host attachment resolution.
+Semantic validation checks image and placement identities, references, counts and exact native byte accounting while preserving reachable over-limit stores and unresolved placement cycles.
+Failure releases all owned arrays, directories, loading data and resolved file references.
+Budgets cover encoded bytes, logical backing and pending reservations, object counts and policy bytes, not allocator capacity, scratch maps, transient copies or total process memory.
+Capture requires exclusive terminal access; file attachments and pending producers require separate fenced host coordination.
+Generations and animation timestamps remain in the source domain.
+This adds no runtime installation, C/Rust handoff API, render-path work or relaxation of the retained graphics gate.
+
+remove when: upstream provides equivalent owned aggregate storage snapshots and both-screen budget, malformed-input, allocation-failure, attachment rollback and source-destruction tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=storage snapshot' --summary all
+zig build test-lib-vt -Demit-lib-vt=true -Dtarget=x86-linux-musl '-Dtest-filter=storage snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig commands inside `vendor/libghostty-vt`.
+
+## 0025 page alignment assertion width
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0025-page-alignment-width.patch`
+
+herdr issue: none; fork 32-bit snapshot verification
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/page.zig`
+
+reason: The page layout assertion coerces Cell's eight-byte size to the alignment value's narrow integer type, which is u3 on x86.
+Performing the size arithmetic as usize preserves the assertion and permits real 32-bit snapshot verification.
+This changes no runtime behavior.
+
+remove when: upstream performs this assertion in a type that represents Cell's size and the x86-linux-musl tests compile and pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true -Dtarget=x86-linux-musl '-Dtest-filter=storage snapshot' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+
 ## 0023 coordinated graphics generation rebinding
 
 status: active, storage prerequisite; retained graphics gate remains closed

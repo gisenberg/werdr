@@ -18,6 +18,7 @@ const command = @import("graphics_command.zig");
 const exec = @import("graphics_exec.zig");
 const image = @import("graphics_image.zig");
 const storage = @import("graphics_storage.zig");
+pub const storage_snapshot = @import("storage_snapshot.zig");
 pub const animation = @import("graphics_animation.zig");
 pub const pixel = @import("graphics_pixel.zig");
 pub const unicode = @import("graphics_unicode.zig");
