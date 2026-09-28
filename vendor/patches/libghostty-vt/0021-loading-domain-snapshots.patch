@@ -2,10 +2,7 @@ diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics.zig b/vendor/libgh
 index 750df42c..2be4856a 100644
 --- a/vendor/libghostty-vt/src/terminal/kitty/graphics.zig
 +++ b/vendor/libghostty-vt/src/terminal/kitty/graphics.zig
-@@ -32,6 +32,8 @@ pub const nextGeneration = storage.nextGeneration;
- 
- pub const execute = exec.execute;
- 
+@@ -35,3 +35,5 @@ pub const execute = exec.execute;
 +pub const loading_snapshot = @import("loading_snapshot.zig");
 +
  test {
