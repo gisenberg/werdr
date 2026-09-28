@@ -27,6 +27,52 @@ impl Drop for EncodedBytes {
 }
 
 impl Terminal {
+    /// Capture quiescent OSC parser state, limits and initialized capture data.
+    /// May contain private command data. Not a full snapshot.
+    /// Limit bounds encoded bytes, not allocator overhead or retained capacity.
+    pub fn osc_capture_snapshot(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = EncodedBytes {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        // SAFETY: live handle, exact output types, native allocation owned by guard.
+        unsafe {
+            ffi::ghostty_snapshot_osc_capture_encode_alloc(
+                self.raw,
+                ptr::null(),
+                limit,
+                &mut bytes.ptr,
+                &mut bytes.len,
+            )
+            .into_result()?;
+            if bytes.len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(bytes.len)
+                .map_err(|_| Error(ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY))?;
+            result.extend_from_slice(slice::from_raw_parts(bytes.ptr, bytes.len));
+            Ok(result)
+        }
+    }
+
+    /// Replace OSC state after matching outer parser continuation reconstruction.
+    /// The native decoder validates before allocation and commits only on success.
+    /// Restores discarded commands and fixed-buffer fallback without callbacks.
+    /// Limit bounds encoded bytes, not allocator overhead or retained capacity.
+    pub fn restore_osc_capture_snapshot(
+        &mut self,
+        bytes: &[u8],
+        limit: usize,
+    ) -> Result<(), Error> {
+        // SAFETY: input borrow outlives synchronous decode, handle exclusively held.
+        unsafe {
+            ffi::ghostty_snapshot_osc_capture_restore(self.raw, bytes.as_ptr(), bytes.len(), limit)
+                .into_result()
+        }
+    }
+
     /// Capture handler policy, ordered grants and authoritative DCS state.
     /// Contains sensitive grant passwords. Not a full snapshot.
     /// Limit bounds encoded bytes and grant backing plus nested DCS bytes.
@@ -340,6 +386,78 @@ mod tests {
 
     fn terminal() -> Terminal {
         Terminal::new_with_snapshot_tracking(40, 5, 1_000_000, 4096).unwrap()
+    }
+
+    #[test]
+    fn osc_capture_snapshot_continues_every_cut_without_replaying_effects() {
+        use std::sync::{Arc, Mutex};
+        for sequence in [
+            b"\x1b]2;private title\x1b\\".as_slice(),
+            b"\x1b]52;c;SGVsbG8=\x07",
+            b"\x1b]4;1;?\x07",
+        ] {
+            for cut in 0..=sequence.len() {
+                let mut source = terminal();
+                source.write(&sequence[..cut]);
+                let capture = source.osc_capture_snapshot(4096).unwrap();
+                let callbacks = source.callback_snapshot(4096).unwrap();
+                let mut restored =
+                    Terminal::from_snapshot(&source.snapshot_bytes().unwrap(), 4096).unwrap();
+                let a = Arc::new(Mutex::new(Vec::new()));
+                let b = Arc::new(Mutex::new(Vec::new()));
+                for (terminal, output) in [(&mut source, a.clone()), (&mut restored, b.clone())] {
+                    terminal
+                        .set_write_pty_callback(move |bytes| {
+                            output.lock().unwrap().extend_from_slice(bytes)
+                        })
+                        .unwrap();
+                }
+                restored
+                    .restore_osc_capture_snapshot(&capture, 4096)
+                    .unwrap();
+                restored
+                    .restore_osc_capture_snapshot(&capture, 4096)
+                    .unwrap();
+                restored.restore_callback_snapshot(callbacks, 4096).unwrap();
+                assert!(b.lock().unwrap().is_empty());
+                source.write(&sequence[cut..]);
+                restored.write(&sequence[cut..]);
+                assert_eq!(*a.lock().unwrap(), *b.lock().unwrap(), "cut {cut}");
+                assert_eq!(
+                    source.take_clipboard_writes(),
+                    restored.take_clipboard_writes()
+                );
+                assert_eq!(
+                    source.osc_capture_snapshot(4096).unwrap(),
+                    restored.osc_capture_snapshot(4096).unwrap()
+                );
+                source.write(b"\x1b]2;next\x07tail");
+                restored.write(b"\x1b]2;next\x07tail");
+                assert_eq!(
+                    source.screen_vt(ActiveScreen::Primary).unwrap(),
+                    restored.screen_vt(ActiveScreen::Primary).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn osc_capture_snapshot_rejects_partial_records_without_changing_state() {
+        let mut source = terminal();
+        source.write(b"\x1b]52;c;SGV");
+        let bytes = source.osc_capture_snapshot(4096).unwrap();
+        for cut in 0..bytes.len() {
+            assert!(source
+                .restore_osc_capture_snapshot(&bytes[..cut], 4096)
+                .is_err());
+            assert_eq!(source.osc_capture_snapshot(4096).unwrap(), bytes);
+        }
+        assert!(source.osc_capture_snapshot(bytes.len() - 1).is_err());
+        assert!(source
+            .restore_osc_capture_snapshot(&bytes, bytes.len() - 1)
+            .is_err());
+        source.write(b"sbG8=\x07");
+        assert_eq!(source.take_clipboard_writes(), vec![b"Hello".to_vec()]);
     }
 
     #[test]

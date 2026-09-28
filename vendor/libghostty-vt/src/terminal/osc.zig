@@ -19,6 +19,7 @@ const encoding = @import("osc/encoding.zig");
 
 pub const color = parsers.color;
 pub const semantic_prompt = parsers.semantic_prompt;
+pub const snapshot = @import("osc_snapshot.zig");
 
 const log = std.log.scoped(.osc);
 
@@ -505,11 +506,15 @@ pub const Parser = struct {
             alloc: Allocator,
             max_bytes: usize,
         ) error{OutOfMemory}!void {
+            // Stage fallible initialization before publishing a capture. Zig's
+            // result-location writes can otherwise leave a non-null partial
+            // capture when allocation fails, breaking the fixed fallback.
+            const backing = try std.Io.Writer.Allocating.initCapacity(
+                alloc,
+                @min(MAX_BUF, max_bytes),
+            );
             new.* = .{
-                .backing = .{ .allocating = try std.Io.Writer.Allocating.initCapacity(
-                    alloc,
-                    @min(MAX_BUF, max_bytes),
-                ) },
+                .backing = .{ .allocating = backing },
                 .writer = &new.*.?.backing.allocating.writer,
                 .max_bytes = max_bytes,
             };
@@ -967,6 +972,7 @@ pub const Parser = struct {
 
 test {
     _ = parsers;
+    _ = snapshot;
     _ = encoding;
 }
 

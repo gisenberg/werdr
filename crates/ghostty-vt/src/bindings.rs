@@ -5368,6 +5368,25 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Capture sensitive unfinished OSC state at a quiescent feed boundary.\n Limit bounds encoded bytes, not allocator overhead or retained capacity.\n Free output using ghostty_free with the same allocator."]
+    pub fn ghostty_snapshot_osc_capture_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limit: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Atomically replace OSC capture after matching outer parser reconstruction.\n Rebinds destination writers without callbacks; empty input is invalid."]
+    pub fn ghostty_snapshot_osc_capture_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limit: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Encode a complete terminal snapshot to an allocated buffer.\n\n The returned buffer is allocated with allocator, or the default allocator\n when allocator is NULL. The caller must release it with ghostty_free(),\n passing the same allocator used here.\n\n A terminal can be encoded with tracking disabled when its VT parser and\n UTF-8 decoder are both at ground. If either is unfinished, tracking must\n have been enabled before the input that produced that state was written;\n otherwise this returns GHOSTTY_INVALID_VALUE.\n\n @param terminal Terminal to encode (must not be NULL)\n @param allocator Allocator for the output, or NULL for the default allocator\n @param[out] out_ptr Allocated snapshot bytes (must not be NULL)\n @param[out] out_len Number of allocated snapshot bytes (must not be NULL)\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_encode_alloc(
         terminal: GhosttyTerminal,

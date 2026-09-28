@@ -3,6 +3,54 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0018 authoritative OSC capture snapshots
+
+status: active, private pane draft integration; not complete runtime preservation
+
+patch: `vendor/patches/libghostty-vt/0018-osc-capture-snapshots.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/osc_snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/osc.zig`
+- `vendor/libghostty-vt/src/terminal/osc_snapshot.zig`
+
+reason: Successful continuation replay can resurrect OSC commands discarded after allocation failure or change fixed-buffer fallback behavior.
+OSCPS1 preserves quiescent parser state, allocator intent, initialized capture bytes, backing kind and independent configured/effective limits.
+Restoration validates and stages aliased inputs before resetting with the old allocator, then binds writer pointers in final destination storage without emitting callbacks.
+Inactive records canonicalize cleanup-only capture state; active records must agree with outer OSC parsing and reject reentrant command dispatch.
+Encoded-byte limits do not bound retained capacity, allocator overhead or total RSS.
+The patch also stages allocating capture construction before publishing its optional value, fixing a partial-initialization assertion on allocation failure before fixed fallback.
+That repair adds no per-byte or render work and no additional allocation.
+The C API has owning Rust wrappers and a separately bounded private pane draft payload.
+Payloads may contain sensitive command data and must not be logged.
+This does not establish complete terminal restoration or external runtime/effect ownership.
+
+remove when: upstream provides equivalent authoritative OSC preservation and allocation-safe fixed fallback, and continuation, failure, aliasing, atomicity and private pane draft tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=osc snapshot' --summary all
+just test-one osc_capture
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+Run the Zig command inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0017 coordinated stream handler snapshots
 
 status: active, private pane draft integration; unfinished OSC capture remains separate

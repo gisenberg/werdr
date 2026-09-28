@@ -351,6 +351,19 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_encode_buf(
     size_t buf_len,
     size_t* out_written);
 
+/** Capture sensitive unfinished OSC state at a quiescent feed boundary.
+ * Limit bounds encoded bytes, not allocator overhead or retained capacity.
+ * Free output using ghostty_free with the same allocator.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_osc_capture_encode_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator, size_t limit,
+    uint8_t** out_ptr, size_t* out_len);
+/** Atomically replace OSC capture after matching outer parser reconstruction.
+ * Rebinds destination writers without callbacks; empty input is invalid.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_osc_capture_restore(
+    GhosttyTerminal terminal, const uint8_t* input, size_t len, size_t limit);
+
 /**
  * Encode a complete terminal snapshot to an allocated buffer.
  *

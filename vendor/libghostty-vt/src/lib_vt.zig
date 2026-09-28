@@ -438,6 +438,10 @@ comptime {
         @export(&c.alloc_alloc, .{ .name = "ghostty_alloc" });
         @export(&c.alloc_free, .{ .name = "ghostty_free" });
 
+        if (features.snapshot) {
+            @export(&c.snapshot_osc_capture_encode_alloc, .{ .name = "ghostty_snapshot_osc_capture_encode_alloc" });
+            @export(&c.snapshot_osc_capture_restore, .{ .name = "ghostty_snapshot_osc_capture_restore" });
+        }
         // On Wasm we need to export our allocator convenience functions.
         if (builtin.target.cpu.arch.isWasm()) {
             const alloc = @import("lib/allocator/wasm.zig");

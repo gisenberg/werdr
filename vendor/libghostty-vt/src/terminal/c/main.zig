@@ -114,6 +114,9 @@ pub const render_state_row_cells_get_multi = render.row_cells_get_multi;
 pub const render_state_row_cells_free = render.row_cells_free;
 
 pub const sgr_new = sgr.new;
+pub const osc_snapshot = @import("osc_snapshot.zig");
+pub const snapshot_osc_capture_encode_alloc = osc_snapshot.encode_alloc;
+pub const snapshot_osc_capture_restore = osc_snapshot.restore;
 pub const sgr_free = sgr.free;
 pub const sgr_reset = sgr.reset;
 pub const sgr_set_params = sgr.setParams;
@@ -278,6 +281,7 @@ pub const tracked_grid_ref_snapshot = grid_ref_tracked.tracked_grid_ref_snapshot
 
 test {
     _ = allocator;
+    _ = osc_snapshot;
     _ = buildpkg;
     _ = cell;
     _ = color;
