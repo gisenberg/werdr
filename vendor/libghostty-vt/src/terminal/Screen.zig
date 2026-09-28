@@ -257,6 +257,8 @@ pub const CharsetState = struct {
 };
 
 pub const Options = struct {
+    /// Optional OS-backed page allocator, retained by the page pool.
+    page_allocator: ?Allocator = null,
     cols: size.CellCountInt,
     rows: size.CellCountInt,
 
@@ -307,6 +309,7 @@ pub fn init(
 ) Allocator.Error!Screen {
     // Initialize our backing pages.
     var pages = try PageList.init(alloc, .{
+        .page_allocator = opts.page_allocator,
         .cols = opts.cols,
         .rows = opts.rows,
         .max_size = opts.max_scrollback_bytes,

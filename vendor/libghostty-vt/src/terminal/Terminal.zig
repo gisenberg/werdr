@@ -264,6 +264,8 @@ pub const Cursor = struct {
 };
 
 pub const Options = struct {
+    /// Optional OS-backed page allocator for every screen in this terminal.
+    page_allocator: ?Allocator = null,
     cols: size.CellCountInt,
     rows: size.CellCountInt,
 
@@ -317,6 +319,7 @@ pub fn init(
     const rows = opts.rows;
 
     var screen_set: ScreenSet = try .init(io_impl, alloc, .{
+        .page_allocator = opts.page_allocator,
         .cols = cols,
         .rows = rows,
         .max_scrollback_bytes = opts.max_scrollback_bytes,

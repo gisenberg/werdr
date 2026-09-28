@@ -1,0 +1,877 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/snapshot.h b/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
+index 89cb5398..0865443a 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/snapshot.h
+@@ -159,6 +159,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * Input type: bool *
+    */
+   GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION = 1,
++  /**
++   * Peak decoded storage budget (const size_t*).
++   * Covers requested heap bytes and page-rounded native backing allocations,
++   * including overlapping placeholder/replacement screens and continuation
++   * reconstruction. Input bytes, fixed decoder/budget wrappers and allocator
++   * or OS bookkeeping are excluded. Zero rejects all decoded allocations.
++   * The default has no budget. Rejection returns GHOSTTY_LIMIT_EXCEEDED.
++   * Enforcement ends only at successful FINISH; allocator ownership persists
++   * until both decoder and returned terminal are freed, in either order.
++   */
++  GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_ALLOCATION_BYTES = 2,
+ 
+   GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttySnapshotDecoderOption;
+diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
+index 94ef9bb0..2e300302 100644
+--- a/vendor/libghostty-vt/src/terminal/PageList.zig
++++ b/vendor/libghostty-vt/src/terminal/PageList.zig
+@@ -400,6 +400,8 @@ pub const MemoryPool = struct {
+ 
+ /// The memory pool we get page nodes, pages from.
+ pool: MemoryPool,
++/// Optional OS-backed allocator policy retained by clones.
++page_allocator: ?Allocator = null,
+ 
+ /// The list of pages in the screen.
+ pages: List,
+@@ -568,7 +570,7 @@ fn initialCapacity(cols: size.CellCountInt) Capacity {
+ /// `alloc` is the caller-provided allocator. It is used on native freestanding
+ /// targets, where no OS page allocator is available. Other targets select a
+ /// platform-specific allocator below.
+-inline fn pageAllocator(alloc: Allocator) Allocator {
++pub fn pageAllocator(alloc: Allocator) Allocator {
+     // In tests we use our testing allocator so we can detect leaks.
+     if (builtin.is_test) return std.testing.allocator;
+ 
+@@ -593,6 +595,8 @@ const init_tw = tripwire.module(enum {
+ }, init);
+ 
+ pub const Options = struct {
++    /// Must preserve native page alignment, zeroing and decommit semantics.
++    page_allocator: ?Allocator = null,
+     /// The initial active-area size. This can be resized with `resize`.
+     cols: size.CellCountInt,
+     rows: size.CellCountInt,
+@@ -646,7 +650,7 @@ pub fn init(
+     try tw.check(.init_memory_pool);
+     var pool = try MemoryPool.init(
+         alloc,
+-        pageAllocator(alloc),
++        opts.page_allocator orelse pageAllocator(alloc),
+         page_preheat,
+     );
+     errdefer pool.deinit();
+@@ -683,6 +687,7 @@ pub fn init(
+         .page_serial = page_serial,
+         .page_serial_epoch = 0,
+         .page_size = page_size,
++        .page_allocator = opts.page_allocator,
+         .limits = limits,
+         .total_rows = rows,
+         .tracked_pins = tracked_pins,
+@@ -1105,7 +1110,7 @@ pub fn clone(
+     // Setup our pool
+     var pool: MemoryPool = try .init(
+         alloc,
+-        pageAllocator(alloc),
++        self.page_allocator orelse pageAllocator(alloc),
+         page_count,
+     );
+     errdefer pool.deinit();
+@@ -1183,6 +1188,7 @@ pub fn clone(
+         .page_serial = page_serial,
+         .page_serial_epoch = 0,
+         .page_size = page_size,
++        .page_allocator = self.page_allocator,
+         .limits = self.limits,
+         .cols = self.cols,
+         .rows = self.rows,
+@@ -7492,7 +7498,7 @@ pub const Builder = struct {
+         return .{
+             .pool = try MemoryPool.init(
+                 alloc,
+-                pageAllocator(alloc),
++                options.page_allocator orelse pageAllocator(alloc),
+                 page_preheat,
+             ),
+             .options = options,
+@@ -7605,6 +7611,7 @@ pub const Builder = struct {
+             .page_serial = self.page_serial,
+             .page_serial_epoch = 0,
+             .page_size = self.page_size,
++            .page_allocator = self.options.page_allocator,
+             .limits = limits,
+             .total_rows = total_rows,
+             .tracked_pins = tracked_pins,
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index d0d2b929..e1aa45ae 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -257,6 +257,8 @@ pub const CharsetState = struct {
+ };
+ 
+ pub const Options = struct {
++    /// Optional OS-backed page allocator, retained by the page pool.
++    page_allocator: ?Allocator = null,
+     cols: size.CellCountInt,
+     rows: size.CellCountInt,
+ 
+@@ -307,6 +309,7 @@ pub fn init(
+ ) Allocator.Error!Screen {
+     // Initialize our backing pages.
+     var pages = try PageList.init(alloc, .{
++        .page_allocator = opts.page_allocator,
+         .cols = opts.cols,
+         .rows = opts.rows,
+         .max_size = opts.max_scrollback_bytes,
+diff --git a/vendor/libghostty-vt/src/terminal/ScreenSet.zig b/vendor/libghostty-vt/src/terminal/ScreenSet.zig
+index 28fced98..c4f2620c 100644
+--- a/vendor/libghostty-vt/src/terminal/ScreenSet.zig
++++ b/vendor/libghostty-vt/src/terminal/ScreenSet.zig
+@@ -34,6 +34,8 @@ all: std.EnumMap(Key, *Screen),
+ /// screen storage is removed or replaced so external handles can distinguish a
+ /// newly initialized screen from stale references into destroyed storage.
+ generations: std.EnumMap(Key, usize),
++/// Retain page policy when lazy or replacement screens are constructed.
++page_allocator: ?Allocator = null,
+ 
+ pub fn init(
+     io: std.Io,
+@@ -49,6 +51,7 @@ pub fn init(
+         .active = screen,
+         .all = .init(.{ .primary = screen }),
+         .generations = .initFull(0),
++        .page_allocator = opts.page_allocator,
+     };
+ }
+ 
+@@ -82,7 +85,9 @@ pub fn getInit(
+     if (self.get(key)) |screen| return screen;
+     const screen = try alloc.create(Screen);
+     errdefer alloc.destroy(screen);
+-    screen.* = try .init(io, alloc, opts);
++    var effective = opts;
++    effective.page_allocator = self.page_allocator;
++    screen.* = try .init(io, alloc, effective);
+     self.all.put(key, screen);
+     return screen;
+ }
+diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
+index e9cc3b8e..c11fda0f 100644
+--- a/vendor/libghostty-vt/src/terminal/Terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
+@@ -264,6 +264,8 @@ pub const Cursor = struct {
+ };
+ 
+ pub const Options = struct {
++    /// Optional OS-backed page allocator for every screen in this terminal.
++    page_allocator: ?Allocator = null,
+     cols: size.CellCountInt,
+     rows: size.CellCountInt,
+ 
+@@ -317,6 +319,7 @@ pub fn init(
+     const rows = opts.rows;
+ 
+     var screen_set: ScreenSet = try .init(io_impl, alloc, .{
++        .page_allocator = opts.page_allocator,
+         .cols = cols,
+         .rows = rows,
+         .max_scrollback_bytes = opts.max_scrollback_bytes,
+diff --git a/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig b/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
+index 475a8e43..a4f1b36f 100644
+--- a/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
++++ b/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
+@@ -15,6 +15,8 @@ pub const CTrackedGridRef = ?*TrackedGridRef;
+ 
+ pub const TrackedGridRef = struct {
+     alloc: std.mem.Allocator,
++    // A detached reference may outlive both decoder and terminal.
++    decode_budget: ?*@import("../snapshot/main.zig").Budget = null,
+     terminal: terminal_c.Terminal,
+     screen_key: terminal_c.TerminalScreen,
+     screen_generation: usize,
+@@ -37,7 +39,9 @@ pub fn tracked_grid_ref_free(ref_: CTrackedGridRef) callconv(lib.calling_conv) v
+         _ = wrapper.tracked_grid_refs.swapRemove(ref);
+     }
+     if (ref.pageList()) |list| list.untrackPin(ref.pin);
++    const budget = ref.decode_budget;
+     ref.alloc.destroy(ref);
++    if (budget) |owner| owner.release();
+ }
+ 
+ pub fn tracked_grid_ref_has_value(ref_: CTrackedGridRef) callconv(lib.calling_conv) bool {
+diff --git a/vendor/libghostty-vt/src/terminal/c/snapshot.zig b/vendor/libghostty-vt/src/terminal/c/snapshot.zig
+index 13d5f2b9..f6096651 100644
+--- a/vendor/libghostty-vt/src/terminal/c/snapshot.zig
++++ b/vendor/libghostty-vt/src/terminal/c/snapshot.zig
+@@ -23,6 +23,7 @@ const terminal_c = @import("terminal.zig");
+ pub const DecoderOption = enum(c_int) {
+     max_continuation_bytes = 0,
+     retain_continuation = 1,
++    max_allocation_bytes = 2,
+     _,
+ };
+ 
+@@ -103,11 +104,16 @@ const DecoderWrapper = struct {
+     };
+ 
+     alloc: std.mem.Allocator,
++    budget: ?*snapshot_core.Budget,
+     source: Source,
+     decoder: snapshot_core.Decoder,
+     state: State,
+     max_continuation_bytes: usize,
+     retain_continuation: bool,
++
++    fn decodeAllocator(self: *DecoderWrapper) std.mem.Allocator {
++        return if (self.budget) |budget| budget.heapAllocator() else self.alloc;
++    }
+ };
+ 
+ /// C: GhosttySnapshotDecoder, an opaque nullable decoder handle.
+@@ -167,6 +173,7 @@ fn decoderNewSource(
+     // Initialize the core decoder only after its reader has a stable address.
+     wrapper.* = undefined;
+     wrapper.alloc = alloc;
++    wrapper.budget = null;
+     wrapper.source = source;
+     wrapper.state = .configuring;
+     wrapper.max_continuation_bytes = default_max_continuation_bytes;
+@@ -180,7 +187,9 @@ fn decoderNewSource(
+ pub fn decoder_free(decoder_: Decoder) callconv(lib.calling_conv) void {
+     const decoder = decoder_ orelse return;
+     const alloc = decoder.alloc;
++    const budget = decoder.budget;
+     alloc.destroy(decoder);
++    if (budget) |owner| owner.release();
+ }
+ 
+ /// Set a decoder option while the decoder is still configuring.
+@@ -203,6 +212,16 @@ pub fn decoder_set(
+             @as(*const usize, @ptrCast(@alignCast(value))).*,
+         .retain_continuation => decoder.retain_continuation =
+             @as(*const bool, @ptrCast(@alignCast(value))).*,
++        .max_allocation_bytes => {
++            const limit = @as(*const usize, @ptrCast(@alignCast(value))).*;
++            const budget = snapshot_core.Budget.create(
++                decoder.alloc,
++                @import("../PageList.zig").pageAllocator(decoder.alloc),
++                limit,
++            ) catch return .out_of_memory;
++            if (decoder.budget) |previous| previous.release();
++            decoder.budget = budget;
++        },
+         _ => return .invalid_value,
+     }
+     return .success;
+@@ -388,7 +407,7 @@ pub fn decoder_next(
+     history.progress = null;
+ 
+     // Consume one validated record and preserve READY metadata on failure.
+-    const progress = decoder.decoder.next(decoder.alloc, native) catch |err| {
++    const progress = decoder.decoder.next(decoder.decodeAllocator(), native) catch |err| {
+         const metadata = history.metadata;
+         decoder.state = .{ .failed = metadata };
+         return decoderMapError(decoder, err);
+@@ -402,6 +421,7 @@ pub fn decoder_next(
+ 
+     const metadata = history.metadata;
+     decoder.state = .{ .finished = metadata };
++    if (decoder.budget) |budget| budget.finish();
+     return .no_value;
+ }
+ 
+@@ -427,7 +447,7 @@ pub fn decoder_decode(
+ 
+     // Apply every history page and require a valid FINISH record.
+     while (true) {
+-        const progress = decoder.decoder.next(decoder.alloc, native) catch |err| {
++        const progress = decoder.decoder.next(decoder.decodeAllocator(), native) catch |err| {
+             terminal_c.free(ready.terminal);
+             decoder.state = .{ .failed = ready.metadata };
+             return decoderMapError(decoder, err);
+@@ -437,6 +457,7 @@ pub fn decoder_decode(
+ 
+     // Publish the terminal only after the entire snapshot succeeds.
+     decoder.state = .{ .finished = ready.metadata };
++    if (decoder.budget) |budget| budget.finish();
+     out.* = ready.terminal;
+     return .success;
+ }
+@@ -450,12 +471,16 @@ const ReadyTerminal = struct {
+ /// Decode READY with terminal-owned I/O and construct the C terminal.
+ fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
+     const io: terminal_c.Io = .init;
++    const alloc = decoder.decodeAllocator();
+     var decoded = try decoder.decoder.ready(
+-        decoder.alloc,
++        alloc,
+         io.io(),
+-        .{ .max_continuation_bytes = decoder.max_continuation_bytes },
++        .{
++            .max_continuation_bytes = decoder.max_continuation_bytes,
++            .page_allocator = if (decoder.budget) |budget| budget.pageAllocator() else null,
++        },
+     );
+-    defer decoded.deinit(decoder.alloc);
++    defer decoded.deinit(alloc);
+ 
+     // Copy small query metadata before `fromDecoded` consumes the core result.
+     const metadata: DecoderWrapper.Metadata = .{
+@@ -464,7 +489,7 @@ fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
+ 
+     // Move terminal state and I/O into their final C-owned allocation.
+     const terminal = try terminal_c.fromDecoded(
+-        decoder.alloc,
++        alloc,
+         io,
+         &decoded,
+         if (decoder.retain_continuation)
+@@ -472,11 +497,17 @@ fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
+         else
+             0,
+     );
++    if (decoder.budget) |budget| terminal_c.retainDecodeBudget(terminal, budget);
+     return .{ .terminal = terminal, .metadata = metadata };
+ }
+ 
+ /// Map decoder and source-adapter failures to public C result codes.
+ fn decoderMapError(decoder: *DecoderWrapper, err: anyerror) Result {
++    if (err == error.OutOfMemory) {
++        if (decoder.budget) |budget| {
++            if (budget.limit_exceeded.load(.monotonic)) return .limit_exceeded;
++        }
++    }
+     // Callback protocol failures are more specific than the core read error.
+     switch (decoder.source) {
+         .callback => |adapter| {
+@@ -754,6 +785,159 @@ test "decoder option and empty source" {
+     try testing.expectEqual(null, terminal);
+ }
+ 
++test "snapshot budget C API failure cleanup and either owner release order" {
++    var source: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
++    defer terminal_c.free(source);
++    try testEnableContinuation(source);
++    const content = "primary\r\n\x1b[?1049halternate\x1b[31";
++    terminal_c.vt_write(source, content, content.len);
++    var encoded_ptr: ?[*]u8 = null;
++    var encoded_len: usize = 0;
++    try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &encoded_ptr, &encoded_len));
++    const encoded = encoded_ptr.?[0..encoded_len];
++    defer testing.allocator.free(encoded);
++    var successes: usize = 0;
++    for (0..25) |shift| {
++        const limit: usize = @as(usize, 1) << @intCast(shift);
++        var decoder: Decoder = null;
++        try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
++        try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
++        const budget = decoder.?.budget.?.retain();
++        defer budget.release();
++        var restored: terminal_c.Terminal = null;
++        const result = decoder_decode(decoder, &restored);
++        try testing.expect(budget.peak.load(.monotonic) <= limit);
++        if (result == .success) {
++            successes += 1;
++            try testing.expect(!budget.enforcing.load(.acquire));
++            const tracked_c = @import("grid_ref_tracked.zig");
++            var ref: tracked_c.CTrackedGridRef = null;
++            try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
++                restored,
++                @import("../point.zig").Point.cval(.{ .active = .{ .x = 0, .y = 0 } }),
++                &ref,
++            ));
++            if (shift % 2 == 0) {
++                decoder_free(decoder);
++                terminal_c.vt_write(restored, "mcontinued", 10);
++                terminal_c.free(restored);
++                try testing.expect(!tracked_c.tracked_grid_ref_has_value(ref));
++                try testing.expect(budget.used.load(.monotonic) > 0);
++                try testing.expectEqual(2, budget.references.load(.monotonic));
++                tracked_c.tracked_grid_ref_free(ref);
++                try testing.expectEqual(1, budget.references.load(.monotonic));
++            } else {
++                tracked_c.tracked_grid_ref_free(ref);
++                terminal_c.free(restored);
++                decoder_free(decoder);
++            }
++        } else {
++            try testing.expectEqual(Result.limit_exceeded, result);
++            try testing.expect(restored == null);
++            decoder_free(decoder);
++        }
++        try testing.expectEqual(0, budget.used.load(.monotonic));
++    }
++    try testing.expect(successes >= 2);
++
++    // No inspection reference may keep the allocator alive in this case:
++    // the detached grid reference must perform the final owner destruction.
++    var decoder: Decoder = null;
++    try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
++    const limit: usize = 1 << 24;
++    try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
++    var restored: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, decoder_decode(decoder, &restored));
++    const tracked_c = @import("grid_ref_tracked.zig");
++    var ref: tracked_c.CTrackedGridRef = null;
++    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
++        restored,
++        @import("../point.zig").Point.cval(.{ .active = .{ .x = 0, .y = 0 } }),
++        &ref,
++    ));
++    decoder_free(decoder);
++    terminal_c.free(restored);
++    try testing.expect(!tracked_c.tracked_grid_ref_has_value(ref));
++    tracked_c.tracked_grid_ref_free(ref);
++}
++
++test "snapshot budget incremental history failure and abandonment" {
++    var source: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 215, 2));
++    defer terminal_c.free(source);
++    try testEnableContinuation(source);
++    try testing.expectEqual(Result.success, terminal_c.set(source, .scrollback_max_bytes, null));
++    for (0..2000) |_| terminal_c.vt_write(source, "history row\r\n", 13);
++    var encoded_ptr: ?[*]u8 = null;
++    var encoded_len: usize = 0;
++    try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &encoded_ptr, &encoded_len));
++    const encoded = encoded_ptr.?[0..encoded_len];
++    defer testing.allocator.free(encoded);
++
++    var ready_failures: usize = 0;
++    var history_failures: usize = 0;
++    var completions: usize = 0;
++    var abandonments: usize = 0;
++    // Each limit exercises abandonment at READY, after one history page,
++    // and full incremental restoration. Both destruction orders are legal.
++    for (0..257) |step| {
++        const limit: usize = step * 64 * 1024;
++        for (0..3) |mode| {
++            var decoder: Decoder = null;
++            try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
++            try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
++            const budget = decoder.?.budget.?.retain();
++            defer budget.release();
++            var restored: terminal_c.Terminal = null;
++            const ready = decoder_ready(decoder, &restored);
++            if (ready != .success) {
++                ready_failures += 1;
++                try testing.expectEqual(Result.limit_exceeded, ready);
++                try testing.expectEqual(null, restored);
++            } else {
++                try testing.expect(budget.enforcing.load(.acquire));
++                var pages: usize = 0;
++                while (mode == 2 or pages < mode) {
++                    const result = decoder_next(decoder);
++                    if (result == .no_value) {
++                        completions += 1;
++                        try testing.expect(pages > 1);
++                        try testing.expect(!budget.enforcing.load(.acquire));
++                        var source_rows: usize = 0;
++                        var restored_rows: usize = 0;
++                        try testing.expectEqual(Result.success, terminal_c.get(source, .total_rows, &source_rows));
++                        try testing.expectEqual(Result.success, terminal_c.get(restored, .total_rows, &restored_rows));
++                        try testing.expectEqual(source_rows, restored_rows);
++                        break;
++                    }
++                    if (result != .success) {
++                        history_failures += 1;
++                        try testing.expectEqual(Result.limit_exceeded, result);
++                        try testing.expect(budget.enforcing.load(.acquire));
++                        break;
++                    }
++                    pages += 1;
++                }
++                if (mode != 2) abandonments += 1;
++            }
++            try testing.expect(budget.peak.load(.monotonic) <= limit);
++            if (mode % 2 == 0) {
++                decoder_free(decoder);
++                terminal_c.free(restored);
++            } else {
++                terminal_c.free(restored);
++                decoder_free(decoder);
++            }
++            try testing.expectEqual(0, budget.used.load(.monotonic));
++        }
++    }
++    try testing.expect(ready_failures > 0);
++    try testing.expect(history_failures > 0);
++    try testing.expect(completions > 0);
++    try testing.expect(abandonments > 0);
++}
++
+ test "snapshot C API full round trip restores continuation" {
+     var source: terminal_c.Terminal = null;
+     try testing.expectEqual(Result.success, terminal_c.new(
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index e825183e..bf42e8f4 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -72,6 +72,7 @@ pub const Io = struct {
+ /// across multiple vt_write calls.
+ const TerminalWrapper = struct {
+     terminal: *ZigTerminal,
++    decode_budget: ?*snapshot_core.Budget = null,
+     /// C construction has no I/O argument, so the wrapper retains the owner
+     /// created by `new` or transferred from snapshot decoding until `free`.
+     io: Io,
+@@ -1859,6 +1860,9 @@ pub fn grid_ref_track(
+         return .out_of_memory;
+     };
+ 
++    // Retain only after registration succeeds, so error cleanup has no owner
++    // reference to release. The wrapper can outlive this terminal.
++    if (wrapper.decode_budget) |budget| ref.decode_budget = budget.retain();
+     out.* = ref;
+     return .success;
+ }
+@@ -1877,10 +1881,18 @@ pub fn point_from_grid_ref(
+     return .success;
+ }
+ 
++/// The decoder keeps its reference while constructing and publishing a terminal.
++pub fn retainDecodeBudget(terminal_: Terminal, budget: *snapshot_core.Budget) void {
++    const wrapper = terminal_ orelse unreachable;
++    assert(wrapper.decode_budget == null);
++    wrapper.decode_budget = budget.retain();
++}
++
+ pub fn free(terminal_: Terminal) callconv(lib.calling_conv) void {
+     const wrapper = terminal_ orelse return;
+     const t = wrapper.terminal;
+     const alloc = t.gpa();
++    const budget = wrapper.decode_budget;
+ 
+     for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
+     wrapper.tracked_grid_refs.deinit(alloc);
+@@ -1891,6 +1903,7 @@ pub fn free(terminal_: Terminal) callconv(lib.calling_conv) void {
+     if (wrapper.tmp_dir_path) |path| alloc.free(path);
+     alloc.destroy(t);
+     alloc.destroy(wrapper);
++    if (budget) |owner| owner.release();
+ }
+ 
+ fn testEnableContinuation(terminal: Terminal) !void {
+diff --git a/vendor/libghostty-vt/src/terminal/snapshot/budget.zig b/vendor/libghostty-vt/src/terminal/snapshot/budget.zig
+new file mode 100644
+index 00000000..e8738367
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/snapshot/budget.zig
+@@ -0,0 +1,157 @@
++//! Shared allocation accounting for a decoder and its returned terminal.
++//! The page adapter preserves the caller's OS-backed allocation semantics.
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const Budget = @This();
++
++owner: Allocator,
++heap: Adapter,
++pages: Adapter,
++references: std.atomic.Value(usize) = .init(1),
++used: std.atomic.Value(usize) = .init(0),
++peak: std.atomic.Value(usize) = .init(0),
++limit: usize,
++enforcing: std.atomic.Value(bool) = .init(true),
++limit_exceeded: std.atomic.Value(bool) = .init(false),
++
++pub fn create(owner: Allocator, page_allocator: Allocator, limit: usize) Allocator.Error!*Budget {
++    const result = try owner.create(Budget);
++    result.* = .{
++        .owner = owner,
++        .heap = .{ .budget = result, .child = owner, .page_backing = false },
++        .pages = .{ .budget = result, .child = page_allocator, .page_backing = true },
++        .limit = limit,
++    };
++    return result;
++}
++
++pub fn retain(self: *Budget) *Budget {
++    _ = self.references.fetchAdd(1, .monotonic);
++    return self;
++}
++
++pub fn release(self: *Budget) void {
++    if (self.references.fetchSub(1, .acq_rel) != 1) return;
++    std.debug.assert(self.used.load(.acquire) == 0);
++    const owner = self.owner;
++    owner.destroy(self);
++}
++
++pub fn finish(self: *Budget) void {
++    // Keep both adapters alive for subsequent allocations and frees.
++    self.enforcing.store(false, .release);
++}
++
++pub fn heapAllocator(self: *Budget) Allocator {
++    return self.heap.allocator();
++}
++
++pub fn pageAllocator(self: *Budget) Allocator {
++    return self.pages.allocator();
++}
++
++fn reserve(self: *Budget, amount: usize) bool {
++    var used = self.used.load(.monotonic);
++    while (true) {
++        const total = std.math.add(usize, used, amount) catch {
++            self.limit_exceeded.store(true, .monotonic);
++            return false;
++        };
++        if (self.enforcing.load(.acquire) and total > self.limit) {
++            self.limit_exceeded.store(true, .monotonic);
++            return false;
++        }
++        if (self.used.cmpxchgWeak(used, total, .monotonic, .monotonic)) |actual| {
++            used = actual;
++        } else {
++            _ = self.peak.fetchMax(total, .monotonic);
++            return true;
++        }
++    }
++}
++
++fn refund(self: *Budget, amount: usize) void {
++    const previous = self.used.fetchSub(amount, .monotonic);
++    std.debug.assert(previous >= amount);
++}
++
++const Adapter = struct {
++    budget: *Budget,
++    child: Allocator,
++    page_backing: bool,
++
++    fn charge(self: *const Adapter, len: usize) ?usize {
++        if (!self.page_backing) return len;
++        const page_size = std.heap.pageSize();
++        const padded = std.math.add(usize, len, page_size - 1) catch return null;
++        return padded & ~(page_size - 1);
++    }
++
++    fn allocator(self: *Adapter) Allocator {
++        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
++    }
++
++    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
++        const self: *Adapter = @ptrCast(@alignCast(ctx));
++        const amount = self.charge(len) orelse {
++            self.budget.limit_exceeded.store(true, .monotonic);
++            return null;
++        };
++        if (!self.budget.reserve(amount)) return null;
++        return self.child.rawAlloc(len, alignment, ra) orelse {
++            self.budget.refund(amount);
++            return null;
++        };
++    }
++
++    fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
++        // Force allocate/copy/free so transient old+new storage is accounted.
++        return false;
++    }
++
++    fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
++        return null;
++    }
++
++    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
++        const self: *Adapter = @ptrCast(@alignCast(ctx));
++        const amount = self.charge(memory.len) orelse unreachable;
++        self.child.rawFree(memory, alignment, ra);
++        self.budget.refund(amount);
++    }
++};
++
++test "snapshot budget combines heap and rounded page charges" {
++    const testing = std.testing;
++    const page_size = std.heap.pageSize();
++    const budget = try create(testing.allocator, testing.allocator, page_size);
++    defer budget.release();
++    const heap = budget.heapAllocator();
++    const pages = budget.pageAllocator();
++    const first = try heap.alloc(u8, 32);
++    try testing.expectError(error.OutOfMemory, pages.alloc(u8, 1));
++    heap.free(first);
++    const page = try pages.alloc(u8, 1);
++    try testing.expectEqual(page_size, budget.used.load(.monotonic));
++    try testing.expectEqual(page_size, budget.peak.load(.monotonic));
++    const retained = budget.retain();
++    budget.finish();
++    const later = try heap.alloc(u8, 64);
++    heap.free(later);
++    pages.free(page);
++    retained.release();
++    try testing.expectEqual(0, budget.used.load(.monotonic));
++}
++
++test "snapshot budget refunds underlying failure and rejects overflow" {
++    const testing = std.testing;
++    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
++    const budget = try create(testing.allocator, failing.allocator(), std.math.maxInt(usize));
++    defer budget.release();
++    try testing.expectError(error.OutOfMemory, budget.pageAllocator().alloc(u8, 1));
++    try testing.expectEqual(0, budget.used.load(.monotonic));
++    try testing.expect(budget.pages.charge(std.math.maxInt(usize)) == null);
++    try testing.expect(budget.reserve(std.math.maxInt(usize)));
++    try testing.expect(!budget.reserve(1));
++    budget.refund(std.math.maxInt(usize));
++}
+diff --git a/vendor/libghostty-vt/src/terminal/snapshot/main.zig b/vendor/libghostty-vt/src/terminal/snapshot/main.zig
+index f69d78c9..e70fd518 100644
+--- a/vendor/libghostty-vt/src/terminal/snapshot/main.zig
++++ b/vendor/libghostty-vt/src/terminal/snapshot/main.zig
+@@ -165,6 +165,7 @@ pub const style = @import("style.zig");
+ pub const terminal = @import("terminal.zig");
+ 
+ const codec = @import("snapshot.zig");
++pub const Budget = @import("budget.zig");
+ pub const EncodeError = codec.EncodeError;
+ pub const DecodeError = codec.DecodeError;
+ pub const DecodeExactError = codec.DecodeExactError;
+diff --git a/vendor/libghostty-vt/src/terminal/snapshot/screen.zig b/vendor/libghostty-vt/src/terminal/snapshot/screen.zig
+index d4ef16f7..8a916823 100644
+--- a/vendor/libghostty-vt/src/terminal/snapshot/screen.zig
++++ b/vendor/libghostty-vt/src/terminal/snapshot/screen.zig
+@@ -363,6 +363,7 @@ pub fn decode(
+     // retain scrollback, while primary screens inherit the caller's limits.
+     var result: TerminalScreen = result: {
+         var builder = try TerminalPageList.Builder.init(alloc, .{
++            .page_allocator = options.page_allocator,
+             .cols = options.cols,
+             .rows = options.rows,
+             .max_size = if (key == .alternate)
+diff --git a/vendor/libghostty-vt/src/terminal/snapshot/snapshot.zig b/vendor/libghostty-vt/src/terminal/snapshot/snapshot.zig
+index 9c6dc96d..e83c6e4c 100644
+--- a/vendor/libghostty-vt/src/terminal/snapshot/snapshot.zig
++++ b/vendor/libghostty-vt/src/terminal/snapshot/snapshot.zig
+@@ -100,6 +100,8 @@ pub fn encode(
+ pub const DecodeError = Decoder.ReadyError || Decoder.NextError;
+ 
+ pub const DecodeOptions = struct {
++    /// Optional OS-backed allocator retained by all decoded page pools.
++    page_allocator: ?Allocator = null,
+     /// Largest non-ground continuation the decoder may allocate and return.
+     /// Set this to zero when only ground-state snapshots are acceptable.
+     max_continuation_bytes: usize,
+@@ -303,7 +305,7 @@ pub const Decoder = struct {
+         // screen slots with their final routing. SCREEN values replace those
+         // slots in place so ScreenSet pointers, including the active
+         // pointer, stay valid.
+-        var result = try terminal.decode(reader, io_, alloc);
++        var result = try terminal.decodeWithPageAllocator(reader, io_, alloc, options.page_allocator);
+         errdefer result.deinit(alloc);
+ 
+         // TERMINAL initializes exactly the number of screen slots it
+@@ -315,6 +317,7 @@ pub const Decoder = struct {
+             const explicit_bytes = primary.pages.limits.bytes.explicit;
+             const explicit_lines = primary.pages.limits.lines.explicit;
+             break :options .{
++                .page_allocator = options.page_allocator,
+                 .cols = result.cols,
+                 .rows = result.rows,
+                 .max_scrollback_bytes = if (explicit_bytes == std.math.maxInt(usize))
+@@ -642,6 +645,36 @@ const test_encode_options: EncodeOptions = .{ .continuation = .ground };
+ const test_decode_options: DecodeOptions = .{ .max_continuation_bytes = 1024 };
+ const test_complete_fixture = test_fixture.parse(@embedFile("testdata/complete-v1.hex"));
+ 
++test "snapshot page allocator policy reaches pools clones and lazy screens" {
++    const testing = std.testing;
++    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
++    var rejected: std.Io.Reader = .fixed(&test_complete_fixture);
++    try testing.expectError(error.OutOfMemory, decodeExact(testing.allocator, testing.io, &rejected, .{
++        .max_continuation_bytes = 1024,
++        .page_allocator = failing.allocator(),
++    }));
++    try testing.expect(failing.has_induced_failure);
++
++    var counted = testing.FailingAllocator.init(testing.allocator, .{});
++    const pages = counted.allocator();
++    var source: std.Io.Reader = .fixed(&test_complete_fixture);
++    var restored = try decodeExact(testing.allocator, testing.io, &source, .{
++        .max_continuation_bytes = 1024,
++        .page_allocator = pages,
++    });
++    defer restored.deinit(testing.allocator);
++    const terminal_value = &restored.terminal.?;
++    const primary = terminal_value.screens.get(.primary).?;
++    try testing.expect(primary.pages.page_allocator.?.ptr == pages.ptr);
++    var cloned = try primary.pages.clone(testing.allocator, .{ .top = .{ .active = .{} } });
++    defer cloned.deinit();
++    try testing.expect(cloned.page_allocator.?.ptr == pages.ptr);
++    terminal_value.screens.switchTo(.primary);
++    terminal_value.screens.remove(testing.allocator, .alternate);
++    _ = try terminal_value.switchScreen(.alternate);
++    try testing.expect(terminal_value.screens.active.pages.page_allocator.?.ptr == pages.ptr);
++}
++
+ /// Build a 2x3 test terminal whose primary screen carries `history_pages`
+ /// complete two-row pages above a three-row active page. The top-left cell
+ /// of each page is marked 'A', 'B', ... from oldest history to active.
+@@ -1634,6 +1667,39 @@ test "complete snapshots decode sequentially from one reader" {
+     try testing.expectError(error.EndOfStream, source.takeByte());
+ }
+ 
++test "snapshot budget refunds every underlying allocation failure" {
++    const testing = std.testing;
++    const Budget = @import("budget.zig");
++    var allocation_count: usize = 0;
++    var failures: usize = 0;
++    var iteration: usize = 0;
++    while (iteration <= allocation_count) : (iteration += 1) {
++        // The first run counts allocations; subsequent runs fail each one.
++        var failing = testing.FailingAllocator.init(testing.allocator, .{
++            .fail_index = if (iteration == 0) std.math.maxInt(usize) else iteration - 1,
++        });
++        const budget = Budget.create(failing.allocator(), failing.allocator(), 1 << 24) catch {
++            failures += 1;
++            continue;
++        };
++        defer budget.release();
++        var source: std.Io.Reader = .fixed(&test_complete_fixture);
++        var options = test_decode_options;
++        options.page_allocator = budget.pageAllocator();
++        var decoded = decode(budget.heapAllocator(), testing.io, &source, options) catch |err| {
++            try testing.expectEqual(error.OutOfMemory, err);
++            try testing.expectEqual(0, budget.used.load(.monotonic));
++            failures += 1;
++            continue;
++        };
++        decoded.deinit(budget.heapAllocator());
++        try testing.expectEqual(0, budget.used.load(.monotonic));
++        if (iteration == 0) allocation_count = failing.alloc_index;
++    }
++    try testing.expect(allocation_count > 1);
++    try testing.expect(failures > 1);
++}
++
+ test "complete snapshot decode allocation failures are transactional" {
+     const testing = std.testing;
+     const S = struct {
+diff --git a/vendor/libghostty-vt/src/terminal/snapshot/terminal.zig b/vendor/libghostty-vt/src/terminal/snapshot/terminal.zig
+index 19305372..270fccdb 100644
+--- a/vendor/libghostty-vt/src/terminal/snapshot/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/snapshot/terminal.zig
+@@ -952,6 +952,15 @@ pub fn decode(
+     source: *std.Io.Reader,
+     io_: std.Io,
+     alloc: Allocator,
++) DecodeError!Terminal {
++    return decodeWithPageAllocator(source, io_, alloc, null);
++}
++
++pub fn decodeWithPageAllocator(
++    source: *std.Io.Reader,
++    io_: std.Io,
++    alloc: Allocator,
++    page_allocator: ?Allocator,
+ ) DecodeError!Terminal {
+     // Finish the complete record before constructing native terminal state.
+     var payload: DecodedPayload = payload: {
+@@ -978,6 +987,7 @@ pub fn decode(
+ 
+     // Terminal.init establishes native pools, pins, defaults, and ownership.
+     var result = try Terminal.init(io_, alloc, .{
++        .page_allocator = page_allocator,
+         .cols = header.columns,
+         .rows = header.rows,
+         .max_scrollback_bytes = max_scrollback_bytes,

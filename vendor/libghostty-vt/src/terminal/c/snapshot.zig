@@ -23,6 +23,7 @@ const terminal_c = @import("terminal.zig");
 pub const DecoderOption = enum(c_int) {
     max_continuation_bytes = 0,
     retain_continuation = 1,
+    max_allocation_bytes = 2,
     _,
 };
 
@@ -103,11 +104,16 @@ const DecoderWrapper = struct {
     };
 
     alloc: std.mem.Allocator,
+    budget: ?*snapshot_core.Budget,
     source: Source,
     decoder: snapshot_core.Decoder,
     state: State,
     max_continuation_bytes: usize,
     retain_continuation: bool,
+
+    fn decodeAllocator(self: *DecoderWrapper) std.mem.Allocator {
+        return if (self.budget) |budget| budget.heapAllocator() else self.alloc;
+    }
 };
 
 /// C: GhosttySnapshotDecoder, an opaque nullable decoder handle.
@@ -167,6 +173,7 @@ fn decoderNewSource(
     // Initialize the core decoder only after its reader has a stable address.
     wrapper.* = undefined;
     wrapper.alloc = alloc;
+    wrapper.budget = null;
     wrapper.source = source;
     wrapper.state = .configuring;
     wrapper.max_continuation_bytes = default_max_continuation_bytes;
@@ -180,7 +187,9 @@ fn decoderNewSource(
 pub fn decoder_free(decoder_: Decoder) callconv(lib.calling_conv) void {
     const decoder = decoder_ orelse return;
     const alloc = decoder.alloc;
+    const budget = decoder.budget;
     alloc.destroy(decoder);
+    if (budget) |owner| owner.release();
 }
 
 /// Set a decoder option while the decoder is still configuring.
@@ -203,6 +212,16 @@ pub fn decoder_set(
             @as(*const usize, @ptrCast(@alignCast(value))).*,
         .retain_continuation => decoder.retain_continuation =
             @as(*const bool, @ptrCast(@alignCast(value))).*,
+        .max_allocation_bytes => {
+            const limit = @as(*const usize, @ptrCast(@alignCast(value))).*;
+            const budget = snapshot_core.Budget.create(
+                decoder.alloc,
+                @import("../PageList.zig").pageAllocator(decoder.alloc),
+                limit,
+            ) catch return .out_of_memory;
+            if (decoder.budget) |previous| previous.release();
+            decoder.budget = budget;
+        },
         _ => return .invalid_value,
     }
     return .success;
@@ -388,7 +407,7 @@ pub fn decoder_next(
     history.progress = null;
 
     // Consume one validated record and preserve READY metadata on failure.
-    const progress = decoder.decoder.next(decoder.alloc, native) catch |err| {
+    const progress = decoder.decoder.next(decoder.decodeAllocator(), native) catch |err| {
         const metadata = history.metadata;
         decoder.state = .{ .failed = metadata };
         return decoderMapError(decoder, err);
@@ -402,6 +421,7 @@ pub fn decoder_next(
 
     const metadata = history.metadata;
     decoder.state = .{ .finished = metadata };
+    if (decoder.budget) |budget| budget.finish();
     return .no_value;
 }
 
@@ -427,7 +447,7 @@ pub fn decoder_decode(
 
     // Apply every history page and require a valid FINISH record.
     while (true) {
-        const progress = decoder.decoder.next(decoder.alloc, native) catch |err| {
+        const progress = decoder.decoder.next(decoder.decodeAllocator(), native) catch |err| {
             terminal_c.free(ready.terminal);
             decoder.state = .{ .failed = ready.metadata };
             return decoderMapError(decoder, err);
@@ -437,6 +457,7 @@ pub fn decoder_decode(
 
     // Publish the terminal only after the entire snapshot succeeds.
     decoder.state = .{ .finished = ready.metadata };
+    if (decoder.budget) |budget| budget.finish();
     out.* = ready.terminal;
     return .success;
 }
@@ -450,12 +471,16 @@ const ReadyTerminal = struct {
 /// Decode READY with terminal-owned I/O and construct the C terminal.
 fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
     const io: terminal_c.Io = .init;
+    const alloc = decoder.decodeAllocator();
     var decoded = try decoder.decoder.ready(
-        decoder.alloc,
+        alloc,
         io.io(),
-        .{ .max_continuation_bytes = decoder.max_continuation_bytes },
+        .{
+            .max_continuation_bytes = decoder.max_continuation_bytes,
+            .page_allocator = if (decoder.budget) |budget| budget.pageAllocator() else null,
+        },
     );
-    defer decoded.deinit(decoder.alloc);
+    defer decoded.deinit(alloc);
 
     // Copy small query metadata before `fromDecoded` consumes the core result.
     const metadata: DecoderWrapper.Metadata = .{
@@ -464,7 +489,7 @@ fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
 
     // Move terminal state and I/O into their final C-owned allocation.
     const terminal = try terminal_c.fromDecoded(
-        decoder.alloc,
+        alloc,
         io,
         &decoded,
         if (decoder.retain_continuation)
@@ -472,11 +497,17 @@ fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
         else
             0,
     );
+    if (decoder.budget) |budget| terminal_c.retainDecodeBudget(terminal, budget);
     return .{ .terminal = terminal, .metadata = metadata };
 }
 
 /// Map decoder and source-adapter failures to public C result codes.
 fn decoderMapError(decoder: *DecoderWrapper, err: anyerror) Result {
+    if (err == error.OutOfMemory) {
+        if (decoder.budget) |budget| {
+            if (budget.limit_exceeded.load(.monotonic)) return .limit_exceeded;
+        }
+    }
     // Callback protocol failures are more specific than the core read error.
     switch (decoder.source) {
         .callback => |adapter| {
@@ -752,6 +783,159 @@ test "decoder option and empty source" {
         &terminal,
     ));
     try testing.expectEqual(null, terminal);
+}
+
+test "snapshot budget C API failure cleanup and either owner release order" {
+    var source: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    try testEnableContinuation(source);
+    const content = "primary\r\n\x1b[?1049halternate\x1b[31";
+    terminal_c.vt_write(source, content, content.len);
+    var encoded_ptr: ?[*]u8 = null;
+    var encoded_len: usize = 0;
+    try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &encoded_ptr, &encoded_len));
+    const encoded = encoded_ptr.?[0..encoded_len];
+    defer testing.allocator.free(encoded);
+    var successes: usize = 0;
+    for (0..25) |shift| {
+        const limit: usize = @as(usize, 1) << @intCast(shift);
+        var decoder: Decoder = null;
+        try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
+        try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
+        const budget = decoder.?.budget.?.retain();
+        defer budget.release();
+        var restored: terminal_c.Terminal = null;
+        const result = decoder_decode(decoder, &restored);
+        try testing.expect(budget.peak.load(.monotonic) <= limit);
+        if (result == .success) {
+            successes += 1;
+            try testing.expect(!budget.enforcing.load(.acquire));
+            const tracked_c = @import("grid_ref_tracked.zig");
+            var ref: tracked_c.CTrackedGridRef = null;
+            try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
+                restored,
+                @import("../point.zig").Point.cval(.{ .active = .{ .x = 0, .y = 0 } }),
+                &ref,
+            ));
+            if (shift % 2 == 0) {
+                decoder_free(decoder);
+                terminal_c.vt_write(restored, "mcontinued", 10);
+                terminal_c.free(restored);
+                try testing.expect(!tracked_c.tracked_grid_ref_has_value(ref));
+                try testing.expect(budget.used.load(.monotonic) > 0);
+                try testing.expectEqual(2, budget.references.load(.monotonic));
+                tracked_c.tracked_grid_ref_free(ref);
+                try testing.expectEqual(1, budget.references.load(.monotonic));
+            } else {
+                tracked_c.tracked_grid_ref_free(ref);
+                terminal_c.free(restored);
+                decoder_free(decoder);
+            }
+        } else {
+            try testing.expectEqual(Result.limit_exceeded, result);
+            try testing.expect(restored == null);
+            decoder_free(decoder);
+        }
+        try testing.expectEqual(0, budget.used.load(.monotonic));
+    }
+    try testing.expect(successes >= 2);
+
+    // No inspection reference may keep the allocator alive in this case:
+    // the detached grid reference must perform the final owner destruction.
+    var decoder: Decoder = null;
+    try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
+    const limit: usize = 1 << 24;
+    try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
+    var restored: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, decoder_decode(decoder, &restored));
+    const tracked_c = @import("grid_ref_tracked.zig");
+    var ref: tracked_c.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
+        restored,
+        @import("../point.zig").Point.cval(.{ .active = .{ .x = 0, .y = 0 } }),
+        &ref,
+    ));
+    decoder_free(decoder);
+    terminal_c.free(restored);
+    try testing.expect(!tracked_c.tracked_grid_ref_has_value(ref));
+    tracked_c.tracked_grid_ref_free(ref);
+}
+
+test "snapshot budget incremental history failure and abandonment" {
+    var source: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 215, 2));
+    defer terminal_c.free(source);
+    try testEnableContinuation(source);
+    try testing.expectEqual(Result.success, terminal_c.set(source, .scrollback_max_bytes, null));
+    for (0..2000) |_| terminal_c.vt_write(source, "history row\r\n", 13);
+    var encoded_ptr: ?[*]u8 = null;
+    var encoded_len: usize = 0;
+    try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &encoded_ptr, &encoded_len));
+    const encoded = encoded_ptr.?[0..encoded_len];
+    defer testing.allocator.free(encoded);
+
+    var ready_failures: usize = 0;
+    var history_failures: usize = 0;
+    var completions: usize = 0;
+    var abandonments: usize = 0;
+    // Each limit exercises abandonment at READY, after one history page,
+    // and full incremental restoration. Both destruction orders are legal.
+    for (0..257) |step| {
+        const limit: usize = step * 64 * 1024;
+        for (0..3) |mode| {
+            var decoder: Decoder = null;
+            try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
+            try testing.expectEqual(Result.success, decoder_set(decoder, .max_allocation_bytes, &limit));
+            const budget = decoder.?.budget.?.retain();
+            defer budget.release();
+            var restored: terminal_c.Terminal = null;
+            const ready = decoder_ready(decoder, &restored);
+            if (ready != .success) {
+                ready_failures += 1;
+                try testing.expectEqual(Result.limit_exceeded, ready);
+                try testing.expectEqual(null, restored);
+            } else {
+                try testing.expect(budget.enforcing.load(.acquire));
+                var pages: usize = 0;
+                while (mode == 2 or pages < mode) {
+                    const result = decoder_next(decoder);
+                    if (result == .no_value) {
+                        completions += 1;
+                        try testing.expect(pages > 1);
+                        try testing.expect(!budget.enforcing.load(.acquire));
+                        var source_rows: usize = 0;
+                        var restored_rows: usize = 0;
+                        try testing.expectEqual(Result.success, terminal_c.get(source, .total_rows, &source_rows));
+                        try testing.expectEqual(Result.success, terminal_c.get(restored, .total_rows, &restored_rows));
+                        try testing.expectEqual(source_rows, restored_rows);
+                        break;
+                    }
+                    if (result != .success) {
+                        history_failures += 1;
+                        try testing.expectEqual(Result.limit_exceeded, result);
+                        try testing.expect(budget.enforcing.load(.acquire));
+                        break;
+                    }
+                    pages += 1;
+                }
+                if (mode != 2) abandonments += 1;
+            }
+            try testing.expect(budget.peak.load(.monotonic) <= limit);
+            if (mode % 2 == 0) {
+                decoder_free(decoder);
+                terminal_c.free(restored);
+            } else {
+                terminal_c.free(restored);
+                decoder_free(decoder);
+            }
+            try testing.expectEqual(0, budget.used.load(.monotonic));
+        }
+    }
+    try testing.expect(ready_failures > 0);
+    try testing.expect(history_failures > 0);
+    try testing.expect(completions > 0);
+    try testing.expect(abandonments > 0);
 }
 
 test "snapshot C API full round trip restores continuation" {

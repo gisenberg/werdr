@@ -400,6 +400,8 @@ pub const MemoryPool = struct {
 
 /// The memory pool we get page nodes, pages from.
 pool: MemoryPool,
+/// Optional OS-backed allocator policy retained by clones.
+page_allocator: ?Allocator = null,
 
 /// The list of pages in the screen.
 pages: List,
@@ -568,7 +570,7 @@ fn initialCapacity(cols: size.CellCountInt) Capacity {
 /// `alloc` is the caller-provided allocator. It is used on native freestanding
 /// targets, where no OS page allocator is available. Other targets select a
 /// platform-specific allocator below.
-inline fn pageAllocator(alloc: Allocator) Allocator {
+pub fn pageAllocator(alloc: Allocator) Allocator {
     // In tests we use our testing allocator so we can detect leaks.
     if (builtin.is_test) return std.testing.allocator;
 
@@ -593,6 +595,8 @@ const init_tw = tripwire.module(enum {
 }, init);
 
 pub const Options = struct {
+    /// Must preserve native page alignment, zeroing and decommit semantics.
+    page_allocator: ?Allocator = null,
     /// The initial active-area size. This can be resized with `resize`.
     cols: size.CellCountInt,
     rows: size.CellCountInt,
@@ -646,7 +650,7 @@ pub fn init(
     try tw.check(.init_memory_pool);
     var pool = try MemoryPool.init(
         alloc,
-        pageAllocator(alloc),
+        opts.page_allocator orelse pageAllocator(alloc),
         page_preheat,
     );
     errdefer pool.deinit();
@@ -683,6 +687,7 @@ pub fn init(
         .page_serial = page_serial,
         .page_serial_epoch = 0,
         .page_size = page_size,
+        .page_allocator = opts.page_allocator,
         .limits = limits,
         .total_rows = rows,
         .tracked_pins = tracked_pins,
@@ -1105,7 +1110,7 @@ pub fn clone(
     // Setup our pool
     var pool: MemoryPool = try .init(
         alloc,
-        pageAllocator(alloc),
+        self.page_allocator orelse pageAllocator(alloc),
         page_count,
     );
     errdefer pool.deinit();
@@ -1183,6 +1188,7 @@ pub fn clone(
         .page_serial = page_serial,
         .page_serial_epoch = 0,
         .page_size = page_size,
+        .page_allocator = self.page_allocator,
         .limits = self.limits,
         .cols = self.cols,
         .rows = self.rows,
@@ -7492,7 +7498,7 @@ pub const Builder = struct {
         return .{
             .pool = try MemoryPool.init(
                 alloc,
-                pageAllocator(alloc),
+                options.page_allocator orelse pageAllocator(alloc),
                 page_preheat,
             ),
             .options = options,
@@ -7605,6 +7611,7 @@ pub const Builder = struct {
             .page_serial = self.page_serial,
             .page_serial_epoch = 0,
             .page_size = self.page_size,
+            .page_allocator = self.options.page_allocator,
             .limits = limits,
             .total_rows = total_rows,
             .tracked_pins = tracked_pins,

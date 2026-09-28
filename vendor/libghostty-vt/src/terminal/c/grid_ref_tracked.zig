@@ -15,6 +15,8 @@ pub const CTrackedGridRef = ?*TrackedGridRef;
 
 pub const TrackedGridRef = struct {
     alloc: std.mem.Allocator,
+    // A detached reference may outlive both decoder and terminal.
+    decode_budget: ?*@import("../snapshot/main.zig").Budget = null,
     terminal: terminal_c.Terminal,
     screen_key: terminal_c.TerminalScreen,
     screen_generation: usize,
@@ -37,7 +39,9 @@ pub fn tracked_grid_ref_free(ref_: CTrackedGridRef) callconv(lib.calling_conv) v
         _ = wrapper.tracked_grid_refs.swapRemove(ref);
     }
     if (ref.pageList()) |list| list.untrackPin(ref.pin);
+    const budget = ref.decode_budget;
     ref.alloc.destroy(ref);
+    if (budget) |owner| owner.release();
 }
 
 pub fn tracked_grid_ref_has_value(ref_: CTrackedGridRef) callconv(lib.calling_conv) bool {

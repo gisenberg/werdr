@@ -34,6 +34,8 @@ all: std.EnumMap(Key, *Screen),
 /// screen storage is removed or replaced so external handles can distinguish a
 /// newly initialized screen from stale references into destroyed storage.
 generations: std.EnumMap(Key, usize),
+/// Retain page policy when lazy or replacement screens are constructed.
+page_allocator: ?Allocator = null,
 
 pub fn init(
     io: std.Io,
@@ -49,6 +51,7 @@ pub fn init(
         .active = screen,
         .all = .init(.{ .primary = screen }),
         .generations = .initFull(0),
+        .page_allocator = opts.page_allocator,
     };
 }
 
@@ -82,7 +85,9 @@ pub fn getInit(
     if (self.get(key)) |screen| return screen;
     const screen = try alloc.create(Screen);
     errdefer alloc.destroy(screen);
-    screen.* = try .init(io, alloc, opts);
+    var effective = opts;
+    effective.page_allocator = self.page_allocator;
+    screen.* = try .init(io, alloc, effective);
     self.all.put(key, screen);
     return screen;
 }

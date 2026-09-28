@@ -100,6 +100,8 @@ pub fn encode(
 pub const DecodeError = Decoder.ReadyError || Decoder.NextError;
 
 pub const DecodeOptions = struct {
+    /// Optional OS-backed allocator retained by all decoded page pools.
+    page_allocator: ?Allocator = null,
     /// Largest non-ground continuation the decoder may allocate and return.
     /// Set this to zero when only ground-state snapshots are acceptable.
     max_continuation_bytes: usize,
@@ -303,7 +305,7 @@ pub const Decoder = struct {
         // screen slots with their final routing. SCREEN values replace those
         // slots in place so ScreenSet pointers, including the active
         // pointer, stay valid.
-        var result = try terminal.decode(reader, io_, alloc);
+        var result = try terminal.decodeWithPageAllocator(reader, io_, alloc, options.page_allocator);
         errdefer result.deinit(alloc);
 
         // TERMINAL initializes exactly the number of screen slots it
@@ -315,6 +317,7 @@ pub const Decoder = struct {
             const explicit_bytes = primary.pages.limits.bytes.explicit;
             const explicit_lines = primary.pages.limits.lines.explicit;
             break :options .{
+                .page_allocator = options.page_allocator,
                 .cols = result.cols,
                 .rows = result.rows,
                 .max_scrollback_bytes = if (explicit_bytes == std.math.maxInt(usize))
@@ -641,6 +644,36 @@ pub fn decodeExact(
 const test_encode_options: EncodeOptions = .{ .continuation = .ground };
 const test_decode_options: DecodeOptions = .{ .max_continuation_bytes = 1024 };
 const test_complete_fixture = test_fixture.parse(@embedFile("testdata/complete-v1.hex"));
+
+test "snapshot page allocator policy reaches pools clones and lazy screens" {
+    const testing = std.testing;
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var rejected: std.Io.Reader = .fixed(&test_complete_fixture);
+    try testing.expectError(error.OutOfMemory, decodeExact(testing.allocator, testing.io, &rejected, .{
+        .max_continuation_bytes = 1024,
+        .page_allocator = failing.allocator(),
+    }));
+    try testing.expect(failing.has_induced_failure);
+
+    var counted = testing.FailingAllocator.init(testing.allocator, .{});
+    const pages = counted.allocator();
+    var source: std.Io.Reader = .fixed(&test_complete_fixture);
+    var restored = try decodeExact(testing.allocator, testing.io, &source, .{
+        .max_continuation_bytes = 1024,
+        .page_allocator = pages,
+    });
+    defer restored.deinit(testing.allocator);
+    const terminal_value = &restored.terminal.?;
+    const primary = terminal_value.screens.get(.primary).?;
+    try testing.expect(primary.pages.page_allocator.?.ptr == pages.ptr);
+    var cloned = try primary.pages.clone(testing.allocator, .{ .top = .{ .active = .{} } });
+    defer cloned.deinit();
+    try testing.expect(cloned.page_allocator.?.ptr == pages.ptr);
+    terminal_value.screens.switchTo(.primary);
+    terminal_value.screens.remove(testing.allocator, .alternate);
+    _ = try terminal_value.switchScreen(.alternate);
+    try testing.expect(terminal_value.screens.active.pages.page_allocator.?.ptr == pages.ptr);
+}
 
 /// Build a 2x3 test terminal whose primary screen carries `history_pages`
 /// complete two-row pages above a three-row active page. The top-left cell
@@ -1632,6 +1665,39 @@ test "complete snapshots decode sequentially from one reader" {
     );
     defer second.deinit(testing.allocator);
     try testing.expectError(error.EndOfStream, source.takeByte());
+}
+
+test "snapshot budget refunds every underlying allocation failure" {
+    const testing = std.testing;
+    const Budget = @import("budget.zig");
+    var allocation_count: usize = 0;
+    var failures: usize = 0;
+    var iteration: usize = 0;
+    while (iteration <= allocation_count) : (iteration += 1) {
+        // The first run counts allocations; subsequent runs fail each one.
+        var failing = testing.FailingAllocator.init(testing.allocator, .{
+            .fail_index = if (iteration == 0) std.math.maxInt(usize) else iteration - 1,
+        });
+        const budget = Budget.create(failing.allocator(), failing.allocator(), 1 << 24) catch {
+            failures += 1;
+            continue;
+        };
+        defer budget.release();
+        var source: std.Io.Reader = .fixed(&test_complete_fixture);
+        var options = test_decode_options;
+        options.page_allocator = budget.pageAllocator();
+        var decoded = decode(budget.heapAllocator(), testing.io, &source, options) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(0, budget.used.load(.monotonic));
+            failures += 1;
+            continue;
+        };
+        decoded.deinit(budget.heapAllocator());
+        try testing.expectEqual(0, budget.used.load(.monotonic));
+        if (iteration == 0) allocation_count = failing.alloc_index;
+    }
+    try testing.expect(allocation_count > 1);
+    try testing.expect(failures > 1);
 }
 
 test "complete snapshot decode allocation failures are transactional" {

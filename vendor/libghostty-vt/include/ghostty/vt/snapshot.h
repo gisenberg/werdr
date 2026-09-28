@@ -159,6 +159,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
    * Input type: bool *
    */
   GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION = 1,
+  /**
+   * Peak decoded storage budget (const size_t*).
+   * Covers requested heap bytes and page-rounded native backing allocations,
+   * including overlapping placeholder/replacement screens and continuation
+   * reconstruction. Input bytes, fixed decoder/budget wrappers and allocator
+   * or OS bookkeeping are excluded. Zero rejects all decoded allocations.
+   * The default has no budget. Rejection returns GHOSTTY_LIMIT_EXCEEDED.
+   * Enforcement ends only at successful FINISH; allocator ownership persists
+   * until both decoder and returned terminal are freed, in either order.
+   */
+  GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_ALLOCATION_BYTES = 2,
 
   GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttySnapshotDecoderOption;

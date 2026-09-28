@@ -72,6 +72,7 @@ pub const Io = struct {
 /// across multiple vt_write calls.
 const TerminalWrapper = struct {
     terminal: *ZigTerminal,
+    decode_budget: ?*snapshot_core.Budget = null,
     /// C construction has no I/O argument, so the wrapper retains the owner
     /// created by `new` or transferred from snapshot decoding until `free`.
     io: Io,
@@ -1859,6 +1860,9 @@ pub fn grid_ref_track(
         return .out_of_memory;
     };
 
+    // Retain only after registration succeeds, so error cleanup has no owner
+    // reference to release. The wrapper can outlive this terminal.
+    if (wrapper.decode_budget) |budget| ref.decode_budget = budget.retain();
     out.* = ref;
     return .success;
 }
@@ -1877,10 +1881,18 @@ pub fn point_from_grid_ref(
     return .success;
 }
 
+/// The decoder keeps its reference while constructing and publishing a terminal.
+pub fn retainDecodeBudget(terminal_: Terminal, budget: *snapshot_core.Budget) void {
+    const wrapper = terminal_ orelse unreachable;
+    assert(wrapper.decode_budget == null);
+    wrapper.decode_budget = budget.retain();
+}
+
 pub fn free(terminal_: Terminal) callconv(lib.calling_conv) void {
     const wrapper = terminal_ orelse return;
     const t = wrapper.terminal;
     const alloc = t.gpa();
+    const budget = wrapper.decode_budget;
 
     for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
     wrapper.tracked_grid_refs.deinit(alloc);
@@ -1891,6 +1903,7 @@ pub fn free(terminal_: Terminal) callconv(lib.calling_conv) void {
     if (wrapper.tmp_dir_path) |path| alloc.free(path);
     alloc.destroy(t);
     alloc.destroy(wrapper);
+    if (budget) |owner| owner.release();
 }
 
 fn testEnableContinuation(terminal: Terminal) !void {

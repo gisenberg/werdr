@@ -165,6 +165,7 @@ pub const style = @import("style.zig");
 pub const terminal = @import("terminal.zig");
 
 const codec = @import("snapshot.zig");
+pub const Budget = @import("budget.zig");
 pub const EncodeError = codec.EncodeError;
 pub const DecodeError = codec.DecodeError;
 pub const DecodeExactError = codec.DecodeExactError;

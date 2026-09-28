@@ -101,6 +101,29 @@ impl Terminal {
     /// validation. Untrusted transport needs an independent native allocation
     /// budget, not merely a bound on encoded input length.
     pub fn from_snapshot(bytes: &[u8], continuation_limit: usize) -> Result<Self, Error> {
+        Self::decode_snapshot(bytes, continuation_limit, None)
+    }
+
+    /// Restore with a limit on decoded heap and native page backing storage.
+    ///
+    /// Counts requested heap bytes and page-rounded native backing allocations.
+    /// The input slice, fixed wrappers and allocator/OS bookkeeping are excluded.
+    /// Allocation failure rejects the snapshot transactionally.
+    /// After successful decoding, normal terminal allocation policy resumes.
+    /// This does not add preservation for the state excluded by `from_snapshot`.
+    pub fn from_snapshot_with_budget(
+        bytes: &[u8],
+        continuation_limit: usize,
+        allocation_limit: usize,
+    ) -> Result<Self, Error> {
+        Self::decode_snapshot(bytes, continuation_limit, Some(allocation_limit))
+    }
+
+    fn decode_snapshot(
+        bytes: &[u8],
+        continuation_limit: usize,
+        allocation_limit: Option<usize>,
+    ) -> Result<Self, Error> {
         if continuation_limit == 0 {
             return Err(Error(ffi::GhosttyResult_GHOSTTY_INVALID_VALUE));
         }
@@ -114,6 +137,14 @@ impl Terminal {
                 bytes.len(),
             )
             .into_result()?;
+            if let Some(limit) = allocation_limit {
+                ffi::ghostty_snapshot_decoder_set(
+                    decoder.0,
+                    ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_ALLOCATION_BYTES,
+                    (&limit as *const usize).cast(),
+                )
+                .into_result()?;
+            }
             ffi::ghostty_snapshot_decoder_set(
                 decoder.0,
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES,
@@ -253,6 +284,81 @@ mod tests {
         }
         assert!(!replies[0].is_empty());
         assert_eq!(replies[1], replies[0]);
+    }
+
+    #[test]
+    fn binary_snapshot_decode_budget_rejects_and_retains_terminal_ownership() {
+        let mut source = terminal();
+        for row in 0..2000 {
+            source.write(format!("history-{row:04}\r\n").as_bytes());
+        }
+        source.write(b"retained\r\n\x1b[?1049halternate\x1b[31");
+        let bytes = source.snapshot_bytes().unwrap();
+        let mut accepted = false;
+        for limit in std::iter::once(0).chain((0..=24).map(|power| 1usize << power)) {
+            let result = Terminal::from_snapshot_with_budget(&bytes, 4096, limit);
+            if let Ok(restored) = result {
+                accepted = true;
+                assert_eq!(
+                    restored.screen_vt(ActiveScreen::Primary).unwrap(),
+                    source.screen_vt(ActiveScreen::Primary).unwrap()
+                );
+                assert_eq!(
+                    restored.screen_vt(ActiveScreen::Alternate).unwrap(),
+                    source.screen_vt(ActiveScreen::Alternate).unwrap()
+                );
+                drop(restored);
+            } else {
+                assert_eq!(
+                    result.err().unwrap().0,
+                    ffi::GhosttyResult_GHOSTTY_LIMIT_EXCEEDED
+                );
+            }
+        }
+        assert!(accepted);
+        assert!(Terminal::from_snapshot_with_budget(&bytes, 4096, 0).is_err());
+        let mut restored = Terminal::from_snapshot_with_budget(&bytes, 4096, 1 << 24).unwrap();
+        std::thread::spawn(move || {
+            restored.write(b"mRESUMED");
+            restored.resize(120, 40, 9, 18).unwrap();
+            assert!(!restored.snapshot_bytes().unwrap().is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn binary_snapshot_decode_budgets_are_independent_across_threads() {
+        let mut source = terminal();
+        for row in 0..2000 {
+            source.write(format!("concurrent-{row:04}\r\n").as_bytes());
+        }
+        let bytes = source.snapshot_bytes().unwrap();
+        let expected = source.screen_vt(ActiveScreen::Primary).unwrap();
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let (bytes, expected, barrier) = (&bytes, &expected, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..8 {
+                        let limit = if worker % 2 == 0 { 0 } else { 1 << 24 };
+                        let restored = Terminal::from_snapshot_with_budget(bytes, 4096, limit);
+                        if limit == 0 {
+                            assert_eq!(
+                                restored.err().unwrap().0,
+                                ffi::GhosttyResult_GHOSTTY_LIMIT_EXCEEDED
+                            );
+                        } else {
+                            assert_eq!(
+                                &restored.unwrap().screen_vt(ActiveScreen::Primary).unwrap(),
+                                expected
+                            );
+                        }
+                    }
+                });
+            }
+        });
     }
 
     #[test]

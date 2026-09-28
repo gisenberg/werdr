@@ -953,6 +953,15 @@ pub fn decode(
     io_: std.Io,
     alloc: Allocator,
 ) DecodeError!Terminal {
+    return decodeWithPageAllocator(source, io_, alloc, null);
+}
+
+pub fn decodeWithPageAllocator(
+    source: *std.Io.Reader,
+    io_: std.Io,
+    alloc: Allocator,
+    page_allocator: ?Allocator,
+) DecodeError!Terminal {
     // Finish the complete record before constructing native terminal state.
     var payload: DecodedPayload = payload: {
         var record_reader: record.Reader = undefined;
@@ -978,6 +987,7 @@ pub fn decode(
 
     // Terminal.init establishes native pools, pins, defaults, and ownership.
     var result = try Terminal.init(io_, alloc, .{
+        .page_allocator = page_allocator,
         .cols = header.columns,
         .rows = header.rows,
         .max_scrollback_bytes = max_scrollback_bytes,

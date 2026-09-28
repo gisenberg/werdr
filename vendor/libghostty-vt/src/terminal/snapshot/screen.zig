@@ -363,6 +363,7 @@ pub fn decode(
     // retain scrollback, while primary screens inherit the caller's limits.
     var result: TerminalScreen = result: {
         var builder = try TerminalPageList.Builder.init(alloc, .{
+            .page_allocator = options.page_allocator,
             .cols = options.cols,
             .rows = options.rows,
             .max_size = if (key == .alternate)

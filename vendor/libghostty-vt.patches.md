@@ -1,8 +1,53 @@
 # libghostty-vt local patches
 
-This file tracks intentional local changes applied on top of the vendored
-`libghostty-vt` source. Remove a patch only when the vendored source commit
-contains the upstream behavior and the listed verification still passes.
+This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
+Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
+
+## 0009 snapshot allocation budget and page allocator policy
+
+status: active, restore prerequisite; not wired into runtime handoff
+
+patch: `vendor/patches/libghostty-vt/0009-snapshot-page-allocator-policy.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/terminal/c/snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/budget.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/main.zig`
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/ScreenSet.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/screen.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/snapshot.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/terminal.zig`
+
+reason: Snapshot decoding needs an explicit OS-backed page allocator so a budget can cover initial pools, replacement screens, history and continuation growth without changing ordinary terminal allocations.
+The policy is retained by lazy screen creation and page-list clones.
+A reference-counted budget wraps heap and OS page allocators with shared live-storage accounting until FINISH.
+Decoder, terminal, and detached tracked-reference lifetimes retain the adapters independently; enforcement ends after successful FINISH while accounting remains valid for later frees.
+Encoded input, fixed wrappers and allocator/OS bookkeeping are outside the storage budget.
+
+remove when: upstream exposes an equivalent aggregate snapshot storage budget covering heap, page pools, continuation and history with safe decoder/terminal ownership, and bounded restore tests pass without this patch.
+
+verification: Snapshot-policy characterization passed in `zig build test-lib-vt -Demit-lib-vt=true -Dtest-filter='snapshot page allocator policy'`.
+`just test-one binary_snapshot` and `just maintenance-test` passed.
+Full `just check`, including 3,943 Rust tests, maintenance checks and Windows cross-target lint, passed.
+All eleven Rust binary snapshot tests passed on native Windows, including history, concurrent independent budgets and moving a restored terminal between threads.
+Budget/lifecycle characterization passed on Linux and native Windows with `-Dtest-filter='snapshot budget'` (77 tests across two artifacts).
+Coverage includes partial history failure, abandoned incremental restore, both decoder/terminal destruction orders, detached tracked references, and failure injection at each underlying allocation.
+This is a storage budget, not a complete hostile-input validation or runtime preservation contract.
 
 ## 0002 expose modifyOtherKeys mode through terminal data
 
