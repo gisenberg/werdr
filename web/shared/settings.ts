@@ -2,6 +2,7 @@ import { defaultAgentSounds, validateAgentSounds, type AgentSounds } from './age
 import { defaultShortcuts, validateShortcuts, type Shortcuts } from './shortcuts';
 import nativeThemes from './native-themes.json';
 import { rightClickModifiers, type RightClickModifier } from './right-click';
+import { defaultCustomSounds, validateCustomSounds, type CustomSounds } from './custom-sounds';
 import { defaultAgentRows, validateAgentRows, type AgentRows } from './agent-rows';
 import { defaultWorkspaceRows, validateWorkspaceRows, type WorkspaceRows } from './workspace-rows';
 export const themeNames = Object.keys(nativeThemes);
@@ -18,6 +19,7 @@ export interface Preferences {
   agentSort: 'priority' | 'native'; confirmClose: boolean; hideSingleTab: boolean; tabBarPosition: 'top' | 'bottom';
   paneScrollbars: boolean; paneBorders: boolean; paneOuterBorders: boolean; paneGaps: boolean; showAgentLabelsOnPaneBorders: boolean;
   agentSounds: AgentSounds;
+  customSounds: CustomSounds;
   rightClickPassthroughModifier: RightClickModifier;
   clipboardToast: boolean; clipboardToastPosition: 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
   notificationAttention: boolean; notificationFinished: boolean; notificationSound: boolean;
@@ -34,6 +36,7 @@ export const defaults: Preferences = {
   shortcuts: defaultShortcuts,
   paneScrollbars: true, paneBorders: true, paneOuterBorders: true, paneGaps: true, showAgentLabelsOnPaneBorders: false,
   agentSounds: defaultAgentSounds,
+  customSounds: defaultCustomSounds,
   rightClickPassthroughModifier: '',
   clipboardToast: true, clipboardToastPosition: 'bottom-center',
   notificationAttention: true, notificationFinished: true, notificationSound: false,
@@ -47,6 +50,8 @@ export function validatePreferences(value: unknown): Preferences {
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.hasOwn(defaults, key))) fail('unknown field');
   const out = { ...defaults, ...input };
+  try { out.customSounds = validateCustomSounds(out.customSounds); }
+  catch (error) { throw new SettingsValidationError(`Custom sounds: ${(error as Error).message}`); }
   if (!rightClickModifiers.includes(out.rightClickPassthroughModifier)) fail('rightClickPassthroughModifier');
   try { out.agentSounds = validateAgentSounds(out.agentSounds); }
   catch (error) { throw new SettingsValidationError(`Agent sounds: ${(error as Error).message}`); }

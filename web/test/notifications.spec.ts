@@ -63,6 +63,47 @@ test('native custom notifications reach a browser without a terminal client and 
   } finally { await page.close(); await runtime.close(); }
 });
 
+test('custom notification audio uses event overrides, global defaults, and built-in fallback', async ({ page }) => {
+  const runtime = await candidate();
+  try {
+    await login(page, runtime, { notificationSound: true });
+    const upload = async (name: string) => {
+      const response = await page.request.post(runtime.url + '/api/sounds', { headers: { Origin: runtime.url, 'Content-Type': 'audio/mpeg' }, data: await readFile(`../assets/sounds/${name}.mp3`) });
+      expect(response.ok()).toBe(true); return (await response.json()).id as string;
+    };
+    const global = await upload('done'), override = await upload('request');
+    const state = await (await page.request.get(runtime.url + '/api/settings')).json();
+    state.preferences.customSounds = { global: { id: global, name: 'global.mp3' }, done: { id: override, name: 'override.mp3' }, request: null };
+    expect((await page.request.post(runtime.url + '/api/settings', { headers: { Origin: runtime.url }, data: state })).ok()).toBe(true);
+    await page.addInitScript(() => {
+      (window as any).playedSounds = [];
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function () { this.addEventListener('playing', () => (window as any).playedSounds.push(this.src), { once: true }); return play.call(this); };
+    });
+    await page.goto(runtime.url); await expect(page.locator('#boot')).toBeHidden();
+    await page.locator('body').click({ position: { x: 1000, y: 500 } });
+    const notify = async (sound: string) => {
+      await expect.poll(async () => JSON.parse(await runtime.cli('notification', 'show', `Sound ${sound}`, '--sound', sound)).result.shown).toBe(true);
+      await expect(page.locator('#notice-toast')).toBeVisible();
+    };
+    await notify('done');
+    await expect.poll(() => page.evaluate(() => (window as any).playedSounds.at(-1))).toBe(runtime.url + '/api/sounds/' + override);
+    await page.locator('#notice-toast').click();
+    await notify('request');
+    await expect.poll(() => page.evaluate(() => (window as any).playedSounds.at(-1))).toBe(runtime.url + '/api/sounds/' + global);
+    await page.locator('#notice-toast').click();
+    await page.route('**/api/sounds/' + override, route => route.fulfill({ status: 404, body: 'Missing audio' }));
+    await notify('done');
+    await expect.poll(() => page.evaluate(() => (window as any).playedSounds.at(-1))).toMatch(/\/assets\/done-.*\.mp3$/);
+    await page.locator('#notice-toast').click();
+    await page.unroute('**/api/sounds/' + override);
+    await page.route('**/api/sounds/' + override, route => route.fulfill({ contentType: 'audio/mpeg', body: 'Invalid audio' }));
+    await page.evaluate(() => { (window as any).playedSounds = []; });
+    await notify('done');
+    await expect.poll(() => page.evaluate(() => (window as any).playedSounds.at(-1))).toMatch(/\/assets\/done-.*\.mp3$/);
+  } finally { await page.close(); await runtime.close(); }
+});
+
 test('native attention queue targets the visible pane, retains offline alerts, and preserves pending terminal input', async ({ page }) => {
   const runtime = await candidate();
   let offline = false;

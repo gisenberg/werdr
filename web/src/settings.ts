@@ -1,5 +1,6 @@
 import { soundAgents } from '../shared/agent-sounds';
 import { rightClickModifiers } from '../shared/right-click';
+import { SoundSettings } from './sound-settings';
 import { shortcutActions } from '../shared/shortcuts';
 import { defaults, fontFamilies, fonts, palette, themeNames, validatePreferences, type Preferences, type SettingsState } from '../shared/settings';
 import type { Api } from './host-manager';
@@ -34,26 +35,40 @@ export class Settings {
   private readonly media = matchMedia('(prefers-color-scheme: light)');
   private deviceSize?: number;
   private navigationSave?: Promise<void>;
+  private sounds = new SoundSettings(() => { ++this.editGeneration; this.preview(); }, message => { element('settings-error').textContent = message; });
+  private soundUpload?: AbortController;
+  private editGeneration = 0;
   constructor(private readonly api: Api, private readonly changed: (preferences: Preferences, colors: Record<string, string>) => void) {
     try { const size = Number(localStorage.getItem('werdr-device-font-size')); if (Number.isInteger(size) && size >= 10 && size <= 32) this.deviceSize = size; } catch {}
     this.media.addEventListener('change', () => this.apply(this.preferences));
     window.addEventListener('storage', event => { if (event.key === 'werdr-device-font-size') { const size = Number(event.newValue); this.deviceSize = size >= 10 && size <= 32 ? size : undefined; this.apply(this.state.preferences); } });
     element('settings-cancel').onclick = () => element<HTMLDialogElement>('settings-dialog').close();
-    element('settings-dialog').addEventListener('close', () => this.apply(this.state.preferences));
+    element('settings-dialog').addEventListener('close', () => { ++this.editGeneration; this.soundUpload?.abort(); this.sounds.close(); this.apply(this.state.preferences); });
     element('settings-reset').onclick = () => { this.fill(structuredClone(defaults)); this.preview(); };
-    element('settings-form').addEventListener('input', () => this.preview());
+    element('settings-form').addEventListener('input', () => { ++this.editGeneration; this.preview(); });
     element<HTMLFormElement>('settings-form').onsubmit = async event => {
       event.preventDefault(); const button = element('settings-form').querySelector<HTMLButtonElement>('button[type=submit]')!; button.disabled = true;
+      const generation = this.editGeneration, upload = new AbortController(); this.soundUpload = upload;
       try {
         const preferences = this.read();
         const size = element<HTMLInputElement>('settings-device-size').valueAsNumber;
-        if (element<HTMLInputElement>('settings-device-font').checked && (!Number.isInteger(size) || size < 10 || size > 32)) throw new Error('Device font size must be between 10 and 32.');
+        const deviceSize = element<HTMLInputElement>('settings-device-font').checked ? size : undefined;
+        if (deviceSize !== undefined && (!Number.isInteger(size) || size < 10 || size > 32)) throw new Error('Device font size must be between 10 and 32.');
+        preferences.customSounds = await this.sounds.upload(upload.signal);
+        if (upload.signal.aborted || generation !== this.editGeneration || !element<HTMLDialogElement>('settings-dialog').open) throw new Error('Settings changed while uploading. Save again to keep the latest choices.');
         this.state = await api('/api/settings', { revision: this.state.revision, preferences });
-        this.deviceSize = element<HTMLInputElement>('settings-device-font').checked ? size : undefined;
+        this.deviceSize = deviceSize;
         try { if (this.deviceSize) localStorage.setItem('werdr-device-font-size', String(this.deviceSize)); else localStorage.removeItem('werdr-device-font-size'); } catch {}
-        element<HTMLDialogElement>('settings-dialog').close(); this.apply(this.state.preferences);
-      } catch (error) { element('settings-error').textContent = (error as Error).message; }
-      finally { button.disabled = false; }
+        const dialog = element<HTMLDialogElement>('settings-dialog');
+        // A committed request cannot be cancelled, but its late response must
+        // not close a newer editor or discard edits made while it was in flight.
+        if (!upload.signal.aborted && generation === this.editGeneration) dialog.close();
+        if (dialog.open) {
+          this.preview();
+          if (!upload.signal.aborted) element('settings-error').textContent = 'Earlier choices were saved. Save again to keep your latest edits.';
+        } else this.apply(this.state.preferences);
+      } catch (error) { if (!upload.signal.aborted && element<HTMLDialogElement>('settings-dialog').open) element('settings-error').textContent = (error as Error).message; }
+      finally { if (this.soundUpload === upload) this.soundUpload = undefined; button.disabled = false; }
     };
     this.apply(this.preferences);
   }
@@ -98,6 +113,7 @@ export class Settings {
     catch (error) { element('status').textContent = (error as Error).message; }
   }
   private fill(preferences: Preferences) {
+    ++this.editGeneration;
     const parent = element('settings-fields'); parent.replaceChildren();
     for (const [title, controls] of groups) {
       const group = document.createElement('fieldset'), legend = document.createElement('legend'); legend.textContent = title; group.append(legend);
@@ -125,6 +141,7 @@ export class Settings {
       input.value = preferences.agentSounds[agent]; label.append(input); soundControls.append(label);
     }
     sounds.append(soundControls); parent.append(sounds);
+    this.sounds.fill(parent, preferences.customSounds);
     const colors = element('settings-colors'); colors.replaceChildren();
     for (const kind of ['agent', 'workspace'] as const) {
       const isAgent = kind === 'agent', name = isAgent ? 'AGENT' : 'WORKSPACE';
@@ -163,6 +180,7 @@ export class Settings {
   }
   private read() {
     const value: Record<string, unknown> = { ...this.state.preferences, customColors: {} };
+    value.customSounds = this.sounds.read();
     value.agentSounds = Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLSelectElement>('[data-agent-sound]')].map(input => [input.dataset.agentSound, input.value]));
     value.shortcuts = { prefix: element<HTMLInputElement>('settings-prefix').value, bindings: Object.fromEntries([...element('settings-fields').querySelectorAll<HTMLInputElement>('[data-shortcut]')].map(input => [input.dataset.shortcut, input.value.trim() ? input.value.split(',').map(value => value.trim()) : []])) };
     try { value.agentRows = JSON.parse(element<HTMLTextAreaElement>('settings-agent-row-config').value); }

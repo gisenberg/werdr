@@ -24,7 +24,9 @@ import { openScrollbackEditor, paneExists } from './scrollback-editor.ts';
 import { pluginAction } from './plugin-actions.ts';
 import { PluginInstallations } from './plugin-install.ts';
 import { settingsStore, SettingsConflict } from './settings.ts';
-import { SettingsValidationError } from '../shared/settings.ts';
+import { SettingsValidationError, validatePreferences } from '../shared/settings.ts';
+import { soundStore, SoundReferenceError } from './sound-store.ts';
+import { MAX_CUSTOM_SOUND_BYTES, validSoundId } from '../shared/custom-sounds.ts';
 import { NativeApiError } from './native-api.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
 import { noticeEndpointKey } from '../shared/fleet.ts';
@@ -45,7 +47,12 @@ const artwork = await bootArtwork(process.env.WERDR_BOOT_ASSET_DIR);
 const loginLimiter = new LoginLimiter();
 let passwordChecks = 0;
 const sessions = await sessionStore(process.env.WERDR_SESSION_FILE || resolve(dirname(tokenPath), 'browser-sessions.json'));
-const settings = await settingsStore(process.env.WERDR_SETTINGS_FILE || resolve(dirname(tokenPath), 'browser-settings.json'));
+const settingsPath = process.env.WERDR_SETTINGS_FILE || resolve(dirname(tokenPath), 'browser-settings.json');
+const settings = await settingsStore(settingsPath);
+const soundIds = (preferences = settings.read().preferences) => Object.values(preferences.customSounds).flatMap(asset => asset ? [asset.id] : []);
+const sounds = await soundStore(resolve(dirname(settingsPath), 'sounds'), () => soundIds());
+const cleanSounds = () => sounds.collect().catch(() => console.error('Custom sound cleanup failed; existing files were retained where possible.'));
+await cleanSounds(); setInterval(() => { void cleanSounds(); }, 60 * 60 * 1000).unref();
 const sessionTokens = new Map<string, string>();
 const fleet = new Fleet(() => management.catalog(), process.env.WERDR_NOTIFICATION_FILE || resolve(dirname(tokenPath), 'fleet-notifications.json'));
 const management = new MachineManagement(process.env.WERDR_MACHINE_PLATFORM_FILE || resolve(dirname(tokenPath), 'machine-platforms.json'), async () => { await fleet.reloadCatalog(); for (const host of fleet.state().hosts) if (host.machine.enabled) fleet.retry(host.machine.id); });
@@ -96,7 +103,7 @@ let requests = 0;
 const handler: RequestListener = async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins, scheme);
   if (!browserOrigin) return reply(res, 403, { error: 'Origin rejected' });
   if (++requests > 16) { requests--; return reply(res, 503, { error: 'Busy' }); }
@@ -149,8 +156,34 @@ const handler: RequestListener = async (req, res) => {
         return reply(res, 200, { ok: true });
       }
       if (url.pathname === '/api/settings' && req.method === 'GET') return reply(res, 200, settings.read());
+      if (url.pathname === '/api/sounds' && req.method === 'POST') {
+        if (req.headers['content-type'] !== 'audio/mpeg') throw new ManagementError('Expected an MP3 upload.', 415);
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > MAX_CUSTOM_SOUND_BYTES) throw new ManagementError('Sound exceeds 2 MiB.', 413);
+          chunks.push(chunk);
+        }
+        if (!session(req)) throw new ManagementError('Sign in required', 401);
+        try { return reply(res, 200, { id: await sounds.upload(Buffer.concat(chunks), () => { if (!session(req)) throw new ManagementError('Sign in required', 401); }) }); }
+        catch (error) { if (error instanceof ManagementError) throw error; throw new ManagementError('Upload failed. Choose a complete MP3 under 2 MiB; unsaved uploads expire after 24 hours if storage is full.', 422); }
+      }
+      if (url.pathname.startsWith('/api/sounds/') && req.method === 'GET') {
+        const soundId = url.pathname.slice('/api/sounds/'.length);
+        if (!validSoundId(soundId)) throw new ManagementError('Sound not found.', 404);
+        let bytes: Buffer;
+        try { bytes = await sounds.read(soundId); } catch { throw new ManagementError('Sound is missing or invalid. The built-in sound will be used.', 404); }
+        if (!session(req)) throw new ManagementError('Sign in required', 401);
+        res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': bytes.length, 'cache-control': 'private, no-store' }); res.end(bytes); return;
+      }
       // Both bounded row layouts, saved groups and keybindings must fit together.
-      if (url.pathname === '/api/settings' && req.method === 'POST') { const value = await authorizedBody(req, 131072); return reply(res, 200, await settings.update(value.revision, value.preferences)); }
+      if (url.pathname === '/api/settings' && req.method === 'POST') {
+        const value = await authorizedBody(req, 131072), preferences = validatePreferences(value.preferences);
+        return reply(res, 200, await sounds.withReferences(soundIds(preferences), async () => {
+          if (!session(req)) throw new ManagementError('Sign in required', 401);
+          return settings.update(value.revision, preferences);
+        }).catch(error => { if (error instanceof SoundReferenceError) throw new ManagementError(error.message, 400); throw error; }));
+      }
       if (url.pathname === '/api/machines' && req.method === 'GET') return reply(res, 200, { machines: fleet.state().hosts.map(host => host.machine) });
       if (url.pathname === '/api/fleet' && req.method === 'GET') return reply(res, 200, fleet.state());
       if (url.pathname === '/api/hosts/edit' && req.method === 'POST') { await management.edit(await authorizedBody(req)); return reply(res, 200, { ok: true }); }

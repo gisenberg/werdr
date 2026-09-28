@@ -146,6 +146,10 @@ footer > div { display: flex; flex-shrink: 0; }
 aside { background: var(--herdr-sidebar-bg); }
 #settings-dialog { width: min(820px, calc(100vw - 24px)); }
 #settings-fields fieldset, #settings-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+#settings-custom-sounds fieldset { display: block; min-width: 0; }
+#settings-custom-sounds label { display: grid; gap: 6px; margin-bottom: 10px; }
+#settings-custom-sounds input { min-width: 0; max-width: 100%; }
+#settings-custom-sounds p { overflow-wrap: anywhere; }
 #settings-dialog fieldset { margin: 18px 0; border: 1px solid var(--herdr-surface1); }
 #settings-dialog legend, #settings-dialog summary { color: var(--herdr-accent); }
 #settings-dialog label { margin: 8px 0; }

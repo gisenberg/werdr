@@ -4,6 +4,9 @@ import type { Api } from './host-manager';
 import { NotificationPolicy, notificationTarget } from './notification-policy';
 import doneSound from '../../assets/sounds/done.mp3?url';
 import requestSound from '../../assets/sounds/request.mp3?url';
+import { customSoundFor } from '../shared/custom-sounds';
+import { SoundPlayer } from './sound-player';
+import { draftSoundUrl } from './sound-settings';
 const noticeLabel = (notice: Notice) => ({ attention: 'ATTENTION', finished: 'DONE', update: 'UPDATE', custom: 'NOTICE' })[notice.kind];
 export const activityMarkup = `<dialog id="activity-dialog"><h1>FLEET ACTIVITY</h1><p>Agent attention and completion events from every connected host.</p><div class="inline-actions"><button id="read-notices">MARK ALL READ</button><button id="desktop-notices">ALLOW DESKTOP NOTIFICATIONS</button></div><p id="activity-error" role="alert"></p><div id="notice-list"></div><button id="activity-done">DONE</button></dialog><button id="notice-toast" aria-live="polite" hidden></button>`;
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -12,9 +15,10 @@ export class Activity {
   private timer?: ReturnType<typeof setTimeout>;
   private active = true;
   private policy = new NotificationPolicy();
-  private audio = new Set<HTMLAudioElement>();
+  private audio: SoundPlayer;
   private desktop = new Set<Notification>();
   constructor(private readonly api: Api, private readonly select: (machine: string, workspace: string, tab: string, pane: string) => void, private readonly current: () => { machine: string; workspace: string; tab: string }, private readonly preferences: () => Preferences, private readonly report: (message: string) => void, private readonly focus: () => void) {
+    this.audio = new SoundPlayer(report);
     element('activity-done').onclick = () => element<HTMLDialogElement>('activity-dialog').close();
     element('read-notices').onclick = () => { void api('/api/notices/read', {}).catch(error => { element('activity-error').textContent = error.message; }); };
     element('desktop-notices').onclick = async () => {
@@ -28,7 +32,7 @@ export class Activity {
     this.active = active;
     if (active) return;
     clearTimeout(this.timer); this.policy.reset(); element('notice-toast').hidden = true;
-    for (const audio of this.audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); } this.audio.clear();
+    this.audio.stop();
     for (const notification of this.desktop) notification.close(); this.desktop.clear();
   }
   open() { if (!this.active) return; this.render(); element<HTMLDialogElement>('activity-dialog').showModal(); }
@@ -73,10 +77,9 @@ export class Activity {
     if (deadline !== undefined) this.timer = setTimeout(() => this.tick(), Math.max(0, deadline - performance.now()));
   }
   private sound(notice: Notice) {
-    const audio = new Audio(notice.sound === 'request' ? requestSound : doneSound); this.audio.add(audio);
-    const close = () => { this.audio.delete(audio); audio.pause(); audio.removeAttribute('src'); audio.load(); };
-    audio.onended = close; audio.onerror = close;
-    void audio.play().catch(close);
+    const event = notice.sound === 'request' ? 'request' : 'done';
+    const asset = customSoundFor(this.preferences().customSounds, event), builtin = event === 'request' ? requestSound : doneSound;
+    this.audio.play(asset ? draftSoundUrl(asset.id) || `/api/sounds/${asset.id}` : builtin, asset ? builtin : undefined);
   }
   private notifyDesktop(notice: Notice) {
     try {
