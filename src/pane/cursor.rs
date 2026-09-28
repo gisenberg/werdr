@@ -66,7 +66,12 @@ impl DecscusrTracker {
                     self.state = DecscusrParseState::Escape;
                 } else if byte.is_ascii_digit() && *collecting_first_param {
                     let digit = u16::from(byte - b'0');
-                    *first_param = Some(first_param.unwrap_or(0).saturating_mul(10) + digit);
+                    *first_param = Some(
+                        first_param
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(digit),
+                    );
                 } else if byte == b';' || byte == b':' {
                     *collecting_first_param = false;
                 } else if byte == b' ' {
@@ -262,6 +267,24 @@ fn is_jump(settled: TerminalCursorState, current: TerminalCursorState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decscusr_oversized_parameter_is_ignored_at_every_split() {
+        for sequence in [
+            b"\x1b[65536 q".as_slice(),
+            b"\x1b[999999999999999999999999999 q".as_slice(),
+        ] {
+            for split in 0..=sequence.len() {
+                let mut tracker = DecscusrTracker::default();
+                tracker.observe(b"\x1b[2 q");
+                tracker.observe(&sequence[..split]);
+                tracker.observe(&sequence[split..]);
+                assert!(tracker.cursor_shape_overridden());
+                tracker.observe(b"\x1b[0 q");
+                assert!(!tracker.cursor_shape_overridden());
+            }
+        }
+    }
 
     fn assert_decscusr_matches_bytewise(chunks: &[&[u8]]) {
         let mut optimized = DecscusrTracker::default();
