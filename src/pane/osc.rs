@@ -6,6 +6,7 @@ use crate::layout::PaneId;
 
 use super::terminal::GhosttyPaneCore;
 mod color_snapshot;
+mod stream_snapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DefaultColorQuery {
