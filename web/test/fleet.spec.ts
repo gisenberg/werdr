@@ -46,7 +46,7 @@ test('background agent activity, native rename, saved selection, host management
   await page.locator('#read-notices').click();
   await expect(page.locator('#notice-list .notice-row[data-read=false]')).toHaveCount(0);
   await page.locator('#activity-done').click();
-  const catalogDir = join(runtime.directory, 'state/herdr/client');
+  const catalogDir = runtime.catalogDirectory;
   await mkdir(catalogDir, { recursive: true });
   const offline = { id: 'a'.repeat(32), label: 'Offline fixture', target: '127.0.0.1', session: 'unavailable', enabled: false };
   await writeFile(join(catalogDir, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [offline] }), { mode: 0o600 });

@@ -72,7 +72,7 @@ test('native configuration failure and browser read failure remain separate outc
     await page.route('**/api/settings', route => route.fulfill({ status: 503, json: { error: 'Preference read unavailable' } }));
     await reload(page); await expect(page.locator('#status')).toContainText('HOST [OK] / BROWSER [ERROR]'); await expect(page.locator('#status')).toContainText('Preference read unavailable');
     await page.unrouteAll({ behavior: 'wait' });
-    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    const catalog = runtime.catalogDirectory; await mkdir(catalog, { recursive: true });
     await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'b'.repeat(32), label: 'Offline reload host', target: '127.0.0.1', session: 'reload-offline', enabled: true }] }));
     await page.locator('#hosts button').filter({ hasText: 'Offline reload host' }).click();
     await reload(page); await expect(page.locator('#status')).toContainText('HOST [ERROR] / BROWSER [OK] / Offline reload host:');

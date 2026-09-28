@@ -3,7 +3,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { get as httpsGet } from 'node:https';
 
@@ -66,8 +66,12 @@ export async function fixture(passwordLogin = false, secure = false, isolatedCla
   try {
     start(binary, ['server']);
     await wait(async () => !!(await cli('api', 'snapshot')));
+    const status = JSON.parse(await cli('status', 'server', '--json'));
+    const appDirectory = relative(directory, dirname(status.socket));
+    if (!['herdr', 'herdr-dev'].includes(appDirectory)) throw new Error('Fixture server socket escaped its isolated application directory.');
+    const catalogDirectory = resolve(directory, 'state', appDirectory, 'client');
     await startGateway();
-    return { url, cli, directory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close, diagnostics: () => diagnostics,
+    return { url, cli, directory, catalogDirectory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close, diagnostics: () => diagnostics,
       stopGateway: () => stop(gateway), startGateway,
       restartGateway: async () => { await stop(gateway); await startGateway(); } };
   } catch (error) { await close(); throw error; }

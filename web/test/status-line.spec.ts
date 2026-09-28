@@ -7,7 +7,7 @@ import { consoleInput } from './console-helpers';
 test('late action failures identify their original host after selection changes', async ({ page }) => {
   const runtime = await fixture(); let release = () => {};
   try {
-    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    const catalog = runtime.catalogDirectory; await mkdir(catalog, { recursive: true });
     await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'a'.repeat(32), label: 'Unavailable fixture', target: '127.0.0.1', session: 'status-unavailable', enabled: true }] }), { mode: 0o600 });
     await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
     await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();

@@ -261,7 +261,7 @@ test('mobile Navigate retains unavailable hosts, isolates scroll, and follows na
   const runtime = await fixture(); const inputs: string[] = [];
   try {
     const { mkdir, writeFile } = await import('node:fs/promises'); const { join } = await import('node:path');
-    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    const catalog = runtime.catalogDirectory; await mkdir(catalog, { recursive: true });
     await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'a'.repeat(32), label: 'Unavailable host', target: '127.0.0.1', session: 'unavailable', enabled: false }] }), { mode: 0o600 });
     await capture(page, inputs); await login(page, runtime);
     const original = new URL(page.url()).searchParams.get('pane');
@@ -384,7 +384,7 @@ test('last-pane binding toggles scoped selections and clears uncertain reconnect
     await prefix(page, '1'); await expect.poll(selected).not.toBe(third);
     await last(); await expect.poll(selected).toBe(third);
     const { mkdir, writeFile } = await import('node:fs/promises'); const { join } = await import('node:path');
-    const catalog = join(runtime.directory, 'state/herdr/client'); await mkdir(catalog, { recursive: true });
+    const catalog = runtime.catalogDirectory; await mkdir(catalog, { recursive: true });
     await writeFile(join(catalog, 'endpoints.json'), JSON.stringify({ version: 1, ssh: [{ id: 'a'.repeat(32), label: 'Unloaded host', target: '127.0.0.1', session: 'last-pane-unavailable', enabled: true }] }), { mode: 0o600 });
     const unloaded = page.locator('#hosts button').filter({ hasText: 'Unloaded host' });
     await unloaded.click(); await expect(unloaded).toHaveClass(/active/);
