@@ -387,6 +387,8 @@ comptime {
             @export(&c.snapshot_decoder_ready, .{ .name = "ghostty_snapshot_decoder_ready" });
             @export(&c.snapshot_decoder_next, .{ .name = "ghostty_snapshot_decoder_next" });
             @export(&c.snapshot_decoder_decode, .{ .name = "ghostty_snapshot_decoder_decode" });
+            @export(&c.snapshot_graphics_policy_get, .{ .name = "ghostty_snapshot_graphics_policy_get" });
+            @export(&c.snapshot_graphics_policy_set, .{ .name = "ghostty_snapshot_graphics_policy_set" });
         }
         if (features.kitty_graphics) {
             @export(&c.kitty_graphics_get, .{ .name = "ghostty_kitty_graphics_get" });

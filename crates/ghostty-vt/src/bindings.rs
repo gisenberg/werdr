@@ -5410,6 +5410,93 @@ unsafe extern "C" {
         out_written: *mut usize,
     ) -> GhosttyResult;
 }
+#[doc = " Frozen V1 graphics policy, separate from the binary snapshot codec.\n Screen flags: 1 present, 2 file, 4 shared memory, 8 preserve PNG,\n 16 temporary files enabled (empty directory is distinct from disabled),\n 32 source snapshot hook enabled. Screen order is primary, alternate."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttySnapshotScreenPolicyV1 {
+    pub flags: u32,
+    pub storage_limit: u64,
+    pub directory: GhosttyString,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySnapshotScreenPolicyV1"]
+        [::std::mem::size_of::<GhosttySnapshotScreenPolicyV1>() - 32usize];
+    ["Alignment of GhosttySnapshotScreenPolicyV1"]
+        [::std::mem::align_of::<GhosttySnapshotScreenPolicyV1>() - 8usize];
+    ["Offset of field: GhosttySnapshotScreenPolicyV1::flags"]
+        [::std::mem::offset_of!(GhosttySnapshotScreenPolicyV1, flags) - 0usize];
+    ["Offset of field: GhosttySnapshotScreenPolicyV1::storage_limit"]
+        [::std::mem::offset_of!(GhosttySnapshotScreenPolicyV1, storage_limit) - 8usize];
+    ["Offset of field: GhosttySnapshotScreenPolicyV1::directory"]
+        [::std::mem::offset_of!(GhosttySnapshotScreenPolicyV1, directory) - 16usize];
+};
+impl Default for GhosttySnapshotScreenPolicyV1 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[doc = " Global flags: 1 Kitty recognized, 2 glyph recognized, 4 explicit Kitty\n limit, 8 explicit glyph limit. Absent limits differ from explicit zero.\n Features: 1 Kitty compiled in, 2 glyph compiled in. Builds must match."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttySnapshotGraphicsPolicyV1 {
+    pub size: usize,
+    pub features: u32,
+    pub flags: u32,
+    pub kitty_max_bytes: usize,
+    pub glyph_max_bytes: usize,
+    pub unknown_max_bytes: usize,
+    pub screens: [GhosttySnapshotScreenPolicyV1; 2usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySnapshotGraphicsPolicyV1"]
+        [::std::mem::size_of::<GhosttySnapshotGraphicsPolicyV1>() - 104usize];
+    ["Alignment of GhosttySnapshotGraphicsPolicyV1"]
+        [::std::mem::align_of::<GhosttySnapshotGraphicsPolicyV1>() - 8usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::size"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, size) - 0usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::features"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, features) - 8usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::flags"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, flags) - 12usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::kitty_max_bytes"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, kitty_max_bytes) - 16usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::glyph_max_bytes"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, glyph_max_bytes) - 24usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::unknown_max_bytes"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, unknown_max_bytes) - 32usize];
+    ["Offset of field: GhosttySnapshotGraphicsPolicyV1::screens"]
+        [::std::mem::offset_of!(GhosttySnapshotGraphicsPolicyV1, screens) - 40usize];
+};
+impl Default for GhosttySnapshotGraphicsPolicyV1 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+unsafe extern "C" {
+    #[doc = " Read policy without mutation. Initialize size before calling.\n Borrowed directory bytes expire on mutation; copy under the terminal lock."]
+    pub fn ghostty_snapshot_graphics_policy_get(
+        terminal: GhosttyTerminal,
+        out_policy: *mut GhosttySnapshotGraphicsPolicyV1,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Apply only to graphics-empty, APC-inactive terminals with matching screens.\n Validation and directory allocation precede mutation. The supplied destination\n callback is rebound at commit; source context pointers are never transferred.\n This does not repair partial-APC replay or establish complete handoff safety."]
+    pub fn ghostty_snapshot_graphics_policy_set(
+        terminal: GhosttyTerminal,
+        policy: *const GhosttySnapshotGraphicsPolicyV1,
+        source_callback: GhosttyKittyImageSnapshotFileFn,
+    ) -> GhosttyResult;
+}
 unsafe extern "C" {
     #[doc = " Returns the terminal display width of a Unicode codepoint in\n terminal grid cells: 0, 1, or 2.\n\n This is the same width table the terminal itself uses when laying\n out printed text, so callers can predict column layout (e.g. IME\n preedit overlays) that exactly matches what the terminal will do\n when the text is actually written to it.\n\n Semantics:\n - Returns 0 for zero-width codepoints: C0/C1 control characters,\n   nonspacing and enclosing combining marks, default-ignorable\n   codepoints (ZWJ, ZWNJ, variation selectors, etc.), and\n   surrogate codepoints.\n - Returns 2 for wide codepoints: East Asian Wide/Fullwidth\n   (including emoji with default emoji presentation) and regional\n   indicators. Width is clamped to 2 (e.g. the three-em dash).\n - Returns 1 for everything else, including invalid codepoints\n   beyond U+10FFFF (this function is total; it never fails).\n\n This operates on a single codepoint only and therefore cannot account\n for grapheme-cluster-level width rules (VS16 emoji presentation,\n combining sequences, etc.). For cluster-accurate widths, use\n ghostty_unicode_grapheme_width(). Summing per-codepoint widths is only\n correct when mode 2027 (grapheme clustering) is disabled.\n\n This function is pure, allocates nothing, and is thread-safe.\n\n @param cp The Unicode codepoint to measure\n @return Display width in cells: 0, 1, or 2"]
     pub fn ghostty_unicode_codepoint_width(cp: u32) -> u8;

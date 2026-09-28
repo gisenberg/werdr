@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use crate::pane_graphics_files::OwnedExport;
 mod callback_snapshot;
+mod graphics_policy_snapshot;
 #[cfg(target_os = "linux")]
 mod native_image_sources;
 mod native_source;
@@ -34,6 +35,7 @@ mod snapshot;
 #[cfg(any(windows, test))]
 mod tracked_row_snapshot;
 pub use callback_snapshot::TerminalCallbackSnapshot;
+pub use graphics_policy_snapshot::GraphicsPolicySnapshot;
 #[cfg(any(windows, test))]
 pub use tracked_row_snapshot::TrackedRowSnapshot;
 
@@ -861,6 +863,7 @@ pub struct Terminal {
     kitty_fingerprints: Mutex<HashMap<u32, KittyImageFingerprintEntry>>,
     kitty_empty_generation: Cell<Option<u64>>,
     kitty_png_forwarding: bool,
+    kitty_source_forwarding: bool,
 }
 
 impl Terminal {
@@ -912,6 +915,7 @@ impl Terminal {
             kitty_fingerprints: Mutex::new(HashMap::new()),
             kitty_empty_generation: Cell::new(None),
             kitty_png_forwarding: false,
+            kitty_source_forwarding: false,
         }
     }
 
@@ -1149,7 +1153,9 @@ impl Terminal {
     }
 
     pub fn set_kitty_source_forwarding(&mut self, enabled: bool) -> Result<(), Error> {
-        native_source::set_forwarding(self.raw, enabled)
+        native_source::set_forwarding(self.raw, enabled)?;
+        self.kitty_source_forwarding = enabled;
+        Ok(())
     }
 
     #[cfg(test)]

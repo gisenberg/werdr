@@ -76,9 +76,9 @@ const TerminalWrapper = struct {
     /// C construction has no I/O argument, so the wrapper retains the owner
     /// created by `new` or transferred from snapshot decoding until `free`.
     io: Io,
-    /// Allocator-owned copy of the temporary directory path for some
-    /// operations (e.g. kitty graphics). This is only allocated once the
-    /// embedder sets the option.
+    /// Allocator-owned backing for temporary directory paths. Restored screens
+    /// can borrow distinct slices; lazy alternate creation can inherit either
+    /// slice without transferring ownership. Keep alive through screen teardown.
     tmp_dir_path: ?[]u8 = null,
     /// The terminfo name reported for XTGETTCAP "TN". The stream handler holds
     /// a slice into this.
@@ -647,6 +647,276 @@ const Effects = struct {
 
 /// C: GhosttyTerminal
 pub const Terminal = ?*TerminalWrapper;
+
+/// C: GhosttySnapshotScreenPolicyV1. Flags: present, file, shared memory,
+/// preserve PNG, temporary file enabled, source snapshot hook enabled.
+pub const SnapshotScreenPolicyV1 = extern struct {
+    flags: u32 = 0,
+    storage_limit: u64 = 0,
+    directory: extern struct { ptr: ?[*]const u8 = "", len: usize = 0 } = .{},
+};
+
+/// C: GhosttySnapshotGraphicsPolicyV1. Flags: Kitty recognized, glyph
+/// recognized, explicit Kitty limit, explicit glyph limit. Absent limits and
+/// explicit zero are distinct. Features identify the native build contract.
+pub const SnapshotGraphicsPolicyV1 = extern struct {
+    size: usize = @sizeOf(SnapshotGraphicsPolicyV1),
+    features: u32 = 0,
+    flags: u32 = 0,
+    kitty_max_bytes: usize = 0,
+    glyph_max_bytes: usize = 0,
+    unknown_max_bytes: usize = 0,
+    screens: [2]SnapshotScreenPolicyV1 = .{ .{}, .{} },
+};
+
+const graphics_policy_features: u32 = @as(u32, @intFromBool(build_options.kitty_graphics)) |
+    (@as(u32, @intFromBool(build_options.glyph_protocol)) << 1);
+
+/// Borrow directory bytes until the next mutation. Never activate a screen or
+/// emit a callback. Callers must synchronize this read with terminal mutation.
+pub fn snapshot_graphics_policy_get(
+    terminal_: Terminal,
+    out_: ?*SnapshotGraphicsPolicyV1,
+) callconv(lib.calling_conv) Result {
+    const wrapper = terminal_ orelse return .invalid_value;
+    const out = out_ orelse return .invalid_value;
+    if (out.size != @sizeOf(SnapshotGraphicsPolicyV1)) return .invalid_value;
+    const handler = &wrapper.stream.handler.apc_handler;
+    var result: SnapshotGraphicsPolicyV1 = .{ .features = graphics_policy_features };
+    if (handler.enabled.contains(.kitty)) result.flags |= 1;
+    if (handler.enabled.contains(.glyph)) result.flags |= 2;
+    if (handler.max_bytes.get(.kitty)) |limit| {
+        result.flags |= 4;
+        result.kitty_max_bytes = limit;
+    }
+    if (handler.max_bytes.get(.glyph)) |limit| {
+        result.flags |= 8;
+        result.glyph_max_bytes = limit;
+    }
+    result.unknown_max_bytes = handler.unknown_max_bytes;
+    for ([_]ScreenSet.Key{ .primary, .alternate }, 0..) |key, i| {
+        const screen = wrapper.terminal.screens.get(key) orelse continue;
+        const dest = &result.screens[i];
+        dest.flags = 1;
+        if (comptime build_options.kitty_graphics) {
+            const storage = &screen.kitty_images;
+            const limits = storage.image_limits;
+            dest.storage_limit = storage.total_limit;
+            if (limits.file) dest.flags |= 2;
+            if (limits.shared_memory) dest.flags |= 4;
+            if (limits.preserve_png) dest.flags |= 8;
+            if (limits.snapshot_file != null) dest.flags |= 32;
+            switch (limits.temporary_file) {
+                .disabled => {},
+                .enabled => |temp| {
+                    dest.flags |= 16;
+                    dest.directory = .{ .ptr = if (temp.directory.len == 0) "" else temp.directory.ptr, .len = temp.directory.len };
+                },
+            }
+        }
+    }
+    out.* = result;
+    return .success;
+}
+
+/// Restore policy only onto a graphics-empty, APC-inactive terminal. The supplied
+/// source-file callback is rebound to this destination's context at commit.
+/// Validation and all allocations precede mutation, including when input
+/// directory slices alias this terminal's current borrowed policy.
+pub fn snapshot_graphics_policy_set(
+    terminal_: Terminal,
+    policy_: ?*const SnapshotGraphicsPolicyV1,
+    source_callback: ?Effects.SnapshotFileFn,
+) callconv(lib.calling_conv) Result {
+    const wrapper = terminal_ orelse return .invalid_value;
+    const policy_ptr = policy_ orelse return .invalid_value;
+    if (policy_ptr.size != @sizeOf(SnapshotGraphicsPolicyV1)) return .invalid_value;
+    const policy = policy_ptr.*;
+    if (policy.features != graphics_policy_features or policy.flags & ~@as(u32, 15) != 0 or
+        (policy.flags & 4 == 0 and policy.kitty_max_bytes != 0) or
+        (policy.flags & 8 == 0 and policy.glyph_max_bytes != 0)) return .invalid_value;
+    var exclusions: u64 = 0;
+    const query = @import("snapshot.zig").graphics_exclusions(terminal_, &exclusions);
+    if (query != .success) return query;
+    if (exclusions != 0) return .invalid_value;
+    var bytes: usize = 0;
+    for ([_]ScreenSet.Key{ .primary, .alternate }, 0..) |key, i| {
+        const source = policy.screens[i];
+        if (source.flags & ~@as(u32, 63) != 0 or
+            (source.flags & 1 != 0) != (wrapper.terminal.screens.get(key) != null)) return .invalid_value;
+        if (source.flags & 1 == 0 or !build_options.kitty_graphics) {
+            if (source.flags & ~@as(u32, 1) != 0 or source.storage_limit != 0 or source.directory.len != 0) return .invalid_value;
+            continue;
+        }
+        if (source.storage_limit > std.math.maxInt(usize) or source.directory.len > max_path_bytes or
+            (source.directory.len != 0 and source.directory.ptr == null) or
+            (source.flags & 16 == 0 and source.directory.len != 0) or
+            (source.flags & 32 != 0 and source_callback == null)) return .invalid_value;
+        bytes = std.math.add(usize, bytes, source.directory.len) catch return .invalid_value;
+    }
+    const alloc = wrapper.terminal.gpa();
+    const backing = alloc.alloc(u8, bytes) catch return .out_of_memory;
+    var offset: usize = 0;
+    // Copy all aliases before releasing the old backing or modifying screens.
+    for (policy.screens) |source| {
+        if (source.directory.len != 0) {
+            @memcpy(backing[offset..][0..source.directory.len], source.directory.ptr.?[0..source.directory.len]);
+            offset += source.directory.len;
+        }
+    }
+    offset = 0;
+    for ([_]ScreenSet.Key{ .primary, .alternate }, 0..) |key, i| {
+        const screen = wrapper.terminal.screens.get(key) orelse continue;
+        const source = policy.screens[i];
+        if (comptime build_options.kitty_graphics) {
+            screen.kitty_images.total_limit = @intCast(source.storage_limit);
+            screen.kitty_images.image_limits = .{
+                .file = source.flags & 2 != 0,
+                .shared_memory = source.flags & 4 != 0,
+                .preserve_png = source.flags & 8 != 0,
+                .temporary_file = if (source.flags & 16 != 0)
+                    .{ .enabled = .{ .directory = backing[offset..][0..source.directory.len] } }
+                else
+                    .disabled,
+                .snapshot_file = if (source.flags & 32 != 0)
+                    .{ .context = @ptrCast(wrapper), .callback = &Effects.snapshotFile }
+                else
+                    null,
+            };
+        }
+        offset += source.directory.len;
+    }
+    const handler = &wrapper.stream.handler.apc_handler;
+    handler.enabled.setPresent(.kitty, policy.flags & 1 != 0);
+    handler.enabled.setPresent(.glyph, policy.flags & 2 != 0);
+    handler.max_bytes = .{};
+    if (policy.flags & 4 != 0) handler.max_bytes.put(.kitty, policy.kitty_max_bytes);
+    if (policy.flags & 8 != 0) handler.max_bytes.put(.glyph, policy.glyph_max_bytes);
+    handler.unknown_max_bytes = policy.unknown_max_bytes;
+    wrapper.effects.snapshot_file = source_callback;
+    if (wrapper.tmp_dir_path) |old| alloc.free(old);
+    wrapper.tmp_dir_path = backing;
+    return .success;
+}
+
+test "snapshot graphics policy distinct directories aliasing and lazy inheritance" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 20, 4));
+    defer free(t);
+    vt_write(t, "\x1b[?1049h", 8);
+    var policy: SnapshotGraphicsPolicyV1 = .{};
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    policy.flags = 1 | 8; // Kitty limit absent, glyph explicitly zero.
+    policy.kitty_max_bytes = 0;
+    policy.glyph_max_bytes = 0;
+    policy.unknown_max_bytes = 31;
+    policy.screens[0] = .{ .flags = 1 | 2 | 16, .storage_limit = 123, .directory = .{ .ptr = "/primary", .len = 8 } };
+    policy.screens[1] = .{ .flags = 1 | 4 | 8 | 16, .storage_limit = 456, .directory = .{ .ptr = "/alternate", .len = 10 } };
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(t, &policy, null));
+    // The getter returns aliases into the backing that the setter replaces.
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(t, &policy, null));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    try testing.expectEqualStrings("/primary", policy.screens[0].directory.ptr.?[0..policy.screens[0].directory.len]);
+    try testing.expectEqualStrings("/alternate", policy.screens[1].directory.ptr.?[0..policy.screens[1].directory.len]);
+    try testing.expectEqual(@as(u32, 1 | 8), policy.flags);
+    // Reset removes alternate but its inherited directory must remain owned.
+    t.?.terminal.fullReset();
+    vt_write(t, "\x1b[?1049h", 8);
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    try testing.expectEqualStrings("/primary", policy.screens[1].directory.ptr.?[0..policy.screens[1].directory.len]);
+    try testing.expectEqual(policy.screens[0].flags, policy.screens[1].flags);
+    try testing.expectEqual(policy.screens[0].storage_limit, policy.screens[1].storage_limit);
+    const replacement: lib.String = .init(@as([]const u8, "/replacement"));
+    try testing.expectEqual(Result.success, set(t, .kitty_image_medium_temp_file, @ptrCast(&replacement)));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    for (policy.screens) |screen| try testing.expectEqualStrings("/replacement", screen.directory.ptr.?[0..screen.directory.len]);
+    // Enabled-empty remains distinct from disabled even with zero allocation.
+    policy.screens[0].directory = .{ .ptr = null, .len = 0 };
+    policy.screens[1].directory = .{ .ptr = null, .len = 0 };
+    policy.screens[1].flags &= ~@as(u32, 16);
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(t, &policy, null));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    try testing.expect(policy.screens[0].flags & 16 != 0);
+    try testing.expect(policy.screens[1].flags & 16 == 0);
+}
+
+test "snapshot graphics policy hook rebinds destination after source destruction" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+    const Context = struct {
+        expected: Terminal,
+        calls: usize = 0,
+        valid: bool = true,
+        fn callback(term: Terminal, userdata: ?*anyopaque, _: *const kitty_image.SnapshotFileRequest, _: *kitty_image.FileBacking) callconv(lib.calling_conv) bool {
+            const ctx: *@This() = @ptrCast(@alignCast(userdata.?));
+            ctx.calls += 1;
+            ctx.valid = ctx.valid and term == ctx.expected;
+            return false;
+        }
+    };
+    var source: Terminal = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer free(source);
+    var dest: Terminal = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &dest, 20, 4));
+    defer free(dest);
+    vt_write(source, "\x1b[?1049h", 8);
+    vt_write(dest, "\x1b[?1049h", 8);
+    var policy: SnapshotGraphicsPolicyV1 = .{};
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(source, &policy));
+    policy.screens[0].flags |= 32;
+    policy.screens[1].flags &= ~@as(u32, 32);
+    var context: Context = .{ .expected = dest };
+    dest.?.effects.userdata = &context;
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(source, &policy, &Context.callback));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(source, &policy));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(dest, &policy, &Context.callback));
+    free(source);
+    source = null;
+    const primary = dest.?.terminal.screens.get(.primary).?;
+    const alternate = dest.?.terminal.screens.get(.alternate).?;
+    try testing.expect(alternate.kitty_images.image_limits.snapshot_file == null);
+    const hook = primary.kitty_images.image_limits.snapshot_file.?;
+    var request: kitty_image.SnapshotFileRequest = undefined;
+    var backing: kitty_image.FileBacking = undefined;
+    try testing.expect(!hook.callback(hook.context, &request, &backing));
+    try testing.expectEqual(@as(usize, 1), context.calls);
+    try testing.expect(context.valid);
+}
+
+test "snapshot graphics policy allocation failure and invalid input are atomic" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    const zig_alloc = failing.allocator();
+    const c_alloc: CAllocator = .fromZig(&zig_alloc);
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(&c_alloc, &t, 20, 4));
+    defer free(t);
+    var policy: SnapshotGraphicsPolicyV1 = .{};
+    try testing.expectEqual(Result.invalid_value, snapshot_graphics_policy_get(null, &policy));
+    try testing.expectEqual(Result.invalid_value, snapshot_graphics_policy_get(t, null));
+    try testing.expectEqual(Result.invalid_value, snapshot_graphics_policy_set(t, null, null));
+    policy.size = 0;
+    try testing.expectEqual(Result.invalid_value, snapshot_graphics_policy_get(t, &policy));
+    policy = .{};
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &policy));
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_set(t, &policy, null));
+    if (comptime !build_options.kitty_graphics) return;
+    const before_flags = policy.flags;
+    policy.flags = 0;
+    policy.kitty_max_bytes = 0;
+    policy.glyph_max_bytes = 0;
+    policy.screens[0].flags |= 16;
+    policy.screens[0].directory = .{ .ptr = "/new", .len = 4 };
+    failing.fail_index = failing.alloc_index;
+    try testing.expectEqual(Result.out_of_memory, snapshot_graphics_policy_set(t, &policy, null));
+    var after: SnapshotGraphicsPolicyV1 = .{};
+    try testing.expectEqual(Result.success, snapshot_graphics_policy_get(t, &after));
+    try testing.expectEqual(before_flags, after.flags);
+    try testing.expectEqual(@as(usize, 0), after.screens[0].directory.len);
+    policy.screens[0].flags |= 32;
+    try testing.expectEqual(Result.invalid_value, snapshot_graphics_policy_set(t, &policy, null));
+}
 
 /// C: GhosttyTerminalCompressionMode
 pub const CompressionMode = ZigTerminal.CompressionMode;

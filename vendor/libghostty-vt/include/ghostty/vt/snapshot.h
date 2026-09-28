@@ -591,6 +591,46 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_decoder_get_multi(
     void** values,
     size_t* out_written);
 
+/** Frozen V1 graphics policy, separate from the binary snapshot codec.
+ * Screen flags: 1 present, 2 file, 4 shared memory, 8 preserve PNG,
+ * 16 temporary files enabled (empty directory is distinct from disabled),
+ * 32 source snapshot hook enabled. Screen order is primary, alternate.
+ */
+typedef struct {
+    uint32_t flags;
+    uint64_t storage_limit;
+    GhosttyString directory;
+} GhosttySnapshotScreenPolicyV1;
+
+/** Global flags: 1 Kitty recognized, 2 glyph recognized, 4 explicit Kitty
+ * limit, 8 explicit glyph limit. Absent limits differ from explicit zero.
+ * Features: 1 Kitty compiled in, 2 glyph compiled in. Builds must match.
+ */
+typedef struct {
+    size_t size;
+    uint32_t features;
+    uint32_t flags;
+    size_t kitty_max_bytes;
+    size_t glyph_max_bytes;
+    size_t unknown_max_bytes;
+    GhosttySnapshotScreenPolicyV1 screens[2];
+} GhosttySnapshotGraphicsPolicyV1;
+
+/** Read policy without mutation. Initialize size before calling.
+ * Borrowed directory bytes expire on mutation; copy under the terminal lock.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_graphics_policy_get(
+    GhosttyTerminal terminal, GhosttySnapshotGraphicsPolicyV1* out_policy);
+
+/** Apply only to graphics-empty, APC-inactive terminals with matching screens.
+ * Validation and directory allocation precede mutation. The supplied destination
+ * callback is rebound at commit; source context pointers are never transferred.
+ * This does not repair partial-APC replay or establish complete handoff safety.
+ */
+GHOSTTY_API GhosttyResult ghostty_snapshot_graphics_policy_set(
+    GhosttyTerminal terminal, const GhosttySnapshotGraphicsPolicyV1* policy,
+    GhosttyKittyImageSnapshotFileFn source_callback);
+
 /** @} */
 
 #ifdef __cplusplus

@@ -3,6 +3,51 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0012 exact empty-storage graphics policy restoration
+
+status: active, private restore prerequisite; retained graphics and partial APC remain excluded
+
+patch: `vendor/patches/libghostty-vt/0012-snapshot-graphics-policy.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+
+reason: The binary codec omits per-screen graphics limits, media permissions, temporary directories, PNG/source forwarding and APC recognition/limits.
+Restoring current environment defaults is not policy preservation, even when image storage is empty.
+Expose a frozen sized V1 policy record with borrowed reads and transactional application to a matching graphics-empty, APC-inactive terminal.
+Directory slices share one terminal-owned backing buffer, including paths inherited by newly created alternate screens.
+Application copies borrowed input before releasing old storage and rebinds supplied destination callbacks without copying source contexts.
+Unknown flags, incompatible features/screens, invalid lengths, missing required callbacks and allocation failures reject before mutation.
+This API does not preserve retained graphics or repair partial-APC replay timing.
+
+remove when: upstream preserves equivalent exact policy with matching ownership and atomicity guarantees, and the policy restoration and future-input tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=snapshot graphics policy' --summary all
+zig build test-lib-vt -Demit-lib-vt=true '-Dvt-features=-kitty-graphics' '-Dtest-filter=snapshot graphics policy' --summary all
+just test-one graphics_policy
+just test-one pane_state_draft
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just check
+```
+
+The Zig commands run inside `vendor/libghostty-vt`.
+Rust bindings are generated with `just libghostty-bindings`.
+
 ## 0011 snapshot graphics and glyph exclusions
 
 status: active, private restore prerequisite; not runtime handoff eligibility

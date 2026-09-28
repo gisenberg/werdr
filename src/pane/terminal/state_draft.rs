@@ -1,7 +1,7 @@
 //! Coordinated in-memory capture primitive, NOT a handoff-ready format.
 //!
-//! Retained graphics/glyph state is rejected, but empty graphics policy still
-//! needs preservation before this can become a handoff format. The caller
+//! Retained graphics/glyph state is rejected; empty graphics policy is preserved.
+//! This still is not a complete handoff format. The caller
 //! must fence readers and control producers: replies/notifications already
 //! returned from process_pty_bytes or queued in PTY actors are outside this lock.
 //! Do not expose this draft through runtime negotiation or transport.
@@ -21,12 +21,14 @@ pub(super) struct DraftLimits {
     pub callback_bytes: usize,
     pub native_allocation_bytes: usize,
     pub continuation_bytes: usize,
+    pub graphics_policy_bytes: usize,
 }
 
 pub(super) struct PaneStateDraft {
     native: Vec<u8>,
     caller: Vec<u8>,
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
+    graphics_policy: crate::ghostty::GraphicsPolicySnapshot,
     replies: Vec<Bytes>,
     #[cfg(windows)]
     observer: Option<crate::ghostty::TrackedRowSnapshot>,
@@ -184,6 +186,10 @@ impl GhosttyPaneTerminal {
             return Err("native snapshot exceeds limit".into());
         }
         Ok(PaneStateDraft {
+            graphics_policy: core
+                .terminal
+                .graphics_policy_snapshot(limits.graphics_policy_bytes)
+                .map_err(|e| e.to_string())?,
             native,
             caller: writer.bytes,
             callbacks,
@@ -218,6 +224,9 @@ impl GhosttyPaneTerminal {
             limits.native_allocation_bytes,
         )
         .map_err(|e| e.to_string())?;
+        terminal
+            .restore_graphics_policy_snapshot(&draft.graphics_policy, limits.graphics_policy_bytes)
+            .map_err(|e| e.to_string())?;
         terminal
             .restore_callback_snapshot(draft.callbacks, limits.callback_bytes)
             .map_err(|e| e.to_string())?;
@@ -266,6 +275,7 @@ mod tests {
             callback_bytes: 1 << 20,
             native_allocation_bytes: 64 << 20,
             continuation_bytes: 4096,
+            graphics_policy_bytes: 16384,
         }
     }
 
@@ -291,6 +301,46 @@ mod tests {
         assert_eq!(left.terminal_bells, right.terminal_bells);
         assert_eq!(left.reported_cwd, right.reported_cwd);
         assert_eq!(left.clipboard_writes, right.clipboard_writes);
+    }
+
+    #[test]
+    fn pane_state_draft_preserves_graphics_policy_and_enforces_directory_budget() {
+        let (tx, _rx) = mpsc::channel(16);
+        let source = pane(&tx);
+        {
+            let mut core = source.core.lock().unwrap();
+            core.terminal.enable_kitty_graphics().unwrap();
+            core.terminal.set_kitty_source_forwarding(false).unwrap();
+        }
+        let restricted = DraftLimits {
+            graphics_policy_bytes: 0,
+            ..limits()
+        };
+        assert!(source.capture_state_draft(restricted).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        assert!(GhosttyPaneTerminal::restore_state_draft(draft, restricted, tx.clone()).is_err());
+        let draft = source.capture_state_draft(limits()).unwrap();
+        let restored =
+            GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+        for bytes in [b"\x1b[?1049h".as_slice(), b"\x1b[?1049l"] {
+            assert_effects(feed(&source, &tx, bytes), feed(&restored, &tx, bytes));
+            assert_eq!(
+                source
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .graphics_policy_snapshot(16384)
+                    .unwrap(),
+                restored
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .graphics_policy_snapshot(16384)
+                    .unwrap()
+            );
+        }
     }
 
     #[test]

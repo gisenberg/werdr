@@ -46,12 +46,17 @@ pub(super) fn image_source(
     }
 }
 
-pub(super) fn set_forwarding(terminal: ffi::GhosttyTerminal, enabled: bool) -> Result<(), Error> {
-    let callback = if enabled && cfg!(target_os = "linux") {
-        snapshot as *const () as *const c_void
+pub(super) fn forwarding_callback(enabled: bool) -> ffi::GhosttyKittyImageSnapshotFileFn {
+    if enabled && cfg!(target_os = "linux") {
+        Some(snapshot)
     } else {
-        ptr::null()
-    };
+        None
+    }
+}
+
+pub(super) fn set_forwarding(terminal: ffi::GhosttyTerminal, enabled: bool) -> Result<(), Error> {
+    let callback =
+        forwarding_callback(enabled).map_or(ptr::null(), |callback| (callback as *const ()).cast());
     unsafe {
         ffi::ghostty_terminal_set(
             terminal,

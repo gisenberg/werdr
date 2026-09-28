@@ -245,6 +245,8 @@ pub const snapshot_decoder_get_multi = snapshot.decoder_get_multi;
 pub const snapshot_decoder_ready = snapshot.decoder_ready;
 pub const snapshot_decoder_next = snapshot.decoder_next;
 pub const snapshot_decoder_decode = snapshot.decoder_decode;
+pub const snapshot_graphics_policy_get = terminal.snapshot_graphics_policy_get;
+pub const snapshot_graphics_policy_set = terminal.snapshot_graphics_policy_set;
 
 pub const type_json = types.get_json;
 
