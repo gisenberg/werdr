@@ -29,6 +29,7 @@ mod agent_detection;
 mod capture_draft;
 mod cursor;
 mod detection_pause;
+mod exit_record;
 mod input;
 mod kitty_keyboard;
 mod osc;
@@ -37,6 +38,8 @@ mod snapshot_decode;
 mod state;
 mod terminal;
 mod xtgettcap;
+
+pub(crate) use exit_record::ExitRecord;
 
 #[cfg(unix)]
 pub(crate) use capture_draft::{CaptureIdentity, TerminalDraftPause};
@@ -1386,6 +1389,7 @@ pub struct PaneRuntime {
     persistence_cwd: Mutex<Option<std::path::PathBuf>>,
     cwd_process_exited: Arc<AtomicBool>,
     child_wait_completed: Option<Arc<AtomicBool>>,
+    exit_record: exit_record::ExitRecord,
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
@@ -2098,6 +2102,12 @@ fn publish_reported_cwd(
 }
 
 impl PaneRuntime {
+    // Retained for future runtime capture and identity-aware exit consumption.
+    #[allow(dead_code)]
+    pub(crate) fn exit_record(&self) -> ExitRecord {
+        self.exit_record.clone()
+    }
+
     pub fn shutdown(mut self) {
         if let Some(handle) = self.detect_handle.take() {
             handle.abort();
@@ -2424,6 +2434,7 @@ impl PaneRuntime {
         let child_pid = Arc::new(AtomicU32::new(child_pid));
         let reported_cwd = Arc::new(Mutex::new(None));
         let cwd_process_exited = Arc::new(AtomicBool::new(false));
+        let exit_record = exit_record::ExitRecord::default();
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
         let content_seq = Arc::new(AtomicU64::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
@@ -2491,14 +2502,16 @@ impl PaneRuntime {
             });
             let exit_events = events.clone();
             let cwd_process_exited = cwd_process_exited.clone();
+            let exit_record = exit_record.clone();
             let on_reader_exit = Box::new(move || {
-                cwd_process_exited.store(true, Ordering::Release);
                 // Imported handoff panes have no child wait handle, so their exit cause is
                 // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
-                let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason: crate::platform::ChildExitReason::Handoff,
-                }));
+                if exit_record.record(
+                    exit_record::ExitEvidence::ImportedReaderEnded,
+                    &cwd_process_exited,
+                ) {
+                    rt.block_on(exit_record.notify(pane_id, &exit_events));
+                }
                 debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
             });
             PaneRuntimeIo::Actor(PtyIoActor::spawn(PtyIoActorConfig {
@@ -2533,6 +2546,7 @@ impl PaneRuntime {
             persistence_cwd: Mutex::new(None),
             cwd_process_exited,
             child_wait_completed: None,
+            exit_record,
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
@@ -2596,6 +2610,7 @@ impl PaneRuntime {
         let child_pid = Arc::new(AtomicU32::new(0));
         let reported_cwd = Arc::new(Mutex::new(None));
         let child_wait_completed = Arc::new(AtomicBool::new(false));
+        let exit_record = exit_record::ExitRecord::default();
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
@@ -2603,6 +2618,7 @@ impl PaneRuntime {
         {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
+            let exit_record = exit_record.clone();
             let events = events.clone();
             let rt = tokio::runtime::Handle::current();
             let mut child = spawned.child;
@@ -2623,13 +2639,11 @@ impl PaneRuntime {
                         crate::platform::ChildExitReason::WaitFailed
                     }
                 };
-                child_wait_completed.store(true, Ordering::Release);
-                // Use blocking send — PaneDied is critical, must not be dropped
-                if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason,
-                })) {
-                    error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
+                if exit_record.record(
+                    exit_record::ExitEvidence::ChildWait(exit_reason),
+                    &child_wait_completed,
+                ) {
+                    rt.block_on(exit_record.notify(pane_id, &events));
                 }
             });
         }
@@ -3147,6 +3161,7 @@ impl PaneRuntime {
             persistence_cwd: Mutex::new(None),
             cwd_process_exited: child_wait_completed.clone(),
             child_wait_completed: Some(child_wait_completed),
+            exit_record,
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
@@ -3876,6 +3891,7 @@ impl PaneRuntime {
                 persistence_cwd: Mutex::new(None),
                 cwd_process_exited: Arc::new(AtomicBool::new(false)),
                 child_wait_completed: None,
+                exit_record: exit_record::ExitRecord::default(),
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
@@ -5028,6 +5044,7 @@ mod tests {
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
+            exit_record: exit_record::ExitRecord::default(),
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
@@ -5069,6 +5086,7 @@ mod tests {
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
+            exit_record: exit_record::ExitRecord::default(),
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),

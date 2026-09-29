@@ -36,6 +36,12 @@ impl TerminalCaptureGuard<'_> {
 }
 
 impl TerminalRuntime {
+    // Process-local evidence only, not a cross-process child reaper lease.
+    #[allow(dead_code)]
+    pub(crate) fn exit_record(&self) -> crate::pane::ExitRecord {
+        self.0.exit_record()
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn test_for_draft_capture_with_actor() -> (
         Self,
