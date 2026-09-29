@@ -12,9 +12,15 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await runtime?.close(); });
 async function create(page: Page) {
   await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
-  const previous = new URL(page.url()).searchParams.get('pane'); await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
-  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(previous); await expect(page.locator('#shield')).toBeHidden();
-  return new URL(page.url()).searchParams.get('pane')!;
+  // Login restoration may select an existing pane while creation is pending.
+  // Follow the exact creation result instead of accepting any changed URL.
+  const created = page.waitForResponse(response => response.url().endsWith('/api/action') && response.request().postDataJSON()?.action === 'workspace.create');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  const response = await created; expect(response.ok()).toBe(true);
+  const id = (await response.json()).root_pane.pane_id as string;
+  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe(id);
+  await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', id); await expect(page.locator('#shield')).toBeHidden();
+  return id;
 }
 const action = (page: Page, id: string, data: object) => page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', id, ...data } });
 async function paint(page: Page, id: string, text: string) {
