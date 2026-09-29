@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { fixture } from './fixture';
-import { consoleInput } from './console-helpers';
+import { consoleInput, terminalGeometry as geometry } from './console-helpers';
 
 let runtime: Awaited<ReturnType<typeof fixture>>;
 test.beforeAll(async () => { runtime = await fixture(); });
@@ -18,14 +18,6 @@ async function create(page: Page) {
   return pane;
 }
 const action = (page: Page, id: string, data: object) => page.request.post(runtime.url + '/api/action', { headers: { Origin: runtime.url }, data: { machine: 'local', id, ...data } });
-async function geometry(page: Page) {
-  // Copy mode verifies that native content and browser cells have converged.
-  await page.keyboard.press('Control+k'); await page.locator('#command-list').getByRole('button', { name: 'Terminal: copy mode (native scrollback)', exact: true }).click();
-  await expect(page.locator('.copy-status')).toContainText(/COPY \d+:/);
-  const caret = (await page.locator('.copy-caret').boundingBox())!, canvas = (await page.locator('.pane-active canvas').first().boundingBox())!;
-  await page.keyboard.press('q'); await expect(page.locator('.copy-layer')).toHaveCount(0);
-  return { canvas, point: (row: number, col: number) => ({ x: canvas.x + (col + .5) * caret.width, y: canvas.y + (row + .5) * caret.height }) };
-}
 async function paint(page: Page, id: string, text: string) {
   const quoted = "'" + text.replaceAll("'", "'\\''") + "'";
   await runtime.cli('pane', 'send-text', id, `printf '\\033[2J\\033[H%s\\n' ${quoted}\n`);

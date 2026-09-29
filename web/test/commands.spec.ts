@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fixture } from './fixture';
-import { consoleInput } from './console-helpers';
+import { consoleInput, terminalGeometry } from './console-helpers';
 
 test('configured shell, pane, popup and plugin commands use the browser target and refresh opaque IDs', async ({ page }) => {
   test.setTimeout(120000);
@@ -89,8 +89,9 @@ test('configured shell, pane, popup and plugin commands use the browser target a
     await expect(page.locator('#settings-dialog')).toBeHidden();
     await runtime.cli('pane', 'send-text', source.pane, "printf '\\033[2J\\033[HCOMMAND_%s\\n' SELECTION\n");
     await expect.poll(() => runtime.cli('pane', 'read', source.pane, '--source', 'recent')).toContain('COMMAND_SELECTION');
-    const canvas = await page.locator('.pane-active canvas').first().boundingBox();
-    await page.mouse.dblclick(canvas!.x + 12, canvas!.y + 8);
+    const { point } = await terminalGeometry(page);
+    const word = point(0, 1);
+    await page.mouse.dblclick(word.x, word.y);
     await expect(page.locator('.pane-content[data-native-selection]')).toHaveCount(1);
     await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('capture context');
     await page.locator('#command-list').getByRole('button', { name: /Host command: capture context/ }).click();
