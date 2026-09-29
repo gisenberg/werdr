@@ -7,9 +7,11 @@ Each capability below needs native-reference evidence, implemented browser inter
 
 ## Deployment status, 2026-09-29
 
-The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `fee8679b975352afc3af3a029feec1df5889fa5c`.
-The browser gateway is deployed from `6362127106cce8fc4d57f127834ef549aba9112f`, including the upstream 0.9.3 merge, attachment-geometry corrections, compact popup controls and cancellation-safe host setup.
-Terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
+The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `91dcee6fc065dca75493531f03c4806a953c5da7`.
+The browser gateway and terminal companions are deployed from that same commit, integrating upstream through `fb8b9e2e`.
+The immutable archive passed 242 browser cases, a separate older-owner compatibility case, and installed-companion verification on both Windows hosts.
+Full Linux checks passed 4,165 tests with 16 skips, and Windows-native checks passed 3,526 tests with 12 skips before signed ConPTY release packaging.
+This deployment includes dead-key composition and setup-console reflow fixes, native unavailable-worktree restoration, duplicate-parent close semantics, and Windows local-server permission diagnostics.
 The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
 Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
 Earlier references below to pending owner deployment describe the historical state of those individual feature checks.
@@ -18,7 +20,7 @@ Deployment removes that adoption prerequisite but does not establish complete de
 The deployed runtime includes the Windows full-row erase correction that clears stale incoming soft-wrap boundaries.
 A packaged-runtime comparison with unchanged gateway and terminal companions reproduced marker corruption on the previous owner and preserved it on the new owner.
 The new owner passed the same seeded PowerShell prediction, desktop reload, phone resize and subsequent-input case in isolated sessions on both Windows hosts.
-After deployment, browser checks passed through the live gateway on all three hosts for desktop and phone input, resize, reload and test-workspace cleanup.
+After the `91dcee6f` deployment, browser checks passed through the live gateway on all three hosts for desktop and phone input, resize, reload and test-workspace cleanup.
 The live Windows checks explicitly launched PowerShell 7 in disposable workspaces to exercise long history predictions, preserved the original marker after subsequent input, and verified cursor placement after phone shrink and desktop growth.
 Phone screenshots were inspected on both Windows hosts; these checks did not change persistent shell settings.
 Full Linux and Windows native checks passed before publishing the runtime, along with render-scaling checks.
