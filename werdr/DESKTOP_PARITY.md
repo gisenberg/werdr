@@ -100,6 +100,11 @@ Only the verified-compatible result registers a new host.
 Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
 These fixtures never install a runtime and do not replace the remaining live onboarding compatibility matrix.
 
+Live onboarding through the management service passed against both compatible Windows endpoints with an isolated local catalog.
+Each endpoint registered without an installation prompt, and its owner boot and pane identities plus the production catalog remained unchanged.
+A real POSIX SSH host-key rejection also produced the prerequisite error without prompting for installation or modifying the isolated catalog.
+These checks do not cover browser-form behavior, successful POSIX onboarding, or installation on older, incompatible and partially installed live endpoints.
+
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
 A newly created shell adopted a directory containing spaces and Unicode, while the existing shell retained its PID.
