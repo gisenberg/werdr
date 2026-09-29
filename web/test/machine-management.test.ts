@@ -7,7 +7,7 @@ import { join } from 'node:path';
 test('Windows onboarding preserves catalog and owner boundaries through compatibility checks', async t => {
   const root = await mkdtemp(join(tmpdir(), 'werdr-onboarding-test-'));
   const catalog = join(root, 'state/herdr/client/endpoints.json'), platforms = join(root, 'platforms.json');
-  const original = { id: 'existing-host', target: 'unrelated.invalid', session: 'original', label: 'Existing host', enabled: false };
+  const original = { id: '11111111111111111111111111111111', target: 'unrelated.invalid', session: 'original', label: 'Existing host', enabled: false };
   const saved = JSON.stringify({ version: 1, ssh: [original] });
   const prior = { ...process.env };
   await mkdir(join(root, 'bin')); await mkdir(join(root, 'state/herdr/client'), { recursive: true });
@@ -64,6 +64,7 @@ test('Windows onboarding preserves catalog and owner boundaries through compatib
       if (mode === 'ready') {
         assert.equal(current.ssh.length, 2);
         assert.equal(current.ssh[1].id, result.machineId);
+        assert.match(current.ssh[1].id, /^[a-f0-9]{32}$/);
         assert.equal(current.ssh[1].session, 'disposable');
         assert.equal(JSON.parse(await readFile(platforms, 'utf8')).machines[0].id, result.machineId);
       } else {
