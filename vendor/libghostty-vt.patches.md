@@ -3,6 +3,45 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0028 fixed-origin row growth
+
+status: active, Windows resize correction pending live candidate validation
+
+patch: `vendor/patches/libghostty-vt/0028-fixed-origin-resize.patch`
+
+herdr issue: none; fork Windows terminal acceptance regression
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+
+reason: ConPTY retains the old active origin on row enlargement and subsequent PowerShell redraws address that old row.
+Pulling retained history into the active screen moves the prompt away from those absolute coordinates and overwrites earlier output.
+An opt-in per-resize policy appends blank rows instead, retaining history and tracked cursor positions without changing the original resize API or default policy.
+The additive C entry point still uses the stream resize handler, preserving in-band size replies.
+Both screens receive the policy, including the hidden primary screen.
+
+verification: The bottom-cursor regression failed before implementation with expected row 2, actual row 4.
+The native `zig build test-lib-vt -Demit-lib-vt=true -Dtest-filter=resize` suite passed after implementation.
+The Rust wrapper regression verifies absolute cursor writes, retained history and size-report/DSR replies.
+Full `just check` passed, including Windows cross-target lint and vendor reverse-apply validation.
+Additional native tests passed for saved-cursor retention across page growth under a history-line limit and combined wrapped Unicode width/height growth.
+Native Windows tests and live candidate verification remain pending.
+
+remove when: upstream supplies an equivalent fixed-origin growth policy through its C API, and retained-history, cursor-write, hidden-primary, size-report and live ConPTY resize regressions pass without this patch.
+
 ## 0027 retained graphics C snapshot boundary
 
 status: active, host coordinator prerequisite; production handoff gate remains closed

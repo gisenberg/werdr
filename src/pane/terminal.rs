@@ -1731,6 +1731,13 @@ impl GhosttyPaneTerminal {
                 core.terminal.track_row(0);
             }
 
+            // ConPTY keeps its active origin when adding rows. Pulling history
+            // into those rows would desynchronize its absolute cursor writes.
+            #[cfg(windows)]
+            let _ = core
+                .terminal
+                .resize_preserve_active(cols, rows, cell_width_px, cell_height_px);
+            #[cfg(not(windows))]
             let _ = core
                 .terminal
                 .resize(cols, rows, cell_width_px, cell_height_px);
@@ -5738,6 +5745,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn resize_that_removes_scrollback_restores_live_follow() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(10, 3, 100).unwrap();
@@ -5755,6 +5763,25 @@ mod tests {
         let metrics = pane.scroll_metrics().expect("scroll metrics after output");
         assert_eq!(metrics.offset_from_bottom, 0);
         assert!(pane.visible_text().contains("000006"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn conpty_row_growth_retains_scrollback_until_explicit_live_follow() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(10, 3, 100).unwrap();
+        terminal.write(b"000000\r\n000001\r\n000002\r\n000003\r\n000004");
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        pane.set_scroll_offset_from_bottom(1);
+        pane.resize(5, 10, 0, 0);
+        let resized = pane.scroll_metrics().expect("scroll metrics after resize");
+        assert_eq!(resized.max_offset_from_bottom, 2);
+        assert_eq!(resized.offset_from_bottom, 1);
+        pane.scroll_reset();
+        pane.process_pty_bytes(PaneId::from_raw(1), 0, b"\r\n000005\r\n000006", &tx);
+        assert_eq!(pane.scroll_metrics().unwrap().offset_from_bottom, 0);
+        assert!(pane.visible_text().contains("000006"));
+        assert!(pane.recent_text(100).contains("000000"));
     }
 
     #[test]
@@ -5898,6 +5925,26 @@ mod tests {
         assert!(ansi.contains("blue"));
         assert!(ansi.contains("line4"));
         assert!(ansi.contains("\x1b["));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn conpty_row_growth_keeps_absolute_prompt_writes_on_the_prompt() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(10, 3, 100).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        pane.process_pty_bytes(
+            PaneId::from_raw(1),
+            0,
+            b"one\r\ntwo\r\nthree\r\nfour\r\nprompt",
+            &tx,
+        );
+        pane.resize(5, 20, 0, 0);
+        pane.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b[3;7H_GROWN", &tx);
+        assert_eq!(pane.visible_text().trim(), "three\nfour\nprompt_GROWN");
+        let retained = pane.recent_text(100);
+        assert!(retained.contains("one"));
+        assert!(retained.contains("two"));
     }
 
     #[test]

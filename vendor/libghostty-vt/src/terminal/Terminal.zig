@@ -3987,6 +3987,9 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
 pub const Resize = struct {
     cols: size.CellCountInt,
     rows: size.CellCountInt,
+    /// Keep false for consoles whose row growth retains the active origin.
+    /// This is a per-resize policy, not terminal state or a scrollback limit.
+    pull_scrollback: bool = true,
     cell_size_px: ?struct {
         width: u32,
         height: u32,
@@ -4092,6 +4095,7 @@ pub fn resize(
         .rows = opts.rows,
         .reflow = self.modes.get(.wraparound),
         .prompt_redraw = self.flags.shell_redraws_prompt,
+        .pull_scrollback = opts.pull_scrollback,
     });
 
     // Alternate screen, if it exists, doesn't reflow. The primary resize
@@ -4105,6 +4109,7 @@ pub fn resize(
                 .cols = opts.cols,
                 .rows = opts.rows,
                 .reflow = false,
+                .pull_scrollback = opts.pull_scrollback,
             }) catch |err| break :resize err;
 
             // Resize succeeded.
@@ -4330,6 +4335,138 @@ test "Terminal setScrollback only affects primary screen" {
     );
     try testing.expect(alternate.no_scrollback);
     try testing.expectEqual(alternate, t.screens.active);
+}
+
+test "Terminal: resize preserve active origin keeps bottom cursor and history" {
+    const alloc = testing.allocator;
+    for ([_]bool{ false, true }) |pull_scrollback| {
+        for ([_]size.CellCountInt{ 10, 20 }) |cols| {
+            var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 3 });
+            defer t.deinit(alloc);
+            try t.screens.active.testWriteString("one\ntwo\nthree\nfour\nprompt");
+            try testing.expectEqual(2, t.screens.active.cursor.y);
+            const before = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+            defer alloc.free(before);
+
+            try t.resize(alloc, .{ .cols = cols, .rows = 5, .pull_scrollback = pull_scrollback });
+            try testing.expectEqual(@as(size.CellCountInt, if (pull_scrollback) 4 else 2), t.screens.active.cursor.y);
+            const after = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+            defer alloc.free(after);
+            try testing.expectEqualStrings(before, after);
+
+            const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+            defer alloc.free(visible);
+            try testing.expectEqualStrings(if (pull_scrollback) "one\ntwo\nthree\nfour\nprompt" else "three\nfour\nprompt", visible);
+        }
+    }
+}
+
+test "Terminal: resize preserve active origin includes hidden primary" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 3 });
+    defer t.deinit(alloc);
+    const primary = t.screens.active;
+    try primary.testWriteString("one\ntwo\nthree\nfour\nprompt");
+    _ = try t.switchScreen(.alternate);
+    try t.screens.active.testWriteString("alt1\nalt2\nalt3");
+    try t.resize(alloc, .{ .cols = 20, .rows = 5, .pull_scrollback = false });
+    try testing.expectEqual(2, primary.cursor.y);
+    try testing.expectEqual(2, t.screens.active.cursor.y);
+    _ = try t.switchScreen(.primary);
+    const visible = try primary.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(visible);
+    try testing.expectEqualStrings("three\nfour\nprompt", visible);
+    const history = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(history);
+    try testing.expectEqualStrings("one\ntwo\nthree\nfour\nprompt", history);
+}
+
+test "Terminal: resize preserve active origin leaves width reflow unchanged" {
+    const alloc = testing.allocator;
+    for ([_]size.CellCountInt{ 6, 20 }) |cols| {
+        var expected = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+        defer expected.deinit(alloc);
+        var actual = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+        defer actual.deinit(alloc);
+        const text = "history\none\ntwo\nwrapped-prompt-with-text";
+        try expected.screens.active.testWriteString(text);
+        try actual.screens.active.testWriteString(text);
+        try expected.resize(alloc, .{ .cols = cols, .rows = 4 });
+        try actual.resize(alloc, .{ .cols = cols, .rows = 4, .pull_scrollback = false });
+        const a = try expected.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+        defer alloc.free(a);
+        const b = try actual.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+        defer alloc.free(b);
+        try testing.expectEqualStrings(a, b);
+        try testing.expectEqual(expected.screens.active.cursor.x, actual.screens.active.cursor.x);
+        try testing.expectEqual(expected.screens.active.cursor.y, actual.screens.active.cursor.y);
+    }
+}
+
+test "Terminal: resize preserve active origin shrink then grow retains history" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 5 });
+    defer t.deinit(alloc);
+    try t.screens.active.testWriteString("one\ntwo\nthree\nfour\nprompt");
+    try t.resize(alloc, .{ .cols = 10, .rows = 1, .pull_scrollback = false });
+    try testing.expectEqual(0, t.screens.active.cursor.y);
+    try t.resize(alloc, .{ .cols = 10, .rows = 5, .pull_scrollback = false });
+    try testing.expectEqual(0, t.screens.active.cursor.y);
+    const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(visible);
+    try testing.expectEqualStrings("prompt", visible);
+    const all = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(all);
+    try testing.expectEqualStrings("one\ntwo\nthree\nfour\nprompt", all);
+}
+
+test "Terminal: resize preserve active origin retains saved cursor across pages" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 80, .rows = 3, .max_scrollback_bytes = null });
+    defer t.deinit(alloc);
+    const primary = t.screens.active;
+    const page_rows = primary.pages.pages.first.?.capacity().rows;
+    t.setScrollbackMaxLines(page_rows);
+    for (0..4 * page_rows) |_| try primary.testWriteString("retained\n");
+    try primary.testWriteString("prompt");
+    t.saveCursor();
+    const old_x = primary.cursor.x;
+    const old_y = primary.cursor.y;
+    const before = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(before);
+    try t.resize(alloc, .{ .cols = 80, .rows = @intCast(page_rows + 3), .pull_scrollback = false });
+    try testing.expectEqual(old_x, primary.cursor.x);
+    try testing.expectEqual(old_y, primary.cursor.y);
+    t.setCursorPos(1, 1);
+    t.restoreCursor();
+    try testing.expectEqual(old_x, primary.cursor.x);
+    try testing.expectEqual(old_y, primary.cursor.y);
+    const after = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(after);
+    try testing.expectEqualStrings(before, after);
+    try testing.expect(!primary.pages.limits.exceeded(&primary.pages, .lines));
+}
+
+test "Terminal: resize preserve active origin combined wrapped growth" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+    defer t.deinit(alloc);
+    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+    defer reference.deinit(alloc);
+    const text = "history\none\ntwo\n羊🐑-wrapped-prompt";
+    try t.screens.active.testWriteString(text);
+    try reference.screens.active.testWriteString(text);
+    try reference.resize(alloc, .{ .cols = 30, .rows = 4 });
+    const expected_x = reference.screens.active.cursor.x;
+    const expected_y = reference.screens.active.cursor.y;
+    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(expected);
+    try t.resize(alloc, .{ .cols = 30, .rows = 9, .pull_scrollback = false });
+    try testing.expectEqual(expected_x, t.screens.active.cursor.x);
+    try testing.expectEqual(expected_y, t.screens.active.cursor.y);
+    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(actual);
+    try testing.expectEqualStrings(expected, actual);
 }
 
 test "Terminal: resize resets synchronized output" {

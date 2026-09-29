@@ -190,6 +190,7 @@ comptime {
         _ = @import("quirks_memset.zig");
 
         const c = terminal.c_api;
+        @export(&c.terminal_resize_preserve_active, .{ .name = "ghostty_terminal_resize_preserve_active" });
         const features = terminal.options;
         if (features.input_encode) {
             @export(&c.key_event_new, .{ .name = "ghostty_key_event_new" });

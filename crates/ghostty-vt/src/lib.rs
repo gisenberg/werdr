@@ -1069,6 +1069,29 @@ impl Terminal {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> Result<(), Error> {
+        self.resize_with_active_origin(cols, rows, cell_width_px, cell_height_px, false)
+    }
+
+    /// Resize for a console that appends blank rows instead of pulling history
+    /// into the active screen on enlargement, such as ConPTY.
+    pub fn resize_preserve_active(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> Result<(), Error> {
+        self.resize_with_active_origin(cols, rows, cell_width_px, cell_height_px, true)
+    }
+
+    fn resize_with_active_origin(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+        preserve_active: bool,
+    ) -> Result<(), Error> {
         #[cfg(any(windows, test))]
         if self.cols()? != cols || self.rows()? != rows {
             // The recent-output cache observes the last viewport row. Keeping
@@ -1089,7 +1112,12 @@ impl Terminal {
         };
         // SAFETY: self.raw is valid and sizes are plain values.
         unsafe {
-            ffi::ghostty_terminal_resize(
+            let resize = if preserve_active {
+                ffi::ghostty_terminal_resize_preserve_active
+            } else {
+                ffi::ghostty_terminal_resize
+            };
+            resize(
                 self.raw,
                 cols,
                 rows,
@@ -4654,6 +4682,36 @@ mod tests {
                 assert!(replies.lock().unwrap().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn fixed_origin_resize_preserves_conpty_cursor_writes_and_size_reports() {
+        let mut terminal = Terminal::new(10, 3, 100).unwrap();
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&replies);
+        terminal
+            .set_write_pty_callback(move |bytes| {
+                captured.lock().unwrap().extend_from_slice(bytes);
+            })
+            .unwrap();
+        terminal.write(b"one\r\ntwo\r\nthree\r\nfour\r\nprompt\x1b[?2048h");
+        replies.lock().unwrap().clear();
+        terminal.resize_preserve_active(20, 5, 9, 18).unwrap();
+        assert_eq!(terminal.cursor_y().unwrap(), 2);
+        terminal.write(b"\x1b[3;7H_GROWN");
+        assert_eq!(
+            terminal
+                .read_text_viewport((0, 0), (19, 4), false)
+                .unwrap()
+                .trim(),
+            "three\nfour\nprompt_GROWN"
+        );
+        terminal.write(b"\x1b[6n");
+        assert_eq!(*replies.lock().unwrap(), b"\x1b[48;5;20;90;180t\x1b[3;13R");
+        let history = terminal.screen_vt(ActiveScreen::Primary).unwrap();
+        assert!(history.contains("one"));
+        assert!(history.contains("two"));
+        assert!(history.contains("prompt_GROWN"));
     }
 
     #[test]

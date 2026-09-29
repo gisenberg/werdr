@@ -328,3 +328,5 @@ test {
     // We want to make sure we run the tests for the C allocator interface.
     _ = @import("../../lib/allocator.zig");
 }
+
+pub const terminal_resize_preserve_active = terminal.resize_preserve_active;

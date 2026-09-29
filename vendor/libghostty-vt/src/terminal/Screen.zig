@@ -2012,6 +2012,9 @@ pub const Resize = struct {
     /// lost from the top of the scrollback.
     reflow: bool = true,
 
+    /// Whether row growth may pull history into the active area.
+    pull_scrollback: bool = true,
+
     /// Set this to enable prompt redraw on resize. This signals
     /// that the running program can redraw the prompt if the cursor is
     /// currently at a prompt. This detects OSC133 prompts lines and clears
@@ -2108,6 +2111,7 @@ pub inline fn resize(
         .rows = opts.rows,
         .cols = opts.cols,
         .reflow = opts.reflow,
+        .pull_scrollback = opts.pull_scrollback,
         .cursor = .{
             .x = self.cursor.x,
             .y = self.cursor.y,

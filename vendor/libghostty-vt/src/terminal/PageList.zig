@@ -1236,6 +1236,10 @@ pub const Resize = struct {
     /// be truncated if the new size is smaller than the old size.
     reflow: bool = true,
 
+    /// Allow row growth to pull retained history into the active area.
+    /// Disable when the attached console keeps its active origin on growth.
+    pull_scrollback: bool = true,
+
     /// Set this to the current cursor position in the active area. Some
     /// resize/reflow behavior depends on the cursor position.
     cursor: ?Cursor = null,
@@ -2857,6 +2861,16 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
             // Making rows larger we adjust our row count, and then grow
             // to the row count.
             .gt => gt: {
+                if (!opts.pull_scrollback) {
+                    // ConPTY and other fixed-origin consoles retain their
+                    // old active rows on enlargement. Append blank rows even
+                    // for a bottom cursor rather than consuming history.
+                    const delta = rows - self.rows;
+                    self.rows = rows;
+                    for (0..delta) |_| _ = try self.grow();
+                    break :gt;
+                }
+
                 // If our rows increased and our cursor is NOT at the bottom,
                 // we want to try to preserve the y value of the old cursor.
                 // In other words, we don't want to "pull down" scrollback.

@@ -3329,6 +3329,16 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Resize without pulling retained history into the active area on row growth.\n\n Like ghostty_terminal_resize(), including column reflow and size reports,\n but enlargement appends blank rows below the active screen even when the\n cursor was at the bottom. Both screens use this policy. Retained history\n remains available, subject to the configured history limits.\n This per-call policy is intended for fixed-origin consoles such as ConPTY.\n NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.\n\n @ingroup terminal"]
+    pub fn ghostty_terminal_resize_preserve_active(
+        terminal: GhosttyTerminal,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Set an option on the terminal.\n\n Configures terminal callbacks and associated state such as the\n write_pty callback and userdata pointer. The value is passed\n directly for pointer types (callbacks, userdata) or as a pointer\n to the value for non-pointer types (e.g. GhosttyString*).\n The behavior of a NULL value is specific to each option and is\n documented by the corresponding GhosttyTerminalOption value.\n\n Callbacks are invoked synchronously during VT writes. Callbacks must not\n call ghostty_terminal_vt_write() or\n ghostty_terminal_vt_write_until_ground() on the same terminal\n (no reentrancy).\n\n @param terminal The terminal handle (may be NULL, in which case this is a no-op)\n @param option The option to set\n @param value Pointer to the value to set (type depends on the option),\n              or NULL to clear the option\n\n @ingroup terminal"]
     pub fn ghostty_terminal_set(
         terminal: GhosttyTerminal,

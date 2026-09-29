@@ -1781,10 +1781,33 @@ pub fn resize(
     cell_width_px: u32,
     cell_height_px: u32,
 ) callconv(lib.calling_conv) Result {
+    return resizeWithScrollback(terminal_, cols, rows, cell_width_px, cell_height_px, true);
+}
+
+/// Additive fixed-origin variant; the original resize ABI retains its policy.
+pub fn resize_preserve_active(
+    terminal_: Terminal,
+    cols: size.CellCountInt,
+    rows: size.CellCountInt,
+    cell_width_px: u32,
+    cell_height_px: u32,
+) callconv(lib.calling_conv) Result {
+    return resizeWithScrollback(terminal_, cols, rows, cell_width_px, cell_height_px, false);
+}
+
+fn resizeWithScrollback(
+    terminal_: Terminal,
+    cols: size.CellCountInt,
+    rows: size.CellCountInt,
+    cell_width_px: u32,
+    cell_height_px: u32,
+    pull_scrollback: bool,
+) Result {
     const wrapper = terminal_ orelse return .invalid_value;
     wrapper.stream.handler.resize(.{
         .cols = cols,
         .rows = rows,
+        .pull_scrollback = pull_scrollback,
         .cell_size_px = .{
             .width = cell_width_px,
             .height = cell_height_px,
@@ -6249,6 +6272,20 @@ test "resize sends in-band size report" {
     // height_px = 40*18 = 720, width_px = 100*9 = 900
     try testing.expect(S.last_data != null);
     try testing.expectEqualStrings("\x1B[48;40;100;720;900t", S.last_data.?);
+
+    try testing.expectEqual(Result.success, resize_preserve_active(t, 110, 45, 9, 18));
+    try testing.expectEqualStrings("\x1B[48;45;110;810;990t", S.last_data.?);
+}
+
+test "resize preserve active origin rejects invalid dimensions without mutation" {
+    try testing.expectEqual(Result.invalid_value, resize_preserve_active(null, 80, 24, 9, 18));
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 10, 3));
+    defer free(t);
+    try testing.expectEqual(Result.invalid_value, resize_preserve_active(t, 0, 5, 9, 18));
+    try testing.expectEqual(Result.invalid_value, resize_preserve_active(t, 20, 0, 9, 18));
+    try testing.expectEqual(10, t.?.terminal.cols);
+    try testing.expectEqual(3, t.?.terminal.rows);
 }
 
 test "resize no size report without mode 2048" {
