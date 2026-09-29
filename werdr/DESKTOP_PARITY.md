@@ -421,6 +421,11 @@ The candidate now advertises `stop_if_idle` and implements the distinct `server.
 The runtime owner checks terminal metadata, panes, runtimes, detached commands, plugin commands, and pending worktree operations before atomically committing shutdown.
 Queued API creation is rejected after that commit, and the response writer gets a bounded opportunity to flush before process exit.
 Unit tests cover queued creation, busy rejection, pending work, and capability compatibility; isolated socket/CLI tests verify empty-server exit and preservation of a busy shell PID and variables.
+The installed Linux runtime also passed an isolated systemd probe using the deployed supervisor's restart and process-group policies.
+Busy rejection retained the owner boot and pane; idle shutdown succeeded after workspace closure, and `Restart=always` started a fresh empty owner with an incremented restart count.
+The probe stopped and removed only its test service/session and verified that the production owner identity remained unchanged.
+This confirms that idle shutdown alone does not hold a maintenance window open: an idle upgrade must also control supervisor restarts.
+The equivalent Windows scheduled-task acceptance remains open.
 Older production runtimes do not gain this operation from a companion update; unsupported callers must not fall back to unconditional stop.
 This enables a future idle-only upgrade path but does not replace the live-transfer and supervision requirements.
 Before adopting a live transfer, verify process identity, workspace/tab/pane identity, complete retained history, primary and alternate screens, pending output, input, and supervisor recovery in an isolated service instance.
