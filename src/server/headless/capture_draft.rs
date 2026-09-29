@@ -4,9 +4,9 @@
 //! Handlers may remove/replace runtimes and reapply geometry, so they must never
 //! run while a terminal capture guard holds one. Later events, in-flight
 //! producers and work spawned by these handlers are NOT acknowledged here.
-//! Stage new events while awaiting detector acknowledgement, then reject the
-//! draft if any are pending. Staging cannot run during the synchronous actor
-//! pause, and an empty inbox is not proof of a producer or shared-session cut.
+//! Stage new events while awaiting detector/actor acknowledgements, then reject
+//! the draft if any are pending. An empty inbox is not proof of a producer or
+//! shared-session cut.
 //! Keep this disconnected from production handoff and endpoint negotiation.
 
 use super::*;

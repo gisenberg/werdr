@@ -91,6 +91,10 @@ bench-render-scale:
 bench-continuation-tracking:
     cargo test --release --locked --bin herdr runtime_tracking_parse_profile -- --ignored --nocapture --test-threads=1
 
+# Profile ordinary output through populated PTY actors at 1/15 panes.
+bench-capture-actor:
+    cargo test --release --locked --bin herdr capture_actor_output_scale_profile -- --ignored --nocapture --test-threads=1
+
 # Profile terminal target name resolution at increasing pane counts.
 bench-terminal-targets:
     cargo test --release --locked --bin herdr terminal_target_lookup_profile -- --ignored --nocapture --test-threads=1

@@ -38,6 +38,7 @@ impl PaneRuntime {
         TerminalDraftPause::begin(self, timeout)
             .await?
             .capture(limits)
+            .await
     }
 }
 
@@ -94,16 +95,17 @@ impl PaneRuntime {
 
 struct TerminalDraftPause<'a> {
     runtime: &'a mut PaneRuntime,
-    active: bool,
-    // Resume the detector only after the actor has been resumed (or that
-    // failure reported). Drop also releases this on cancellation/unwind.
+    actor: Option<crate::pty::actor::CapturePause>,
+    timeout: Duration,
+    // Explicit completion waits for actor resume before releasing the detector.
+    // Cancellation/unwind queues actor cleanup first, without awaiting its ack.
     _detector: Option<super::detection_pause::Paused>,
 }
 
 impl<'a> TerminalDraftPause<'a> {
-    fn capture(self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
+    async fn capture(self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
         let draft = self.runtime.terminal.ghostty.capture_state_draft(limits);
-        let resumed = self.resume();
+        let resumed = self.resume().await;
         match (draft, resumed) {
             (Ok(draft), Ok(())) => Ok(draft),
             (Err(err), Ok(())) => Err(err),
@@ -126,39 +128,32 @@ impl<'a> TerminalDraftPause<'a> {
         } else {
             None
         };
-        // Failure belongs to begin_handoff, including its timeout rollback.
-        // Do not resume somebody else's pre-existing pause on rejection.
-        runtime
-            .io
-            .begin_handoff(timeout)
-            .map_err(|e| e.to_string())?;
+        let actor = match &runtime.io {
+            super::PaneRuntimeIo::Actor(actor) => Some(
+                actor
+                    .pause_for_capture(timeout)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            ),
+            #[cfg(test)]
+            super::PaneRuntimeIo::TestChannel { .. } => None,
+        };
         Ok(Self {
             runtime,
-            active: true,
+            actor,
+            timeout,
             _detector: detector,
         })
     }
 
-    fn resume(mut self) -> Result<(), String> {
-        // Report a failed acknowledgement instead of retrying implicitly and
-        // pretending that ownership is known. Drop is only the unwind fallback.
-        self.active = false;
-        self.runtime
-            .io
-            .set_handoff_paused(false)
-            .map_err(|e| e.to_string())
-    }
-}
-
-impl Drop for TerminalDraftPause<'_> {
-    fn drop(&mut self) {
-        if self.active {
-            self.active = false;
-            if let Err(err) = self.runtime.io.set_handoff_paused(false) {
-                tracing::warn!(pane = self.runtime.pane_id.raw(), %err,
-                    "failed to resume PTY after terminal draft unwind");
-            }
+    async fn resume(mut self) -> Result<(), String> {
+        if let Some(actor) = self.actor.take() {
+            actor
+                .resume(self.timeout)
+                .await
+                .map_err(|e| e.to_string())?;
         }
+        Ok(())
     }
 }
 
@@ -224,10 +219,47 @@ mod tests {
         assert_eq!(observed, bytes);
     }
 
+    #[tokio::test]
+    #[ignore = "non-gating populated PTY actor scaling profile"]
+    async fn capture_actor_output_scale_profile() {
+        // Exercise the ordinary actor loop with no active capture, including
+        // actual PTY reads, tracked parsing and populated retained history.
+        // Fixed geometry is the fixture's 40x5 for every pane/cardinality.
+        for count in [1, 15] {
+            let mut panes: Vec<_> = (0..count).map(|_| fixture()).collect();
+            for (_, peer, reads) in &mut panes {
+                feed(peer, reads, "populated history\r\n".repeat(1000).as_bytes());
+            }
+            for sample in 0..3 {
+                let started = std::time::Instant::now();
+                for _ in 0..5000 {
+                    for (_, peer, reads) in &mut panes {
+                        feed(peer, reads, b"output\x1b[31mcolored\x1b[0m\r\n");
+                    }
+                }
+                eprintln!(
+                    "capture_actor_scale panes={count} sample={sample} elapsed_us={}",
+                    started.elapsed().as_micros()
+                );
+            }
+            for (runtime, _, _) in panes {
+                runtime.shutdown();
+            }
+        }
+    }
+
     fn assert_input_resumed(runtime: &PaneRuntime, peer: &mut UnixStream) {
-        runtime
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while runtime
             .try_send_bytes(Bytes::from_static(b"resumed"))
-            .unwrap();
+            .is_err()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "actor did not acknowledge cancellation"
+            );
+            std::thread::yield_now();
+        }
         let mut received = [0; 7];
         peer.read_exact(&mut received).unwrap();
         assert_eq!(&received, b"resumed");
@@ -272,7 +304,7 @@ mod tests {
             .await
             .unwrap();
         pause.runtime.io.shutdown();
-        let err = pause.capture(test_limits()).err().unwrap();
+        let err = pause.capture(test_limits()).await.err().unwrap();
         assert!(err.contains("PTY resume failed"), "{err}");
         // Actor failure must not leave the unrelated detector parked forever.
         let detector = runtime
@@ -311,7 +343,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!pause.runtime.detect_handle.as_ref().unwrap().is_finished());
-            pause.resume().unwrap();
+            pause.resume().await.unwrap();
         }
         runtime.shutdown();
     }
@@ -521,7 +553,7 @@ mod tests {
             if fail_capture {
                 limits.native_bytes = 0;
             }
-            let err = pause.capture(limits).err().unwrap();
+            let err = pause.capture(limits).await.err().unwrap();
             assert!(err.contains("PTY resume failed"), "{err}");
             if fail_capture {
                 assert!(err.contains("native snapshot exceeds limit"), "{err}");
