@@ -425,7 +425,10 @@ The installed Linux runtime also passed an isolated systemd probe using the depl
 Busy rejection retained the owner boot and pane; idle shutdown succeeded after workspace closure, and `Restart=always` started a fresh empty owner with an incremented restart count.
 The probe stopped and removed only its test service/session and verified that the production owner identity remained unchanged.
 This confirms that idle shutdown alone does not hold a maintenance window open: an idle upgrade must also control supervisor restarts.
-The equivalent Windows scheduled-task acceptance remains open.
+Both Windows hosts passed isolated scheduled-task probes using their production principals and restart settings, with test-only configuration and no logon trigger.
+Busy shutdown retained the owner and pane; clean idle shutdown returned task result zero and stayed stopped for more than the configured one-minute failure-restart interval.
+Independent checks confirmed removal of the test tasks and named sessions while the production tasks stayed running.
+These probes cover clean exit and restart policy, not a concurrent logon or a complete idle-upgrade orchestration.
 Older production runtimes do not gain this operation from a companion update; unsupported callers must not fall back to unconditional stop.
 This enables a future idle-only upgrade path but does not replace the live-transfer and supervision requirements.
 Before adopting a live transfer, verify process identity, workspace/tab/pane identity, complete retained history, primary and alternate screens, pending output, input, and supervisor recovery in an isolated service instance.
