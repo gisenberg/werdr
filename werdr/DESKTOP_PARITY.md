@@ -83,6 +83,11 @@ The delayed case used a cancelled browser settings preview; saved preferences re
 Cleanup preserved original pane and owner identities and marked only the probe's own notices read.
 This does not establish live update-event delivery, OS desktop-notification behavior, or the complete custom-audio matrix.
 
+Live workspace Git metadata passed on the deployed Linux gateway owner with zero browser terminal-attachment attempts.
+A temporary repository progressed from one commit ahead to two, then to two ahead and one behind; the browser updated its branch and counts and retained distinct ahead/behind colors.
+The probe used a cancelled workspace-row settings preview, closed only its recorded test workspace, and verified unchanged saved preferences, pre-existing pane identities and owner boot identity.
+This establishes Linux passive Git refresh through the deployed gateway, not Windows Git acceptance.
+
 Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
 Only the verified-compatible result registers a new host.
 Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
