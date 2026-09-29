@@ -6,11 +6,15 @@ export class NativeKeyboard {
   private flags = 0;
   private level = 0;
   private held = new Map<string, KeyEvent>();
+  private browserComposition = false;
   private decoder = new TextDecoder();
   constructor(private content: HTMLElement, private terminal: Terminal, private encoder: KeyEncoder, private library: Library, private available: () => boolean, private send: (text: string) => void) {
     content.addEventListener('keydown', this.down, true);
     content.addEventListener('keyup', this.up, true);
     content.addEventListener('focusout', this.blur);
+    content.addEventListener('compositionstart', this.compositionStart, true);
+    content.addEventListener('compositionend', this.compositionEnd, true);
+    content.addEventListener('beforeinput', this.beforeInput, true);
     window.addEventListener('blur', this.blur);
     encoder.setOption(library.KeyEncoderOption.ALT_ESC_PREFIX, true);
   }
@@ -26,9 +30,15 @@ export class NativeKeyboard {
     this.release(); this.encoder.dispose();
     this.content.removeEventListener('keydown', this.down, true); this.content.removeEventListener('keyup', this.up, true);
     this.content.removeEventListener('focusout', this.blur); window.removeEventListener('blur', this.blur);
+    this.content.removeEventListener('compositionstart', this.compositionStart, true);
+    this.content.removeEventListener('compositionend', this.compositionEnd, true);
+    this.content.removeEventListener('beforeinput', this.beforeInput, true);
   }
   private emit(event: KeyEvent) { const bytes = this.encoder.encode(event); if (bytes.length) this.send(this.decoder.decode(bytes)); }
-  private blur = () => this.release();
+  private blur = () => { this.browserComposition = false; this.release(); };
+  private compositionStart = () => { this.browserComposition = true; };
+  private compositionEnd = () => { this.browserComposition = false; };
+  private beforeInput = (event: InputEvent) => { if (!event.isComposing) this.browserComposition = false; };
   private key(code: string) {
     const aliases: Record<string, string> = { Backquote: 'GRAVE', Equal: 'EQUAL', NumpadAdd: 'KP_PLUS', NumpadSubtract: 'KP_MINUS', NumpadDecimal: 'KP_PERIOD' };
     const digits = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'];
@@ -66,7 +76,18 @@ export class NativeKeyboard {
     return input;
   }
   private down = (event: KeyboardEvent) => {
-    if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented) return;
+    if (!this.available() || event.defaultPrevented) return;
+    // X11 dead keys can commit via beforeinput without composition events or
+    // isComposing. Preserve browser default handling through that commit and
+    // keep Ghostty's fallback keydown encoder from consuming the base key too.
+    // This applies in legacy mode as well as negotiated keyboard protocols.
+    if (event.key === 'Dead') this.browserComposition = true;
+    if (this.browserComposition || event.isComposing || event.keyCode === 229 || ['Process', 'Unidentified'].includes(event.key)) {
+      event.stopImmediatePropagation();
+      if (event.key === 'Escape') this.browserComposition = false;
+      return;
+    }
+    if (!this.flags && this.level !== 2) return;
     // Let the browser and existing clipboard handler complete paste/copy gestures.
     if (!event.getModifierState('AltGraph') && (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC'))) return;
     const input = this.encodeInput(event); if (!input) return;

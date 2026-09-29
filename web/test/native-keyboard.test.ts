@@ -43,8 +43,49 @@ test('native keyboard leaves IME sentinel keys and unfinished composition to the
       f.keyboard.sendKey({ key, code: 'KeyA', ...extra } as KeyboardEvent);
     }
     assert.equal(f.events.length, 0);
+    f.content.dispatchEvent(new Event('compositionend'));
     assert.equal(f.dispatch('keydown', 'é', 'KeyE').defaultPrevented, true);
     assert.equal(f.events[0].utf8, 'é');
+  } finally { f.close(); }
+});
+
+test('dead keys keep base keys and intermediate modifiers browser-owned until text commits', () => {
+  const f = fixture();
+  try {
+    for (const [flags, level] of [[0, 0], [31, 0], [0, 2]]) {
+      f.keyboard.update(flags, level);
+      let fallback = 0;
+      const listener = () => { fallback++; };
+      f.content.addEventListener('keydown', listener);
+      for (const [key, code] of [['Dead', 'Quote'], ['Shift', 'ShiftLeft'], ['Dead', 'Quote'], ['e', 'KeyE']]) {
+        assert.equal(f.dispatch('keydown', key, code).defaultPrevented, false);
+        f.dispatch('keyup', key, code);
+      }
+      assert.equal(fallback, 0);
+      assert.equal(f.events.length, 0);
+      f.content.dispatchEvent(Object.assign(new Event('beforeinput'), { isComposing: false }));
+      f.content.removeEventListener('keydown', listener);
+      assert.equal(f.dispatch('keydown', 'x', 'KeyX').defaultPrevented, flags !== 0 || level === 2);
+      f.dispatch('keyup', 'x', 'KeyX');
+      f.events.length = 0;
+    }
+  } finally { f.close(); }
+});
+
+test('composition retains ownership across protocol changes and resets on commit, cancel or blur', () => {
+  const f = fixture();
+  try {
+    for (const reset of ['compositionend', 'escape', 'focusout', 'blur']) {
+      f.content.dispatchEvent(new Event('compositionstart'));
+      f.content.dispatchEvent(Object.assign(new Event('beforeinput'), { isComposing: true }));
+      f.keyboard.update(1, 0);
+      assert.equal(f.dispatch('keydown', 'e', 'KeyE').defaultPrevented, false);
+      if (reset === 'escape') assert.equal(f.dispatch('keydown', 'Escape', 'Escape').defaultPrevented, false);
+      else if (reset === 'blur') f.windowTarget.dispatchEvent(new Event('blur'));
+      else f.content.dispatchEvent(new Event(reset));
+      assert.equal(f.dispatch('keydown', 'x', 'KeyX').defaultPrevented, true);
+      f.dispatch('keyup', 'x', 'KeyX');
+    }
   } finally { f.close(); }
 });
 

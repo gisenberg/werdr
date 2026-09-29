@@ -158,6 +158,12 @@ Complete keyboard-layout/protocol coverage remains outstanding.
 `web/test/native-keyboard-ime.spec.ts` compares browser routing with the bundled native encoder for navigation, editing, function, keypad and international physical keys under Kitty flags 1 and 31 and modifyOtherKeys level 2.
 The matrix covers press, repeat and release, plain and Ctrl+Shift input, and normal and application cursor/keypad modes.
 These synthetic DOM checks complement the existing Unicode and AltGraph cases but do not establish OS-level layout or IME composition acceptance.
+An isolated authenticated Xvfb display with headed Chromium and XTest physical key events verifies US `KeyY` to `y`, German `KeyY` to `z`, French `KeyA` to `q`, and German AltGr+Q to `@` with native Kitty press/release bytes.
+The same OS-level probe exposed a US international dead-key regression: acute followed by E produced protocol-encoded `e` instead of `é`, while an unhandled control textarea correctly composed `é`.
+The browser keyboard adapter now keeps dead-key sequences browser-owned until text commit, including intermediate modifiers, and prevents the terminal fallback encoder from consuming them in legacy mode.
+The mounted terminal passes the physical acute-plus-E sequence in legacy, Kitty flags 31, and modifyOtherKeys level 2 modes, emitting exactly one `é`.
+Unit and mounted-browser regressions cover commit, cancellation, focus reset, protocol changes, and recovery to ordinary key encoding.
+This evidence is Linux X11-specific; Windows layouts and CJK IMEs remain unverified.
 Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.
 Its request epoch cancels delayed reads and actions, fences stale authentication failures, and keeps online/visibility wakeups idle.
 Resume validates the preserved endpoint and terminal identity through a fresh snapshot, including after an expired login; missing or replaced targets require explicit selection.

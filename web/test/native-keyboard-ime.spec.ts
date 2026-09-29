@@ -1,6 +1,54 @@
 import { test, expect } from '@playwright/test';
 import { createServer } from 'vite';
 
+test('mounted terminal leaves dead-key defaults intact and delivers committed text once', async ({ page }) => {
+  const server = await createServer({ server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+  try {
+    await server.listen();
+    const url = server.resolvedUrls!.local[0];
+    await page.route(url, route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="terminal"></div>' }));
+    await page.goto(url);
+    const samples = await page.evaluate(async () => {
+      const loader = '/src/terminal-loader.ts', source = '/src/native-keyboard.ts';
+      const library = await (await import(loader)).loadGhostty();
+      const { NativeKeyboard } = await import(source);
+      const samples = [];
+      for (const [flags, level] of [[0, 0], [1, 0], [31, 0], [0, 2]]) {
+        const content = document.querySelector('#terminal')!;
+        const term = new library.Terminal({ cols: 40, rows: 10 }); term.open(content);
+        const output: string[] = [];
+        const subscription = term.onData((text: string) => output.push(text));
+        const keyboard = new NativeKeyboard(content, term, term.createInputEncoder(), library, () => true, (text: string) => output.push(text));
+        try {
+          keyboard.update(flags, level);
+          const prevented = [];
+          // X11 US international emits Dead then e without compositionstart or
+          // isComposing. The browser commits é through beforeinput instead.
+          for (const [key, code] of [['Dead', 'Quote'], ['Shift', 'ShiftLeft'], ['e', 'KeyE']]) {
+            for (const type of ['keydown', 'keyup']) {
+              const event = new KeyboardEvent(type, { key, code, bubbles: true, cancelable: true });
+              term.textarea.dispatchEvent(event); prevented.push(event.defaultPrevented);
+            }
+          }
+          const beforeCommit = output.slice();
+          term.textarea.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: 'é', bubbles: true, cancelable: true }));
+          const committed = output.slice();
+          output.length = 0;
+          for (const type of ['keydown', 'keyup']) term.textarea.dispatchEvent(new KeyboardEvent(type, { key: 'x', code: 'KeyX', bubbles: true, cancelable: true }));
+          samples.push({ flags, level, prevented, beforeCommit, committed, recovered: output.slice() });
+        } finally { keyboard.dispose(); subscription.dispose(); term.dispose(); }
+      }
+      return samples;
+    });
+    for (const sample of samples) {
+      expect(sample.prevented, JSON.stringify(sample)).toEqual(Array(6).fill(false));
+      expect(sample.beforeCommit).toEqual([]);
+      expect(sample.committed).toEqual(['é']);
+      expect(sample.recovered.length).toBeGreaterThan(0);
+    }
+  } finally { await server.close(); }
+});
+
 // Exercise real DOM dispatch and the bundled native WASM encoder without a
 // runtime, shell or user session. Synthetic events verify routing, not OS IMEs.
 test('IME, AltGraph and named keys preserve native keyboard protocol routing', async ({ page }) => {
@@ -31,6 +79,7 @@ test('IME, AltGraph and named keys preserve native keyboard protocol routing', a
           }
         }
         const beforeText = output.slice();
+        content.dispatchEvent(new CompositionEvent('compositionend', { data: '', bubbles: true }));
         for (const type of ['keydown', 'keyup']) content.dispatchEvent(new KeyboardEvent(type, { key: 'é', code: 'KeyE', bubbles: true, cancelable: true }));
         const unicodeOutput = output.slice();
         const altGraphCases = [];
