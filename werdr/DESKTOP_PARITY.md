@@ -17,6 +17,9 @@ Deployment removes that adoption prerequisite but does not establish complete de
 The deployed runtime includes the Windows full-row erase correction that clears stale incoming soft-wrap boundaries.
 A packaged-runtime comparison with unchanged gateway and terminal companions reproduced marker corruption on the previous owner and preserved it on the new owner.
 The new owner passed the same seeded PowerShell prediction, desktop reload, phone resize and subsequent-input case in isolated sessions on both Windows hosts.
+After deployment, browser checks passed through the live gateway on all three hosts for desktop and phone input, resize, reload and test-workspace cleanup.
+The live Windows checks explicitly launched PowerShell 7 in disposable workspaces to exercise long history predictions, preserved the original marker after subsequent input, and verified cursor placement after phone shrink and desktop growth.
+Phone screenshots were inspected on both Windows hosts; these checks did not change persistent shell settings.
 Full Linux and Windows native checks passed before publishing the runtime, along with render-scaling checks.
 Lossless live transfer, OS-level keyboard layout and IME acceptance, the remaining onboarding matrix, and complete native-reference visual parity remain separate acceptance work.
 
