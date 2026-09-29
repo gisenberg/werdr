@@ -8,7 +8,8 @@ Each capability below needs native-reference evidence, implemented browser inter
 ## Deployment status, 2026-09-29
 
 The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `fee8679b975352afc3af3a029feec1df5889fa5c`.
-The browser gateway and terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
+The browser gateway is deployed from `6cdec06bb9a6329f0eba4536d9c0e77bc9e8f64c`, including the upstream 0.9.3 merge and the attachment-geometry corrections.
+Terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
 The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
 Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
 Earlier references below to pending owner deployment describe the historical state of those individual feature checks.
@@ -34,15 +35,16 @@ Exact pane closure terminated the selected shell while preserving a sibling shel
 All test owners were stopped and their named sessions deleted after evidence was archived.
 These checks used the throwaway-session and wmux isolation procedures and did not restart production owners.
 
-The unchanged-size reconnect requirement remains open despite retained text.
-Wire evidence shows a desktop terminal settled at 129 columns reconnecting at 130 columns, and a phone terminal settled at 40 columns reconnecting at 41 columns.
-The deployed browser fits its initial attachment before authoritative scrollbar screen metadata establishes the normal-screen gutter.
-The candidate now reads validated native screen metadata before initial fitting, with a bounded optional read, stale-attachment cancellation and terminal-identity checking.
+Earlier wire evidence showed a desktop terminal settled at 129 columns reconnecting at 130 columns, and a phone terminal settled at 40 columns reconnecting at 41 columns.
+The deployed browser now reads validated native screen metadata before initial fitting, with a bounded optional read, stale-attachment cancellation and terminal-identity checking.
 Desktop and phone regressions cover primary and alternate geometry without inferring screen state from prior connections.
-The candidate passed the expanded Windows matrix on both hosts with explicit assertions that desktop, phone and alternate-screen reloads begin at their settled width.
-Deployment verification remains outstanding; surviving an extra resize is not equivalent to avoiding it.
+The correction passed the expanded Windows matrix on both hosts with explicit assertions that desktop, phone and alternate-screen reloads begin at their settled width.
 Expanded Windows validation also exposed a dropped rapid resize during the fitting library's 50 ms guard.
-The candidate uses its dimension measurement directly so each observer delivery retains the latest requested geometry, with a consecutive-animation-frame regression.
+The deployed browser uses its dimension measurement directly so each observer delivery retains the latest requested geometry, with a consecutive-animation-frame regression.
+The immutable gateway archive passed all 237 browser tests, package checks, and the older-runtime compatibility test before activation.
+Live rollout checks on all three hosts asserted exact initial dimensions on desktop and phone reloads, retained text and input, and unchanged owner boot identity.
+Both Windows hosts also passed the seeded PowerShell prediction and post-resize cursor checks; their phone screenshots were inspected.
+The gateway update preserved owner and shell identities, the native catalog, private preferences and assets, and cleanup removed only the test workspaces.
 The alternate-screen fixture also does not establish full-screen application redraw behavior, complete semantic color/theme parity, or OS-level keyboard layout and IME acceptance.
 
 ## Acceptance matrix
@@ -67,6 +69,13 @@ The alternate-screen fixture also does not establish full-screen application red
 | Delivery | Reviewed commits, verified remotes, pinned deployment, native panes preserved and live POSIX/Windows validation | Required for final result |
 
 ## Verification
+
+Read-only API checks confirm that all three deployed owners advertise command catalog/execution, popup sessions, semantic notifications, workspace Git status, passive metadata and atomic idle stop.
+Live agent-view checks on all three hosts verified native ordering, dynamic blocked-state membership, source-scoped clearing and browser updates without reload.
+Live custom-tab checks verified automatic single-tab label omission and custom label rendering through a cancelled local settings preview.
+An empty custom name remains custom in the native reference, and the browser displayed its native fallback label.
+These probes retained owner boot identity, preserved pre-existing panes, closed their recorded test workspaces, and left saved browser preferences unchanged.
+They establish the agent-view and tab-label behavior, not the remaining live acceptance of every advertised capability.
 
 Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
 Only the verified-compatible result registers a new host.
