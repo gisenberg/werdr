@@ -50,13 +50,25 @@ if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') { Start-Schedul
 # Never let an enclosing agent pane's implicit Herdr target leak into the readiness probe.
 foreach ($name in @('HERDR_SOCKET_PATH','HERDR_CLIENT_SOCKET_PATH','HERDR_SESSION')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
 $ready = $false
-for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    Start-Sleep -Seconds 1
-    $output = Join-Path $base '.readiness.json'
-    $errorLog = Join-Path $base '.readiness-error.txt'
-    $probe = Start-Process -FilePath $binary -ArgumentList ('--session ' + $Session + ' api snapshot') -PassThru -WindowStyle Hidden -RedirectStandardOutput $output -RedirectStandardError $errorLog
-    if (-not $probe.WaitForExit(10000)) { $probe.Kill(); throw 'Herdr API readiness probe timed out.' }
-    if ($probe.ExitCode -eq 0) { $snapshot = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json; if ($snapshot.result -and -not $snapshot.error) { $ready = $true; break } }
+$readinessDirectory = Join-Path $base ('.readiness-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $readinessDirectory | Out-Null
+try {
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        Start-Sleep -Seconds 1
+        $output = Join-Path $readinessDirectory 'snapshot.json'
+        $errorLog = Join-Path $readinessDirectory 'error.txt'
+        $probe = Start-Process -FilePath $binary -ArgumentList ('--session ' + $Session + ' api snapshot') -PassThru -WindowStyle Hidden -RedirectStandardOutput $output -RedirectStandardError $errorLog
+        try {
+            if (-not $probe.WaitForExit(10000)) {
+                $probe.Kill()
+                if (-not $probe.WaitForExit(5000)) { throw 'Herdr API readiness probe could not be stopped.' }
+                throw 'Herdr API readiness probe timed out.'
+            }
+            if ($probe.ExitCode -eq 0) { $snapshot = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json; if ($snapshot.result -and -not $snapshot.error) { $ready = $true; break } }
+        } finally { $probe.Dispose() }
+    }
+} finally {
+    Remove-Item -LiteralPath $readinessDirectory -Recurse -Force
 }
 if (-not $ready) { Get-ScheduledTaskInfo -TaskName $taskName | Select-Object LastRunTime,LastTaskResult; throw 'Herdr did not become ready.' }
 Get-ScheduledTask -TaskName $taskName | Select-Object TaskName,State

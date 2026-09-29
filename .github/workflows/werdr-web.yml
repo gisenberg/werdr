@@ -26,6 +26,9 @@ jobs:
         working-directory: web
       - run: npm run check
         working-directory: web
+      - name: Windows installer isolation contracts
+        shell: pwsh
+        run: ./werdr/test-windows-installer.ps1
       - run: node werdr/fetch-runtime.mjs
       # Candidate-only API and close semantics require a matching owner.
       # Keep the downloaded older runtime for a separate compatibility check.
