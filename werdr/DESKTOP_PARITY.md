@@ -301,6 +301,10 @@ Keep the optional-capability fallback until the owning runtime advertises the fi
 A gateway restart and a native runtime replacement have different process-lifetime consequences.
 
 The current native live handoff is not evidence of a lossless upgrade.
+The candidate rejects legacy handoff before disconnecting clients when a live runtime is detached, a popup exists, or workspace attachment identities/layouts are ambiguous or lack terminal metadata.
+This prevents the legacy pane-only manifest from silently omitting a runtime that exporter shutdown would otherwise dispose.
+Rejection preserves the current actor, client connection and public socket, and tests verify subsequent input delivery and preflight acceptance after reattachment.
+This topology safeguard does not preserve detached metadata or change legacy restoration of panes without live runtimes, and it does not establish a complete runtime state cut.
 The deployed runtimes limit exported history to 8 KiB per pane and omit it for panes with persisted agent sessions.
 The candidate now preserves all retained primary-screen history for both ordinary and resumable-agent panes.
 It rejects a manifest above the existing 16 MiB encoded transport limit before spawning the importer, rolls back the paused readers, and never truncates history to fit.

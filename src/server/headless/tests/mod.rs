@@ -3,6 +3,8 @@ use super::*;
 #[cfg(unix)]
 mod capture_draft;
 mod event_fairness;
+#[cfg(unix)]
+mod handoff_topology;
 mod idle_shutdown;
 mod native_graphics;
 #[path = "pane_move.rs"]

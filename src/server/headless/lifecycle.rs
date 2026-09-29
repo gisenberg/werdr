@@ -75,10 +75,67 @@ impl HeadlessServer {
     }
 
     #[cfg(unix)]
+    pub(super) fn legacy_handoff_topology(
+        &self,
+    ) -> io::Result<HashMap<crate::terminal::TerminalId, u32>> {
+        let reject = |reason: &str| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("legacy live handoff cannot preserve {reason}"),
+            )
+        };
+        if self.app.state.popup_pane.is_some() {
+            return Err(reject("popup ownership"));
+        }
+        let mut pane_by_terminal = HashMap::new();
+        let mut pane_ids = HashSet::new();
+        for workspace in &self.app.state.workspaces {
+            for tab in &workspace.tabs {
+                let leaves = tab.layout.pane_ids();
+                if leaves.len() != tab.panes.len() {
+                    return Err(reject("a layout/pane-map mismatch"));
+                }
+                for pane_id in leaves {
+                    if !pane_ids.insert(pane_id) {
+                        return Err(reject("duplicate pane identities"));
+                    }
+                    let pane = tab
+                        .panes
+                        .get(&pane_id)
+                        .ok_or_else(|| reject("a layout leaf without a pane"))?;
+                    let terminal_id = &pane.attached_terminal_id;
+                    if !self.app.state.terminals.contains_key(terminal_id) {
+                        return Err(reject("an attachment without terminal metadata"));
+                    }
+                    if pane_by_terminal
+                        .insert(terminal_id.clone(), pane_id.raw())
+                        .is_some()
+                    {
+                        return Err(reject("multiple attachments to one terminal"));
+                    }
+                }
+            }
+        }
+        if self
+            .app
+            .terminal_runtimes
+            .iter()
+            .any(|(terminal_id, _)| !pane_by_terminal.contains_key(terminal_id))
+        {
+            return Err(reject("a detached terminal runtime"));
+        }
+        Ok(pane_by_terminal)
+    }
+
+    #[cfg(unix)]
     pub(super) fn perform_live_handoff(
         &mut self,
         params: crate::api::schema::ServerLiveHandoffParams,
     ) -> io::Result<()> {
+        // The legacy manifest represents workspace panes only. Validate before
+        // touching sockets or clients, and never silently dispose an omitted
+        // runtime at commit. This does not establish a lossless state cut.
+        let pane_by_terminal = self.legacy_handoff_topology()?;
         info!("starting live handoff");
         let import_exe = params.import_exe.as_deref().map(std::path::PathBuf::from);
         let socket_path = crate::server::handoff::handoff_socket_path();
@@ -97,15 +154,6 @@ impl HeadlessServer {
                 return Err(err);
             }
         };
-
-        let mut pane_by_terminal = HashMap::new();
-        for ws in &self.app.state.workspaces {
-            for tab in &ws.tabs {
-                for (pane_id, pane) in &tab.panes {
-                    pane_by_terminal.insert(pane.attached_terminal_id.clone(), pane_id.raw());
-                }
-            }
-        }
 
         self.handoff_in_progress = true;
         self.disconnect_all_clients_for_handoff();
@@ -130,21 +178,33 @@ impl HeadlessServer {
             self.app.state.selected,
         );
 
-        let mut handoff_entries = Vec::new();
-        for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
-            let Some(pane_id) = pane_by_terminal.get(terminal_id).copied() else {
-                continue;
-            };
-            let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
-            handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
-            handoff_runtime.agent_state = self
-                .app
-                .state
-                .terminals
-                .get(terminal_id)
-                .and_then(|terminal| terminal.handoff_agent_state());
-            handoff_entries.push((terminal_id.clone(), handoff_runtime));
-        }
+        let handoff_entries = self
+            .app
+            .terminal_runtimes
+            .iter()
+            .map(|(terminal_id, runtime)| {
+                let pane_id = pane_by_terminal
+                    .get(terminal_id)
+                    .copied()
+                    .ok_or_else(|| io::Error::other("handoff runtime topology changed"))?;
+                let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
+                handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
+                handoff_runtime.agent_state = self
+                    .app
+                    .state
+                    .terminals
+                    .get(terminal_id)
+                    .and_then(|terminal| terminal.handoff_agent_state());
+                Ok((terminal_id.clone(), handoff_runtime))
+            })
+            .collect::<io::Result<Vec<_>>>();
+        let handoff_entries = match handoff_entries {
+            Ok(entries) => entries,
+            Err(err) => {
+                self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+                return Err(err);
+            }
+        };
 
         let panes = handoff_entries
             .iter()
@@ -179,7 +239,7 @@ impl HeadlessServer {
         let duplicate_result = (|| {
             for (terminal_id, _) in &handoff_entries {
                 let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
-                    continue;
+                    return Err(io::Error::other("handoff runtime disappeared"));
                 };
                 fds.push(runtime.duplicate_handoff_fd()?);
             }
@@ -261,9 +321,6 @@ impl HeadlessServer {
         }
 
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
-            if !pane_by_terminal.contains_key(&terminal_id) {
-                continue;
-            }
             debug!(terminal = %terminal_id, "preserving pane runtime for handoff");
             runtime.preserve_for_handoff();
         }
