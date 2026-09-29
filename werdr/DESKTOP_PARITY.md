@@ -108,6 +108,9 @@ The browser surfaced a real POSIX SSH prerequisite failure with host-key/login g
 These browser checks opened no terminal connections and left the production catalog unchanged.
 Compatible POSIX onboarding also passed through a real, loopback-only OpenSSH server using ephemeral credentials, pinned host trust, the installed owning-runtime binary and isolated local/remote configuration and state.
 Native setup started and registered the unique named session without an installation prompt; cleanup stopped and deleted that session, and the production catalog remained byte-identical.
+The deployed browser form passed registration and repair against the same real POSIX SSH/native path in a separate unique session.
+After disabling the newly registered host through the browser, repair preserved the entire saved catalog byte-for-byte, including the original host identity and disabled state, with no temporary registration left behind.
+Desktop completion controls and phone dialog bounds were checked, the phone screenshot was inspected, and no terminal connections were opened.
 This verifies the real POSIX SSH/native setup path, not production-host authentication or installation on older, incompatible and partially installed endpoints.
 
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
