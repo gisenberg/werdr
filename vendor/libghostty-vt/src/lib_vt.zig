@@ -414,6 +414,10 @@ comptime {
             @export(&c.kitty_graphics_placement_source_rect, .{ .name = "ghostty_kitty_graphics_placement_source_rect" });
             @export(&c.kitty_graphics_placement_render_info, .{ .name = "ghostty_kitty_graphics_placement_render_info" });
         }
+        if (features.snapshot) {
+            @export(&c.graphics_snapshot_encode_alloc, .{ .name = "ghostty_graphics_snapshot_encode_alloc" });
+            @export(&c.graphics_snapshot_restore, .{ .name = "ghostty_graphics_snapshot_restore" });
+        }
         if (features.grid_introspection) {
             @export(&c.grid_ref_cell, .{ .name = "ghostty_grid_ref_cell" });
             @export(&c.grid_ref_row, .{ .name = "ghostty_grid_ref_row" });

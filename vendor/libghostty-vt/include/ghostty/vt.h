@@ -146,6 +146,7 @@ extern "C" {
 #include <ghostty/vt/color.h>
 #include <ghostty/vt/color_scheme.h>
 #include <ghostty/vt/device.h>
+#include <ghostty/vt/graphics_snapshot.h>
 #include <ghostty/vt/focus.h>
 #include <ghostty/vt/formatter.h>
 #include <ghostty/vt/render.h>

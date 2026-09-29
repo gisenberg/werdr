@@ -3,6 +3,56 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0027 retained graphics C snapshot boundary
+
+status: active, host coordinator prerequisite; production handoff gate remains closed
+
+patch: `vendor/patches/libghostty-vt/0027-graphics-snapshot-c-boundary.patch`
+
+herdr issue: none; fork lossless runtime restoration prerequisite
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt.h`
+- `vendor/libghostty-vt/include/ghostty/vt/graphics_snapshot.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/graphics_snapshot.zig`
+
+reason: The C embedding boundary needs coordinated capture, attachment retention, generation rebinding and policy ownership for both screens.
+Capture visits native-file backing without reading pixels or switching screens; the host owns callback-retained references and must release them if capture aborts.
+Restore resolves destination-host references, remaps both stores and saved frame generations, installs transactionally and adopts directory backing under the existing wrapper owner.
+The API requires exclusive capture and an unpublished reconstructed destination with prior global graphics policy and destination callbacks.
+C terminals have no animation ticker; capture has absent clock authority and preserves nullable timestamps verbatim.
+Clock-bearing records and pending producer-backed images reject because this boundary cannot adopt those authorities.
+Partial protocol uploads remain supported, including future completion after source destruction.
+Tests cover both screens, inactive files, partial retain failure, resolution rollback, allocator failures, shape mismatch, missing hooks, policy replacement, lazy alternate inheritance and opaque timestamps.
+Graphics-disabled builds retain rejecting API stubs.
+Only opt-in snapshot work is added; no render, parser or mutation fast path changes.
+Rust attachment ownership, process transport, effect fencing and production handoff remain separate work.
+
+remove when: upstream provides equivalent C graphics capture/restoration with attachment and policy ownership and all boundary tests pass without this patch.
+
+verification:
+
+```sh
+zig build test-lib-vt -Demit-lib-vt=true '-Dtest-filter=graphics snapshot C' --summary all
+zig build test-lib-vt -Demit-lib-vt=true -Dtarget=x86-linux-musl '-Dtest-filter=graphics snapshot C' --summary all
+zig build test-lib-vt -Demit-lib-vt=true -Dvt-features=-kitty_graphics '-Dtest-filter=graphics snapshot C' --summary all
+python3 -m unittest scripts.test_vendor_libghostty_vt
+just libghostty-bindings
+just check
+```
+
+Run Zig commands inside `vendor/libghostty-vt`.
+Binding generation may require the host compiler's include directory through the recipe's Clang arguments.
+
 ## 0026 transactional graphics installation into unpublished terminals
 
 status: active, coordinator prerequisite; retained graphics gate remains closed

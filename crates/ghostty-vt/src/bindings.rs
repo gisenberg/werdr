@@ -695,121 +695,81 @@ unsafe extern "C" {
         out_written: *mut usize,
     ) -> GhosttyResult;
 }
-#[doc = " Terminal window gained focus"]
-pub const GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED: GhosttyFocusEvent = 0;
-#[doc = " Terminal window lost focus"]
-pub const GhosttyFocusEvent_GHOSTTY_FOCUS_LOST: GhosttyFocusEvent = 1;
-#[doc = " Terminal window lost focus"]
-pub const GhosttyFocusEvent_GHOSTTY_FOCUS_MAX_VALUE: GhosttyFocusEvent = 2147483647;
-#[doc = " Focus event types for focus reporting mode (mode 1004)."]
-pub type GhosttyFocusEvent = ::std::os::raw::c_uint;
+#[doc = " A packed 16-bit terminal mode.\n\n Encodes a mode value (bits 0–14) and an ANSI flag (bit 15) into a\n single 16-bit integer. Use the inline helper functions to construct\n and inspect modes rather than manipulating bits directly."]
+pub type GhosttyMode = u16;
+#[doc = " Mode is not recognized"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_NOT_RECOGNIZED: GhosttyModeReportState = 0;
+#[doc = " Mode is set (enabled)"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_SET: GhosttyModeReportState = 1;
+#[doc = " Mode is reset (disabled)"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_RESET: GhosttyModeReportState = 2;
+#[doc = " Mode is permanently set"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_PERMANENTLY_SET: GhosttyModeReportState = 3;
+#[doc = " Mode is permanently reset"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_PERMANENTLY_RESET: GhosttyModeReportState = 4;
+#[doc = " Mode is permanently reset"]
+pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_MAX_VALUE: GhosttyModeReportState = 2147483647;
+#[doc = " DECRPM report state values.\n\n These correspond to the Ps2 parameter in a DECRPM response\n sequence (CSI ? Ps1 ; Ps2 $ y)."]
+pub type GhosttyModeReportState = ::std::os::raw::c_uint;
 unsafe extern "C" {
-    #[doc = " Encode a focus event into a terminal escape sequence.\n\n Encodes a focus gained (CSI I) or focus lost (CSI O) report into the\n provided buffer.\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param event The focus event to encode\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
-    pub fn ghostty_focus_encode(
-        event: GhosttyFocusEvent,
+    #[doc = " Encode a DECRPM (DEC Private Mode Report) response sequence.\n\n Writes a mode report escape sequence into the provided buffer.\n The generated sequence has the form:\n - DEC private mode: CSI ? Ps1 ; Ps2 $ y\n - ANSI mode:        CSI Ps1 ; Ps2 $ y\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param mode The mode identifying the mode to report on\n @param state The report state for this mode\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
+    pub fn ghostty_mode_report_encode(
+        mode: GhosttyMode,
+        state: GhosttyModeReportState,
         buf: *mut ::std::os::raw::c_char,
         buf_len: usize,
         out_written: *mut usize,
     ) -> GhosttyResult;
 }
-#[doc = " Read bytes from a source.\n\n The callback must set @p out_read to a value no greater than @p capacity\n when returning true. A positive value reports progress; it may be less than\n capacity and does not indicate end-of-file. A zero value is definitive\n end-of-file. It must not be used to report temporary input starvation or a\n would-block condition.\n\n Returning false reports a fatal read error and the value of @p out_read is\n ignored. The library does not inspect or modify errno.\n\n All pointer arguments are borrowed and valid only for the duration of the\n callback. The callback is invoked synchronously on the calling thread.\n\n @param userdata Opaque userdata from GhosttyReader\n @param buffer Destination for read bytes; always non-NULL\n @param capacity Writable capacity of @p buffer; always greater than zero\n @param[out] out_read Number of bytes read when returning true; non-NULL\n @return true for a successful read or end-of-file, false for a fatal error"]
-pub type GhosttyReaderFn = ::std::option::Option<
-    unsafe extern "C" fn(
-        userdata: *mut ::std::os::raw::c_void,
-        buffer: *mut u8,
-        capacity: usize,
-        out_read: *mut usize,
-    ) -> bool,
->;
-#[doc = " Write bytes to a destination.\n\n Returning true means all @p len bytes were accepted. Returning false\n reports a fatal write error. A callback wrapping an interface that permits\n partial writes must retry internally until the full slice is accepted or\n an error occurs.\n\n On failure, the destination may already contain a prefix of the bytes. The\n calling operation fails and must not be resumed from that partial output.\n The library does not inspect or modify errno.\n\n @p data is borrowed and valid only for the duration of the callback. The\n callback is invoked synchronously on the calling thread. Successful return\n means the bytes were handed to the destination; it does not imply that the\n destination was flushed or made durable.\n\n @param userdata Opaque userdata from GhosttyWriter\n @param data Source bytes; always non-NULL\n @param len Number of source bytes; always greater than zero\n @return true if the complete slice was accepted, false on fatal error"]
-pub type GhosttyWriterFn = ::std::option::Option<
-    unsafe extern "C" fn(
-        userdata: *mut ::std::os::raw::c_void,
-        data: *const u8,
-        len: usize,
-    ) -> bool,
->;
-#[doc = " A byte source callback and its opaque context.\n\n The struct is passed by value. @p read must be non-NULL."]
+#[doc = " In-band size report (mode 2048): ESC [ 48 ; rows ; cols ; height ; width t"]
+pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_MODE_2048: GhosttySizeReportStyle = 0;
+#[doc = " XTWINOPS text area size in pixels: ESC [ 4 ; height ; width t"]
+pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_14_T: GhosttySizeReportStyle = 1;
+#[doc = " XTWINOPS cell size in pixels: ESC [ 6 ; height ; width t"]
+pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_16_T: GhosttySizeReportStyle = 2;
+#[doc = " XTWINOPS text area size in characters: ESC [ 8 ; rows ; cols t"]
+pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_18_T: GhosttySizeReportStyle = 3;
+#[doc = " XTWINOPS text area size in characters: ESC [ 8 ; rows ; cols t"]
+pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_STYLE_MAX_VALUE: GhosttySizeReportStyle =
+    2147483647;
+#[doc = " Size report style.\n\n Determines the output format for the terminal size report."]
+pub type GhosttySizeReportStyle = ::std::os::raw::c_uint;
+#[doc = " Terminal size information for encoding size reports."]
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyReader {
-    pub read: GhosttyReaderFn,
-    pub userdata: *mut ::std::os::raw::c_void,
+#[derive(Debug, Default, Copy, Clone)]
+pub struct GhosttySizeReportSize {
+    #[doc = " Terminal row count in cells."]
+    pub rows: u16,
+    #[doc = " Terminal column count in cells."]
+    pub columns: u16,
+    #[doc = " Width of a single terminal cell in pixels."]
+    pub cell_width: u32,
+    #[doc = " Height of a single terminal cell in pixels."]
+    pub cell_height: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of GhosttyReader"][::std::mem::size_of::<GhosttyReader>() - 16usize];
-    ["Alignment of GhosttyReader"][::std::mem::align_of::<GhosttyReader>() - 8usize];
-    ["Offset of field: GhosttyReader::read"][::std::mem::offset_of!(GhosttyReader, read) - 0usize];
-    ["Offset of field: GhosttyReader::userdata"]
-        [::std::mem::offset_of!(GhosttyReader, userdata) - 8usize];
+    ["Size of GhosttySizeReportSize"][::std::mem::size_of::<GhosttySizeReportSize>() - 12usize];
+    ["Alignment of GhosttySizeReportSize"]
+        [::std::mem::align_of::<GhosttySizeReportSize>() - 4usize];
+    ["Offset of field: GhosttySizeReportSize::rows"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, rows) - 0usize];
+    ["Offset of field: GhosttySizeReportSize::columns"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, columns) - 2usize];
+    ["Offset of field: GhosttySizeReportSize::cell_width"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, cell_width) - 4usize];
+    ["Offset of field: GhosttySizeReportSize::cell_height"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, cell_height) - 8usize];
 };
-impl Default for GhosttyReader {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[doc = " A byte destination callback and its opaque context.\n\n The struct is passed by value. @p write must be non-NULL."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyWriter {
-    pub write: GhosttyWriterFn,
-    pub userdata: *mut ::std::os::raw::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of GhosttyWriter"][::std::mem::size_of::<GhosttyWriter>() - 16usize];
-    ["Alignment of GhosttyWriter"][::std::mem::align_of::<GhosttyWriter>() - 8usize];
-    ["Offset of field: GhosttyWriter::write"]
-        [::std::mem::offset_of!(GhosttyWriter, write) - 0usize];
-    ["Offset of field: GhosttyWriter::userdata"]
-        [::std::mem::offset_of!(GhosttyWriter, userdata) - 8usize];
-};
-impl Default for GhosttyWriter {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[doc = " Read one MIME-typed representation of some content, streaming its\n bytes to a writer.\n\n The library calls this with the MIME type of the representation it\n needs. The callback writes all of that representation's data to\n @p writer, in as many calls to `writer.write(writer.userdata, data,\n len)` as is convenient (one call with everything or many small\n pieces both work), and returns true. Nothing written is retained\n beyond each write call, so the data may be borrowed from anywhere:\n a pasteboard item, a file being read, a stream.\n\n Returning false reports that the data could not be read. If the\n writer refuses a write (returns false), stop and return false\n without writing more.\n\n All pointer arguments, the mime, and the writer are borrowed and\n valid only for the duration of the callback. The callback is\n invoked synchronously on the calling thread. The API receiving the\n GhosttyMimeReader defines which MIME types are requested, how many\n times, and any consistency requirements across repeated reads.\n\n @param userdata Opaque userdata from GhosttyMimeReader\n @param mime The MIME type of the representation to read\n @param writer Where to write the data; valid only during this call\n @return true once all the data was written, false if it could not\n         be read or the writer refused a write"]
-pub type GhosttyMimeReaderFn = ::std::option::Option<
-    unsafe extern "C" fn(
-        userdata: *mut ::std::os::raw::c_void,
-        mime: GhosttyString,
-        writer: GhosttyWriter,
-    ) -> bool,
->;
-#[doc = " A MIME-typed content source callback and its opaque context.\n\n The struct is passed by value. @p read must be non-NULL."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyMimeReader {
-    pub read: GhosttyMimeReaderFn,
-    pub userdata: *mut ::std::os::raw::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of GhosttyMimeReader"][::std::mem::size_of::<GhosttyMimeReader>() - 16usize];
-    ["Alignment of GhosttyMimeReader"][::std::mem::align_of::<GhosttyMimeReader>() - 8usize];
-    ["Offset of field: GhosttyMimeReader::read"]
-        [::std::mem::offset_of!(GhosttyMimeReader, read) - 0usize];
-    ["Offset of field: GhosttyMimeReader::userdata"]
-        [::std::mem::offset_of!(GhosttyMimeReader, userdata) - 8usize];
-};
-impl Default for GhosttyMimeReader {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
+unsafe extern "C" {
+    #[doc = " Encode a terminal size report into an escape sequence.\n\n Encodes a size report in the format specified by @p style into the\n provided buffer.\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param style The size report format to encode\n @param size Terminal size information\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
+    pub fn ghostty_size_report_encode(
+        style: GhosttySizeReportStyle,
+        size: GhosttySizeReportSize,
+        buf: *mut ::std::os::raw::c_char,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 }
 #[doc = " Packed cell value.\n\n Represents a single terminal cell. Portable callers can query fields via\n ghostty_cell_get(). Boundary-sensitive callers can decode the packed value\n using the GhosttyCell descriptor returned by ghostty_type_json(). The\n manifest is authoritative for the linked build; hardcoding bit positions\n is unsupported.\n\n @ingroup screen"]
 pub type GhosttyCell = u64;
@@ -1168,6 +1128,105 @@ unsafe extern "C" {
         ref_: *const GhosttyGridRef,
         out_style: *mut GhosttyStyle,
     ) -> GhosttyResult;
+}
+#[doc = " Read bytes from a source.\n\n The callback must set @p out_read to a value no greater than @p capacity\n when returning true. A positive value reports progress; it may be less than\n capacity and does not indicate end-of-file. A zero value is definitive\n end-of-file. It must not be used to report temporary input starvation or a\n would-block condition.\n\n Returning false reports a fatal read error and the value of @p out_read is\n ignored. The library does not inspect or modify errno.\n\n All pointer arguments are borrowed and valid only for the duration of the\n callback. The callback is invoked synchronously on the calling thread.\n\n @param userdata Opaque userdata from GhosttyReader\n @param buffer Destination for read bytes; always non-NULL\n @param capacity Writable capacity of @p buffer; always greater than zero\n @param[out] out_read Number of bytes read when returning true; non-NULL\n @return true for a successful read or end-of-file, false for a fatal error"]
+pub type GhosttyReaderFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        buffer: *mut u8,
+        capacity: usize,
+        out_read: *mut usize,
+    ) -> bool,
+>;
+#[doc = " Write bytes to a destination.\n\n Returning true means all @p len bytes were accepted. Returning false\n reports a fatal write error. A callback wrapping an interface that permits\n partial writes must retry internally until the full slice is accepted or\n an error occurs.\n\n On failure, the destination may already contain a prefix of the bytes. The\n calling operation fails and must not be resumed from that partial output.\n The library does not inspect or modify errno.\n\n @p data is borrowed and valid only for the duration of the callback. The\n callback is invoked synchronously on the calling thread. Successful return\n means the bytes were handed to the destination; it does not imply that the\n destination was flushed or made durable.\n\n @param userdata Opaque userdata from GhosttyWriter\n @param data Source bytes; always non-NULL\n @param len Number of source bytes; always greater than zero\n @return true if the complete slice was accepted, false on fatal error"]
+pub type GhosttyWriterFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        data: *const u8,
+        len: usize,
+    ) -> bool,
+>;
+#[doc = " A byte source callback and its opaque context.\n\n The struct is passed by value. @p read must be non-NULL."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyReader {
+    pub read: GhosttyReaderFn,
+    pub userdata: *mut ::std::os::raw::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyReader"][::std::mem::size_of::<GhosttyReader>() - 16usize];
+    ["Alignment of GhosttyReader"][::std::mem::align_of::<GhosttyReader>() - 8usize];
+    ["Offset of field: GhosttyReader::read"][::std::mem::offset_of!(GhosttyReader, read) - 0usize];
+    ["Offset of field: GhosttyReader::userdata"]
+        [::std::mem::offset_of!(GhosttyReader, userdata) - 8usize];
+};
+impl Default for GhosttyReader {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[doc = " A byte destination callback and its opaque context.\n\n The struct is passed by value. @p write must be non-NULL."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyWriter {
+    pub write: GhosttyWriterFn,
+    pub userdata: *mut ::std::os::raw::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyWriter"][::std::mem::size_of::<GhosttyWriter>() - 16usize];
+    ["Alignment of GhosttyWriter"][::std::mem::align_of::<GhosttyWriter>() - 8usize];
+    ["Offset of field: GhosttyWriter::write"]
+        [::std::mem::offset_of!(GhosttyWriter, write) - 0usize];
+    ["Offset of field: GhosttyWriter::userdata"]
+        [::std::mem::offset_of!(GhosttyWriter, userdata) - 8usize];
+};
+impl Default for GhosttyWriter {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[doc = " Read one MIME-typed representation of some content, streaming its\n bytes to a writer.\n\n The library calls this with the MIME type of the representation it\n needs. The callback writes all of that representation's data to\n @p writer, in as many calls to `writer.write(writer.userdata, data,\n len)` as is convenient (one call with everything or many small\n pieces both work), and returns true. Nothing written is retained\n beyond each write call, so the data may be borrowed from anywhere:\n a pasteboard item, a file being read, a stream.\n\n Returning false reports that the data could not be read. If the\n writer refuses a write (returns false), stop and return false\n without writing more.\n\n All pointer arguments, the mime, and the writer are borrowed and\n valid only for the duration of the callback. The callback is\n invoked synchronously on the calling thread. The API receiving the\n GhosttyMimeReader defines which MIME types are requested, how many\n times, and any consistency requirements across repeated reads.\n\n @param userdata Opaque userdata from GhosttyMimeReader\n @param mime The MIME type of the representation to read\n @param writer Where to write the data; valid only during this call\n @return true once all the data was written, false if it could not\n         be read or the writer refused a write"]
+pub type GhosttyMimeReaderFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        mime: GhosttyString,
+        writer: GhosttyWriter,
+    ) -> bool,
+>;
+#[doc = " A MIME-typed content source callback and its opaque context.\n\n The struct is passed by value. @p read must be non-NULL."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyMimeReader {
+    pub read: GhosttyMimeReaderFn,
+    pub userdata: *mut ::std::os::raw::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyMimeReader"][::std::mem::size_of::<GhosttyMimeReader>() - 16usize];
+    ["Alignment of GhosttyMimeReader"][::std::mem::align_of::<GhosttyMimeReader>() - 8usize];
+    ["Offset of field: GhosttyMimeReader::read"]
+        [::std::mem::offset_of!(GhosttyMimeReader, read) - 0usize];
+    ["Offset of field: GhosttyMimeReader::userdata"]
+        [::std::mem::offset_of!(GhosttyMimeReader, userdata) - 8usize];
+};
+impl Default for GhosttyMimeReader {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
 }
 #[doc = " A coordinate in the terminal grid.\n\n @ingroup point"]
 #[repr(C)]
@@ -1883,82 +1942,6 @@ unsafe extern "C" {
         a: *const GhosttySelection,
         b: *const GhosttySelection,
         out_equal: *mut bool,
-    ) -> GhosttyResult;
-}
-#[doc = " A packed 16-bit terminal mode.\n\n Encodes a mode value (bits 0–14) and an ANSI flag (bit 15) into a\n single 16-bit integer. Use the inline helper functions to construct\n and inspect modes rather than manipulating bits directly."]
-pub type GhosttyMode = u16;
-#[doc = " Mode is not recognized"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_NOT_RECOGNIZED: GhosttyModeReportState = 0;
-#[doc = " Mode is set (enabled)"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_SET: GhosttyModeReportState = 1;
-#[doc = " Mode is reset (disabled)"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_RESET: GhosttyModeReportState = 2;
-#[doc = " Mode is permanently set"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_PERMANENTLY_SET: GhosttyModeReportState = 3;
-#[doc = " Mode is permanently reset"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_PERMANENTLY_RESET: GhosttyModeReportState = 4;
-#[doc = " Mode is permanently reset"]
-pub const GhosttyModeReportState_GHOSTTY_MODE_REPORT_MAX_VALUE: GhosttyModeReportState = 2147483647;
-#[doc = " DECRPM report state values.\n\n These correspond to the Ps2 parameter in a DECRPM response\n sequence (CSI ? Ps1 ; Ps2 $ y)."]
-pub type GhosttyModeReportState = ::std::os::raw::c_uint;
-unsafe extern "C" {
-    #[doc = " Encode a DECRPM (DEC Private Mode Report) response sequence.\n\n Writes a mode report escape sequence into the provided buffer.\n The generated sequence has the form:\n - DEC private mode: CSI ? Ps1 ; Ps2 $ y\n - ANSI mode:        CSI Ps1 ; Ps2 $ y\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param mode The mode identifying the mode to report on\n @param state The report state for this mode\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
-    pub fn ghostty_mode_report_encode(
-        mode: GhosttyMode,
-        state: GhosttyModeReportState,
-        buf: *mut ::std::os::raw::c_char,
-        buf_len: usize,
-        out_written: *mut usize,
-    ) -> GhosttyResult;
-}
-#[doc = " In-band size report (mode 2048): ESC [ 48 ; rows ; cols ; height ; width t"]
-pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_MODE_2048: GhosttySizeReportStyle = 0;
-#[doc = " XTWINOPS text area size in pixels: ESC [ 4 ; height ; width t"]
-pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_14_T: GhosttySizeReportStyle = 1;
-#[doc = " XTWINOPS cell size in pixels: ESC [ 6 ; height ; width t"]
-pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_16_T: GhosttySizeReportStyle = 2;
-#[doc = " XTWINOPS text area size in characters: ESC [ 8 ; rows ; cols t"]
-pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_CSI_18_T: GhosttySizeReportStyle = 3;
-#[doc = " XTWINOPS text area size in characters: ESC [ 8 ; rows ; cols t"]
-pub const GhosttySizeReportStyle_GHOSTTY_SIZE_REPORT_STYLE_MAX_VALUE: GhosttySizeReportStyle =
-    2147483647;
-#[doc = " Size report style.\n\n Determines the output format for the terminal size report."]
-pub type GhosttySizeReportStyle = ::std::os::raw::c_uint;
-#[doc = " Terminal size information for encoding size reports."]
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
-pub struct GhosttySizeReportSize {
-    #[doc = " Terminal row count in cells."]
-    pub rows: u16,
-    #[doc = " Terminal column count in cells."]
-    pub columns: u16,
-    #[doc = " Width of a single terminal cell in pixels."]
-    pub cell_width: u32,
-    #[doc = " Height of a single terminal cell in pixels."]
-    pub cell_height: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of GhosttySizeReportSize"][::std::mem::size_of::<GhosttySizeReportSize>() - 12usize];
-    ["Alignment of GhosttySizeReportSize"]
-        [::std::mem::align_of::<GhosttySizeReportSize>() - 4usize];
-    ["Offset of field: GhosttySizeReportSize::rows"]
-        [::std::mem::offset_of!(GhosttySizeReportSize, rows) - 0usize];
-    ["Offset of field: GhosttySizeReportSize::columns"]
-        [::std::mem::offset_of!(GhosttySizeReportSize, columns) - 2usize];
-    ["Offset of field: GhosttySizeReportSize::cell_width"]
-        [::std::mem::offset_of!(GhosttySizeReportSize, cell_width) - 4usize];
-    ["Offset of field: GhosttySizeReportSize::cell_height"]
-        [::std::mem::offset_of!(GhosttySizeReportSize, cell_height) - 8usize];
-};
-unsafe extern "C" {
-    #[doc = " Encode a terminal size report into an escape sequence.\n\n Encodes a size report in the format specified by @p style into the\n provided buffer.\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param style The size report format to encode\n @param size Terminal size information\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
-    pub fn ghostty_size_report_encode(
-        style: GhosttySizeReportStyle,
-        size: GhosttySizeReportSize,
-        buf: *mut ::std::os::raw::c_char,
-        buf_len: usize,
-        out_written: *mut usize,
     ) -> GhosttyResult;
 }
 #[doc = " Invalid / sentinel value."]
@@ -3471,6 +3454,92 @@ unsafe extern "C" {
         ref_: *const GhosttyGridRef,
         tag: GhosttyPointTag,
         out: *mut GhosttyPointCoordinate,
+    ) -> GhosttyResult;
+}
+#[doc = " Private GSTOR1 graphics domain, not a complete runtime handoff format."]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct GhosttyGraphicsSnapshotLimitsV1 {
+    pub size: usize,
+    pub encoded_bytes: usize,
+    pub backing_bytes: usize,
+    pub images: usize,
+    pub placements: usize,
+    pub policy_bytes: usize,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyGraphicsSnapshotLimitsV1"]
+        [::std::mem::size_of::<GhosttyGraphicsSnapshotLimitsV1>() - 48usize];
+    ["Alignment of GhosttyGraphicsSnapshotLimitsV1"]
+        [::std::mem::align_of::<GhosttyGraphicsSnapshotLimitsV1>() - 8usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::size"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, size) - 0usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::encoded_bytes"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, encoded_bytes) - 8usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::backing_bytes"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, backing_bytes) - 16usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::images"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, images) - 24usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::placements"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, placements) - 32usize];
+    ["Offset of field: GhosttyGraphicsSnapshotLimitsV1::policy_bytes"]
+        [::std::mem::offset_of!(GhosttyGraphicsSnapshotLimitsV1, policy_bytes) - 40usize];
+};
+#[doc = " Borrowed backing, valid only during this callback.\n Retain an independent host reference without reading pixels.\n On capture failure the host must release any references already retained.\n Callbacks must not reenter or mutate the terminal."]
+pub type GhosttyGraphicsSnapshotRetainFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ::std::os::raw::c_void,
+        backing: *const GhosttyKittyImageFileBacking,
+    ) -> bool,
+>;
+#[doc = " Success transfers one destination-owned reference with matching length and\n non-null read/release callbacks. Failure transfers nothing.\n The native decoder releases successful references on any later rejection.\n Context must have the provenance expected by the destination host.\n Callbacks must not reenter or mutate the terminal."]
+pub type GhosttyGraphicsSnapshotResolveFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ::std::os::raw::c_void,
+        identity: u64,
+        len: usize,
+        out_backing: *mut GhosttyKittyImageFileBacking,
+    ) -> bool,
+>;
+unsafe extern "C" {
+    #[doc = " Capture both existing screens under exclusive access.\n Does not activate screens, read files, decode pixels or emit protocol effects.\n A retain callback is required for native-file backing.\n Output uses allocator and must be released with ghostty_free.\n Limits cover logical backing and record counts, not allocator capacity/RSS.\n C terminals have no ticker: clock authority is absent and timestamps stay raw.\n Pending producer-backed images reject; partial protocol uploads are supported."]
+    pub fn ghostty_graphics_snapshot_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        limits: *const GhosttyGraphicsSnapshotLimitsV1,
+        retain: GhosttyGraphicsSnapshotRetainFn,
+        context: *mut ::std::os::raw::c_void,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Restore into an exclusively held, unpublished reconstructed terminal.\n Apply global graphics/APC policy and destination snapshot-file callbacks first.\n Exact existing screen presence is required; screens are never created here.\n Maps, pins and wrapper-owned directory backing replace transactionally.\n Generations and saved loading-frame references rebind together to fresh stamps.\n Clock-bearing records and pending producer-backed images reject unchanged.\n Source timestamps remain opaque because the C terminal has no animation ticker.\n The host must coordinate process/effect fences, attachments and fresh caches\n before publication. This function does not establish cross-process migration."]
+    pub fn ghostty_graphics_snapshot_restore(
+        terminal: GhosttyTerminal,
+        input: *const u8,
+        len: usize,
+        limits: *const GhosttyGraphicsSnapshotLimitsV1,
+        resolve: GhosttyGraphicsSnapshotResolveFn,
+        context: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+#[doc = " Terminal window gained focus"]
+pub const GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED: GhosttyFocusEvent = 0;
+#[doc = " Terminal window lost focus"]
+pub const GhosttyFocusEvent_GHOSTTY_FOCUS_LOST: GhosttyFocusEvent = 1;
+#[doc = " Terminal window lost focus"]
+pub const GhosttyFocusEvent_GHOSTTY_FOCUS_MAX_VALUE: GhosttyFocusEvent = 2147483647;
+#[doc = " Focus event types for focus reporting mode (mode 1004)."]
+pub type GhosttyFocusEvent = ::std::os::raw::c_uint;
+unsafe extern "C" {
+    #[doc = " Encode a focus event into a terminal escape sequence.\n\n Encodes a focus gained (CSI I) or focus lost (CSI O) report into the\n provided buffer.\n\n If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE\n and writes the required buffer size to @p out_written. The caller can\n then retry with a sufficiently sized buffer.\n\n @param event The focus event to encode\n @param buf Output buffer to write the encoded sequence into (may be NULL)\n @param buf_len Size of the output buffer in bytes\n @param[out] out_written On success, the number of bytes written. On\n             GHOSTTY_OUT_OF_SPACE, the required buffer size.\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer\n         is too small"]
+    pub fn ghostty_focus_encode(
+        event: GhosttyFocusEvent,
+        buf: *mut ::std::os::raw::c_char,
+        buf_len: usize,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 }
 #[doc = " Extra screen state to include in styled output.\n\n @ingroup formatter"]

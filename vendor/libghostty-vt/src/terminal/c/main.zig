@@ -17,6 +17,9 @@ pub const kitty_graphics_get = kitty_graphics.get;
 pub const kitty_graphics_image = kitty_graphics.image_get_handle;
 pub const kitty_graphics_image_get = kitty_graphics.image_get;
 pub const kitty_graphics_image_get_multi = kitty_graphics.image_get_multi;
+pub const graphics_snapshot = @import("graphics_snapshot.zig");
+pub const graphics_snapshot_encode_alloc = graphics_snapshot.encode_alloc;
+pub const graphics_snapshot_restore = graphics_snapshot.restore;
 pub const kitty_graphics_placement_iterator_new = kitty_graphics.placement_iterator_new;
 pub const kitty_graphics_placement_iterator_free = kitty_graphics.placement_iterator_free;
 pub const kitty_graphics_placement_iterator_set = kitty_graphics.placement_iterator_set;
@@ -302,6 +305,7 @@ test {
     _ = modes;
     _ = osc;
     _ = render;
+    _ = graphics_snapshot;
     _ = selection;
     _ = selection_gesture;
     _ = key_event;
