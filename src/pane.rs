@@ -25,6 +25,8 @@ use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadR
 use crate::render_signal::RenderSignal;
 
 mod agent_detection;
+#[cfg(unix)]
+mod capture_draft;
 mod cursor;
 mod input;
 mod kitty_keyboard;

@@ -31,7 +31,7 @@ fn check_graphics_domains(exclusions: u64) -> Result<(), String> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct DraftLimits {
+pub(in crate::pane) struct DraftLimits {
     pub native_bytes: usize,
     pub caller_bytes: usize,
     pub reply_bytes: usize,
@@ -47,7 +47,7 @@ pub(super) struct DraftLimits {
     pub apc_bytes: usize,
 }
 
-pub(super) struct PaneStateDraft {
+pub(in crate::pane) struct PaneStateDraft {
     native: Vec<u8>,
     caller: Vec<u8>,
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
@@ -156,7 +156,7 @@ fn check_replies(replies: &[Bytes], limit: usize) -> Result<(), String> {
 impl GhosttyPaneTerminal {
     /// Capture a private partial draft. Glyph preservation and external
     /// reader/event/writer fencing are NOT established by this method.
-    pub(super) fn capture_state_draft(
+    pub(in crate::pane) fn capture_state_draft(
         &self,
         limits: DraftLimits,
     ) -> Result<PaneStateDraft, String> {
@@ -253,7 +253,7 @@ impl GhosttyPaneTerminal {
 
     /// Build an unpublished partial draft terminal, never a handoff-ready owner.
     /// External effect queues, glyphs and producer authority remain unresolved.
-    pub(super) fn restore_state_draft(
+    pub(in crate::pane) fn restore_state_draft(
         draft: PaneStateDraft,
         limits: DraftLimits,
         writer: mpsc::Sender<Bytes>,
@@ -340,32 +340,34 @@ impl GhosttyPaneTerminal {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn limits() -> DraftLimits {
-        DraftLimits {
-            native_bytes: 16 << 20,
-            caller_bytes: 1 << 20,
-            reply_bytes: 1 << 20,
-            callback_bytes: 1 << 20,
-            native_allocation_bytes: 64 << 20,
-            continuation_bytes: 4096,
-            graphics_policy_bytes: 16384,
-            graphics: crate::ghostty::GraphicsSnapshotLimits {
-                encoded_bytes: 16 << 20,
-                backing_bytes: 64 << 20,
-                images: 1000,
-                placements: 1000,
-                policy_bytes: 16384,
-            },
-            clipboard_write_bytes: 1 << 20,
-            dnd_bytes: 1 << 20,
-            handler_bytes: 1 << 20,
-            osc_capture_bytes: 1 << 20,
-            apc_bytes: 1 << 20,
-        }
+pub(in crate::pane) fn test_limits() -> DraftLimits {
+    DraftLimits {
+        native_bytes: 16 << 20,
+        caller_bytes: 1 << 20,
+        reply_bytes: 1 << 20,
+        callback_bytes: 1 << 20,
+        native_allocation_bytes: 64 << 20,
+        continuation_bytes: 4096,
+        graphics_policy_bytes: 16384,
+        graphics: crate::ghostty::GraphicsSnapshotLimits {
+            encoded_bytes: 16 << 20,
+            backing_bytes: 64 << 20,
+            images: 1000,
+            placements: 1000,
+            policy_bytes: 16384,
+        },
+        clipboard_write_bytes: 1 << 20,
+        dnd_bytes: 1 << 20,
+        handler_bytes: 1 << 20,
+        osc_capture_bytes: 1 << 20,
+        apc_bytes: 1 << 20,
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_limits as limits;
+    use super::*;
 
     fn pane(tx: &mpsc::Sender<Bytes>) -> GhosttyPaneTerminal {
         GhosttyPaneTerminal::new(
