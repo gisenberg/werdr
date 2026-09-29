@@ -5,6 +5,21 @@ The reference is the native source and runtime pinned by `werdr/runtime.json`, i
 A passing browser suite alone does not establish parity.
 Each capability below needs native-reference evidence, implemented browser interaction, and verification of its actual behavior.
 
+## Deployment status, 2026-09-29
+
+The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `fee8679b975352afc3af3a029feec1df5889fa5c`.
+The browser gateway and terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
+The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
+Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
+Earlier references below to pending owner deployment describe the historical state of those individual feature checks.
+Deployment removes that adoption prerequisite but does not establish complete desktop parity or verify every newly available feature in production.
+
+The deployed runtime includes the Windows full-row erase correction that clears stale incoming soft-wrap boundaries.
+A packaged-runtime comparison with unchanged gateway and terminal companions reproduced marker corruption on the previous owner and preserved it on the new owner.
+The new owner passed the same seeded PowerShell prediction, desktop reload, phone resize and subsequent-input case in isolated sessions on both Windows hosts.
+Full Linux and Windows native checks passed before publishing the runtime, along with render-scaling checks.
+Lossless live transfer, OS-level keyboard layout and IME acceptance, the remaining onboarding matrix, and complete native-reference visual parity remain separate acceptance work.
+
 ## Acceptance matrix
 
 | Capability | Required browser behavior | Current evidence |
