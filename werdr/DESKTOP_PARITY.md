@@ -112,6 +112,10 @@ The deployed browser form passed registration and repair against the same real P
 After disabling the newly registered host through the browser, repair preserved the entire saved catalog byte-for-byte, including the original host identity and disabled state, with no temporary registration left behind.
 Desktop completion controls and phone dialog bounds were checked, the phone screenshot was inspected, and no terminal connections were opened.
 This verifies the real POSIX SSH/native setup path, not production-host authentication or installation on older, incompatible and partially installed endpoints.
+The same browser registration and disabled-repair flow passed against the checksum-pinned upstream `0.8.2-preview.2026-09-06-9e9bc8a14466` runtime over real isolated SSH.
+Native discovery accepted its compatible endpoint without an upgrade prompt; direct process inspection verified that the owner used the pinned older executable and retained its PID and process start identity through repair.
+The disabled catalog remained byte-identical, and cleanup stopped and deleted only the test session.
+This covers an older compatible endpoint, not rejection or installation on an incompatible one.
 
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
