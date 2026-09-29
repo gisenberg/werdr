@@ -302,6 +302,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawned_runtime_captures_partial_parser_state_without_replacing_terminal() {
+        use crate::pane::{AgentDetection, PaneLaunchEnv};
+
+        // The child writes the prefix through a real PTY, then waits for input.
+        // No test terminal replacement or direct writes into the source parser.
+        for (prefix, suffix) in [
+            (&b"ready\x1b[38;2;10;20;"[..], &b"30mX"[..]),
+            (&b"ready\x1b]2;partial"[..], &b" title\x07X"[..]),
+            (&b"ready\xf0\x9f"[..], &b"\x98\x80X"[..]),
+            (
+                &b"history0\r\nhistory1\r\nhistory2\r\nhistory3\r\nhistory4\r\nhistory5\r\nprimary\x1b[?1049halt\x1b[38;2;10;20;"[..],
+                &b"30mX\x1b[?1049l"[..],
+            ),
+        ] {
+            let octal = |bytes: &[u8]| {
+                bytes.iter().map(|b| format!("\\{b:03o}")).collect::<String>()
+            };
+            let command = format!(
+                "stty -echo -onlcr; printf '{}'; read -r gate; printf '{}'; read -r gate",
+                octal(prefix), octal(suffix)
+            );
+            let (events, _event_rx) = mpsc::channel(128);
+            let mut runtime = PaneRuntime::spawn_shell_command(
+                crate::layout::PaneId::from_raw(42),
+                5,
+                40,
+                std::env::temp_dir(),
+                &command,
+                &PaneLaunchEnv::default(),
+                AgentDetection::Disabled,
+                100_000,
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                events,
+                Arc::new(tokio::sync::Notify::new()),
+                Arc::new(crate::render_signal::RenderSignal::new()),
+            )
+            .unwrap();
+            let (tx, _rx) = mpsc::channel(128);
+            let expected = GhosttyPaneTerminal::new(
+                crate::ghostty::Terminal::new(40, 5, 100_000).unwrap(),
+                tx.clone(),
+            )
+            .unwrap();
+            expected.process_pty_bytes(runtime.pane_id, 0, prefix, &tx);
+            expected.process_pty_bytes(runtime.pane_id, 0, suffix, &tx);
+
+            // PTY reads can split anywhere, including before the partial suffix.
+            // Retry until the captured parser continues to the expected result.
+            // The child cannot advance past the cut until we explicitly release it.
+            let restored = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(draft) = runtime
+                        .capture_terminal_state_draft(test_limits(), TIMEOUT)
+                        .await
+                    {
+                        let restored = GhosttyPaneTerminal::restore_state_draft(
+                            draft,
+                            test_limits(),
+                            tx.clone(),
+                        )
+                        .unwrap();
+                        restored.process_pty_bytes(runtime.pane_id, 0, suffix, &tx);
+                        if restored.visible_ansi() == expected.visible_ansi()
+                            && restored.terminal_title() == expected.terminal_title()
+                            && restored.recent_text(100) == expected.recent_text(100)
+                        {
+                            break restored;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("real spawned terminal must preserve the unfinished prefix");
+            runtime.try_send_bytes(Bytes::from_static(b"go\n")).unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while runtime.visible_ansi() != restored.visible_ansi()
+                    || runtime.terminal_title() != restored.terminal_title()
+                    || runtime.terminal.ghostty.recent_text(100) != restored.recent_text(100)
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("original parser must continue identically after capture");
+            assert_eq!(runtime.terminal_title(), restored.terminal_title());
+            assert_eq!(
+                runtime.terminal.ghostty.recent_text(100),
+                restored.recent_text(100)
+            );
+            runtime.shutdown();
+        }
+    }
+
+    #[tokio::test]
     async fn actor_capture_restores_partial_input_and_resumes_original() {
         let (mut runtime, mut peer, reads) = fixture();
         feed(

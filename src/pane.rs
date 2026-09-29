@@ -32,6 +32,7 @@ mod detection_pause;
 mod input;
 mod kitty_keyboard;
 mod osc;
+mod runtime_terminal;
 mod snapshot_decode;
 mod state;
 mod terminal;
@@ -2393,7 +2394,7 @@ impl PaneRuntime {
         let master_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(master_fd) };
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
-        let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+        let mut terminal = runtime_terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         terminal
             .resize(cols, rows, cell_width_px, cell_height_px)
@@ -2567,7 +2568,7 @@ impl PaneRuntime {
         crate::logging::pane_spawn_started(pane_id.raw(), rows, cols, scrollback_limit_bytes);
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
-        let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+        let mut terminal = runtime_terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if crate::kitty_graphics::is_enabled() {
             terminal

@@ -87,6 +87,10 @@ build:
 bench-render-scale:
     cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1
 
+# Compare bounded continuation tracking with untracked output parsing at 1/15 panes.
+bench-continuation-tracking:
+    cargo test --release --locked --bin herdr runtime_tracking_parse_profile -- --ignored --nocapture --test-threads=1
+
 # Profile terminal target name resolution at increasing pane counts.
 bench-terminal-targets:
     cargo test --release --locked --bin herdr terminal_target_lookup_profile -- --ignored --nocapture --test-threads=1

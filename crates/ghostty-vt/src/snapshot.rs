@@ -264,8 +264,8 @@ impl Terminal {
 
     /// Create a terminal with bounded continuation tracking before any input.
     /// Overflow makes snapshot export unavailable until parser recovery; it
-    /// never silently truncates a partial sequence. Production constructors
-    /// retain their existing policy until runtime handoff integration is ready.
+    /// never silently truncates a partial sequence. The caller chooses the
+    /// retention bound independently from snapshot transport/allocation limits.
     pub fn new_with_snapshot_tracking(
         cols: u16,
         rows: u16,
