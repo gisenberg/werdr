@@ -8,7 +8,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 ## Deployment status, 2026-09-29
 
 The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `fee8679b975352afc3af3a029feec1df5889fa5c`.
-The browser gateway is deployed from `6cdec06bb9a6329f0eba4536d9c0e77bc9e8f64c`, including the upstream 0.9.3 merge and the attachment-geometry corrections.
+The browser gateway is deployed from `57972df2ff729c2fb4554bad6f6134f6e70e7e7b`, including the upstream 0.9.3 merge, attachment-geometry corrections and compact popup controls.
 Terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
 The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
 Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
@@ -91,7 +91,9 @@ This establishes passive Git refresh through the deployed gateway on Linux and b
 Isolated owners on both Windows hosts using the installed runtime passed configured shell target identity, pane placement and input, popup geometry and phone resize, exact closure, retained underlying pane and popup process exit.
 The phone screenshot exposed wrapping popup toolbar controls; the browser now hides recovery controls while connected and uses accessible compact controls in narrow popups.
 The browser regression also disconnects a minimum-size popup and verifies keyboard access to each recovery control before retrying.
-This browser repair still requires gateway deployment; isolated owner checks do not establish configured-command behavior on the production owners, whose catalogs are empty.
+This browser repair is deployed after immutable-archive verification passed all 237 browser cases, older-runtime compatibility and both Windows companion checks.
+Activation preserved native owner, pane and shell identities and saved configuration records on all three hosts.
+Isolated owner checks do not establish configured-command behavior on the production owners, whose catalogs are empty.
 
 Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
 Only the verified-compatible result registers a new host.
