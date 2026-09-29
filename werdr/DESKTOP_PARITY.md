@@ -198,6 +198,12 @@ Dark and light pixel assertions check the painted selection background, while na
 The image-capable companion uses the existing native clipboard message and is tested against the pinned old runtime; it does not require a native runtime replacement.
 `web/test/workspace-groups.spec.ts` verifies native repository groups, active-child retention, keyboard and pointer collapse/expand, search, gateway restart, concurrent settings, scoped worktree creation/opening/deletion, dirty-checkout protection, explicit group closure, retained unrelated terminals, and desktop/phone geometry.
 Group closure preserves checkouts; deletion remains a separate native action.
+The candidate integration through upstream `fb8b9e2e` retains saved worktree membership when a checkout is temporarily unavailable and keeps duplicate repository parents separate from linked children.
+The browser mirrors that hierarchy, keeps all parents visible when collapsed and excludes sibling-parent attention from each parent's collapsed status.
+Ordinary duplicate-parent closure remains individual; an explicit group action still closes the repository group.
+Menu and command actions retain their displayed close scope so a later topology change cannot silently promote individual closure to group closure.
+Native adversarial-identity tests and browser cases with confirmations enabled and disabled cover those distinctions.
+The merged candidate still requires Windows-native validation and deployment; the running owners do not acquire these changes from documentation or browser-only updates.
 Group-save conflicts survive metadata refreshes and terminal input, while deterministic timer tests verify notice replacement, expiry, and context clearing.
 `web/test/status-line.spec.ts` verifies that a late native-action failure identifies its original host after selection changes.
 The ordinary Git workspace case verifies native discovery without attached worktree metadata, an outside-Git menu, delayed results after menu replacement and closure, stable keyboard focus and terminal identity, desktop/phone menu bounds, and checkout creation from an unfocused workspace.

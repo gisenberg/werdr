@@ -16,7 +16,7 @@ import { forgetSidebarRows, renderSidebarRows, type RowToken } from './sidebar-r
 import { resolveWorkspaceRows } from './workspace-row-renderer';
 import { agentEntries } from './agent-entries';
 import { SidebarSplit } from './sidebar-split';
-import { workspaceEntries, workspaceGroup, workspaceGroupKey } from './workspace-groups';
+import { workspaceEntries, workspaceGroup, workspaceCloseGroup, workspaceGroupKey } from './workspace-groups';
 import { ContextMenu, type ContextAction } from './context-menu';
 import { attentionTarget, navigationTargets, resolveNavigationTarget } from './navigation-targets';
 import { BootConsole } from './boot';
@@ -451,11 +451,14 @@ element('activity').onclick = () => activity.open();
 element('fleet-search').oninput = () => renderFleetNavigation();
 element('agent-filter').onchange = () => renderFleetNavigation();
 type MenuTarget = NonNullable<NavigationItem['context']>;
-function closeWorkspace(machine: string, id: string) {
+function closeWorkspace(machine: string, id: string, explicitGroup = false) {
   const host = fleetState.hosts.find(host => host.machine.id === machine && host.machine.enabled && host.connection === 'online');
   const workspace = host?.snapshot?.workspaces.find(workspace => workspace.workspace_id === id);
   if (!host?.snapshot || !workspace) return;
-  const group = workspaceGroup(host.snapshot.workspaces, workspace);
+  // Capture the displayed action's scope at its caller. A disappearing sibling
+  // must never promote an individual close into a group close behind the menu.
+  const group = explicitGroup ? workspaceGroup(host.snapshot.workspaces, workspace) : undefined;
+  if (explicitGroup && !group) return;
   const message = group ? `Close this worktree group and end the running processes in all ${group.length} workspaces?\n${group.map(item => item.label || item.workspace_id).join('\n')}\nThe Git checkouts will remain on the host.` : 'Close this workspace and end all its running processes?';
   if (!preferences.confirmClose || confirm(message)) void action('workspace.close', id, group ? { close_group: true } : {}, machine);
 }
@@ -498,7 +501,9 @@ function openNavigationMenu(origin: HTMLElement, target: MenuTarget, position?: 
       const key = workspaceGroupKey(host.machine, workspace.worktree!.repo_key), collapsed = preferences.collapsedWorkspaceGroups.includes(key);
       items.push({ label: collapsed ? 'EXPAND GROUP' : 'COLLAPSE GROUP', run: () => { void toggleWorkspaceGroup(key, !collapsed); } });
     }
-    items.push({ label: group ? 'CLOSE GROUP' : 'CLOSE WORKSPACE', run: () => closeWorkspace(target.machine, target.id) });
+    const closeGroup = workspaceCloseGroup(host.snapshot!.workspaces, workspace);
+    items.push({ label: closeGroup ? 'CLOSE GROUP' : 'CLOSE WORKSPACE', run: () => closeWorkspace(target.machine, target.id, !!closeGroup) });
+    if (group && !closeGroup) items.push({ label: 'CLOSE GROUP', run: () => closeWorkspace(target.machine, target.id, true) });
   }
   if (target.kind === 'tab') {
     const tab = item as Snapshot['tabs'][number];
@@ -672,7 +677,7 @@ function refreshCommands() {
     { label: 'Rename agent', disabled: !pane || !online || !snapshot.agents.some(agent => agent.pane_id === pane && agent.agent), run: () => rename('agent.rename', pane, snapshot.agents.find(agent => agent.pane_id === pane)?.name || '', machine) },
     { id: 'close_pane', label: 'Close pane and end its process', disabled: !pane || !online, run: () => { if (!preferences.confirmClose || confirm('Close this pane and end its running process?')) void action('pane.close', pane, {}, machine); } },
     { id: 'close_tab', label: 'Close tab and end its processes', disabled: !tab || !online, run: () => { if (!preferences.confirmClose || confirm('Close this tab and end all its running processes?')) void action('tab.close', tab, {}, machine); } },
-    { id: 'close_workspace', label: workspaceGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspaceAction)) ? 'Close worktree group and end its processes' : 'Close workspace and end its processes', disabled: !workspaceAction || !online, run: () => closeWorkspace(machine, workspaceAction) },
+    { id: 'close_workspace', label: workspaceCloseGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspaceAction)) ? 'Close worktree group and end its processes' : 'Close workspace and end its processes', disabled: !workspaceAction || !online, run: () => closeWorkspace(machine, workspaceAction, !!workspaceCloseGroup(snapshot.workspaces, snapshot.workspaces.find(item => item.workspace_id === workspaceAction))) },
     ...navigationTargets(fleetState).map(target => ({ label: target.label, disabled: target.disabled, run: () => {
       const current = resolveNavigationTarget(fleetState, target);
       if (!current) { status('[WARN] Navigation target is no longer available.'); return; }

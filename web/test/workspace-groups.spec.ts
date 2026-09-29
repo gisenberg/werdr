@@ -24,6 +24,54 @@ async function action(page: Page, url: string, data: object) {
 }
 const row = (page: Page, id: string) => page.locator(`#workspaces button[data-id="local/${id}"]`);
 
+for (const confirmClose of [true, false]) test(`duplicate repository parents retain individual close intent with confirmation ${confirmClose}`, async ({ page }) => {
+  const runtime = await fixture();
+  try {
+    const repo = await repository(runtime.directory); await login(page, runtime);
+    if (!confirmClose) {
+      await page.locator('#settings').click(); await page.locator('[data-setting=confirmClose]').uncheck();
+      await page.getByRole('button', { name: 'SAVE SETTINGS', exact: true }).click(); await expect(page.locator('#settings-dialog')).toBeHidden();
+    }
+    const createParent = async (label: string) => {
+      const id = JSON.parse(await runtime.cli('workspace', 'create', '--cwd', repo, '--label', label)).result.root_pane.workspace_id as string;
+      // A normal Git workspace gains authoritative worktree membership only
+      // after a native worktree operation; merely sharing cwd is not enough.
+      await action(page, runtime.url, { action: 'worktree.open', id, path: repo }); return id;
+    };
+    const first = await createParent('First repository parent'), second = await createParent('Second repository parent');
+    const child = (await action(page, runtime.url, { action: 'worktree.create', id: first, branch: 'linked-child', path: join(runtime.directory, 'linked-child') })).root_pane.workspace_id;
+    await expect(row(page, first)).toBeVisible(); await expect(row(page, second)).toBeVisible(); await expect(row(page, child)).toBeVisible();
+    const toggle = row(page, first).locator('..').locator('.workspace-group-toggle');
+    await expect(toggle).toBeVisible(); await toggle.click();
+    await expect(row(page, first)).toBeVisible(); await expect(row(page, second)).toBeVisible();
+    const requests: Record<string, unknown>[] = [];
+    page.on('request', request => { if (request.url().endsWith('/api/action') && request.method() === 'POST') { const body = request.postDataJSON(); if (body.action === 'workspace.close') requests.push(body); } });
+    await row(page, first).click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'CLOSE WORKSPACE', exact: true })).toBeVisible();
+    // Change topology after displaying an individual action. The API must see
+    // individual intent even though this parent has become the sole parent.
+    await runtime.cli('workspace', 'close', second);
+    await expect(row(page, second)).toHaveCount(0);
+    if (confirmClose) page.once('dialog', dialog => { expect(dialog.message()).not.toContain('group'); void dialog.accept(); });
+    await page.getByRole('menuitem', { name: 'CLOSE WORKSPACE', exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].close_group).toBeUndefined();
+    await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(row(page, first)).toBeVisible(); await expect(row(page, child)).toBeVisible();
+    const third = await createParent('Third repository parent'); await expect(row(page, third)).toBeVisible();
+    await row(page, third).click({ button: 'right' });
+    if (confirmClose) page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('menuitem', { name: 'CLOSE WORKSPACE', exact: true }).click();
+    await expect(row(page, third)).toHaveCount(0); await expect(row(page, first)).toBeVisible(); await expect(row(page, child)).toBeVisible();
+    const fourth = await createParent('Fourth repository parent'); await expect(row(page, fourth)).toBeVisible();
+    await row(page, first).click({ button: 'right' });
+    if (confirmClose) page.once('dialog', dialog => { expect(dialog.message()).toContain('all 3 workspaces'); void dialog.accept(); });
+    await page.getByRole('menuitem', { name: 'CLOSE GROUP', exact: true }).click();
+    await expect(row(page, first)).toHaveCount(0); await expect(row(page, child)).toHaveCount(0); await expect(row(page, fourth)).toHaveCount(0);
+    expect(requests.at(-1)!.close_group).toBe(true); await access(join(repo, 'README.md'));
+  } finally { await runtime.close(); }
+});
+
 test('native worktree groups retain active children, persist collapse, search hidden children and scope contextual checkout actions', async ({ page }) => {
   test.setTimeout(120000);
   const runtime = await fixture();

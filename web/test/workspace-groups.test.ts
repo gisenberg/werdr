@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Machine, Workspace } from '../shared/fleet.ts';
-import { workspaceEntries, workspaceGroup, workspaceGroupKey } from '../src/workspace-groups.ts';
+import { workspaceEntries, workspaceGroup, workspaceCloseGroup, workspaceGroupKey } from '../src/workspace-groups.ts';
 import { browserAction } from '../server/browser-actions.ts';
 
 const machine: Machine = { id: 'host', label: 'same label', target: 'user@host', session: 'named', enabled: true };
@@ -40,4 +40,26 @@ test('workspace group closure is explicit and never coerces an invalid broad-clo
   assert.deepEqual(browserAction({ action: 'workspace.close', id: 'w1', close_group: true }).params, { workspace_id: 'w1', close_group: true });
   assert.deepEqual(browserAction({ action: 'workspace.close', id: 'w1', close_group: false }).params, { workspace_id: 'w1' });
   for (const close_group of ['true', 1, null, [], {}]) assert.throws(() => browserAction({ action: 'workspace.close', id: 'w1', close_group }));
+});
+
+test('duplicate repository parents remain independent and only linked worktrees become children', () => {
+  const duplicate = { ...workspace('duplicate', false), agent_status: 'blocked' as const };
+  const collapsed = new Set([workspaceGroupKey(machine, 'repository')]);
+  const independent = workspaceEntries(machine, [parent, duplicate], collapsed, '');
+  assert.deepEqual(ids(independent), ['parent', 'duplicate']);
+  assert(independent.every(row => !row.indented && !row.group));
+  assert.equal(workspaceGroup([parent, duplicate], parent), undefined);
+  const all = [a, other, parent, duplicate, b];
+  const rows = workspaceEntries(machine, all, collapsed, 'b');
+  assert.deepEqual(ids(rows), ['parent', 'duplicate', 'b', 'other']);
+  assert.deepEqual(rows.map(row => row.indented), [false, false, true, false]);
+  assert.equal(rows[0].status, 'idle', 'another parent must not supply collapsed attention');
+  assert.equal(rows[1].status, 'blocked');
+  assert.equal(rows[2].lastChild, true);
+  assert.deepEqual(ids(workspaceEntries(machine, all, collapsed, '', '/checkout/a')), ['parent', 'duplicate', 'a']);
+  assert.equal(workspaceCloseGroup(all, parent), undefined);
+  assert.equal(workspaceCloseGroup(all, duplicate), undefined);
+  assert.equal(workspaceCloseGroup(all, a), undefined);
+  assert.deepEqual(workspaceGroup(all, duplicate), [a, parent, duplicate, b]);
+  assert.deepEqual(workspaceCloseGroup([parent, a, b], parent), [parent, a, b]);
 });
