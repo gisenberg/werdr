@@ -36,6 +36,13 @@ impl TerminalCaptureGuard<'_> {
 }
 
 impl TerminalRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_set_process_shutdown_probe(
+        &mut self,
+        probe: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        self.0.test_set_process_shutdown_probe(probe);
+    }
     // Process-local evidence only, not a cross-process child reaper lease.
     pub(crate) fn exit_record(&self) -> crate::pane::ExitRecord {
         self.0.exit_record()

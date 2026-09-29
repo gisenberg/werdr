@@ -354,6 +354,19 @@ impl HeadlessServer {
             return false;
         };
         let (mut ev, exit_claim) = validated.into_parts();
+        let exit_claim = match exit_claim {
+            Some(claim) if claim.is_detached() => {
+                let Some(terminal_id) = self.app.finish_detached_runtime_exit(claim) else {
+                    return false;
+                };
+                self.shutdown_terminal_stream_clients(
+                    terminal_id.as_str(),
+                    format!("terminal {terminal_id} exited"),
+                );
+                return true;
+            }
+            claim => claim,
+        };
         let focus_response = match &mut ev {
             AppEvent::WorktreeAddFinished(result) => result
                 .api_request

@@ -272,19 +272,95 @@ async fn runtime_exit_timeout_never_closes_replacement_or_accepts_late_retired_e
 async fn runtime_exit_detached_evidence_cannot_close_former_pane() {
     let (mut app, pane, terminal, record) = fixture();
     record.test_record(ChildExitReason::Exited);
-    let detached = app.terminal_runtimes.remove(&terminal).unwrap();
+    let mut detached = app.terminal_runtimes.remove(&terminal).unwrap();
+    let signals = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    detached.test_set_process_shutdown_probe(signals.clone());
     let detached_id = TerminalId::alloc();
     app.state.terminals.insert(
         detached_id.clone(),
         crate::terminal::TerminalState::new(detached_id.clone(), std::env::temp_dir()),
     );
-    app.terminal_runtimes.insert(detached_id, detached);
+    app.terminal_runtimes.insert(detached_id.clone(), detached);
+    app.state
+        .direct_attach_resize_locks
+        .insert(detached_id.clone());
+    app.state
+        .terminal_runtime_shutdowns
+        .extend([detached_id.clone(), terminal.clone()]);
     let (replacement, _) = TerminalRuntime::test_with_channel(40, 5);
-    app.terminal_runtimes.insert(terminal, replacement);
+    app.terminal_runtimes.insert(terminal.clone(), replacement);
+    let events_before = app.event_hub.events_after(0).len();
     app.handle_internal_event(event(pane, &record));
     assert!(app.find_pane(pane).is_some());
-    assert!(!record.is_claimed());
+    assert!(record.is_claimed());
     assert!(record.evidence().is_some());
+    assert!(app.terminal_runtimes.get(&detached_id).is_none());
+    assert!(!app.state.terminals.contains_key(&detached_id));
+    assert!(!app.state.direct_attach_resize_locks.contains(&detached_id));
+    assert_eq!(app.state.terminal_runtime_shutdowns, vec![terminal]);
+    assert_eq!(signals.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(app.event_hub.events_after(0).len(), events_before);
+    assert!(!app.handle_internal_event_with_render_impact(event(pane, &record)));
+    app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn detached_exit_revalidates_replacement_and_reattachment_before_removal() {
+    for reattach in [false, true] {
+        let (mut app, pane, terminal, _) = fixture();
+        let (runtime, _) = TerminalRuntime::test_with_channel(40, 5);
+        let record = runtime.exit_record();
+        record.test_record(ChildExitReason::Exited);
+        let detached = TerminalId::alloc();
+        app.state.terminals.insert(
+            detached.clone(),
+            crate::terminal::TerminalState::new(detached.clone(), std::env::temp_dir()),
+        );
+        app.terminal_runtimes.insert(detached.clone(), runtime);
+        let (_, claim) = app
+            .validate_runtime_exit(event(pane, &record))
+            .unwrap()
+            .into_parts();
+        let claim = claim.unwrap();
+        assert!(claim.is_detached());
+        if reattach {
+            app.state.workspaces[0].tabs[0]
+                .panes
+                .get_mut(&pane)
+                .unwrap()
+                .attached_terminal_id = detached.clone();
+        } else {
+            let (replacement, _) = TerminalRuntime::test_with_channel(40, 5);
+            app.terminal_runtimes.insert(detached.clone(), replacement);
+        }
+        assert!(app.finish_detached_runtime_exit(claim).is_none());
+        assert!(!record.is_claimed());
+        assert!(app.terminal_runtimes.get(&detached).is_some());
+        assert!(app.terminal_runtimes.get(&terminal).is_some());
+        assert!(app.find_pane(pane).is_some());
+        if reattach {
+            app.handle_internal_event(event(pane, &record));
+            assert!(record.is_claimed());
+            assert!(app.find_pane(pane).is_none());
+        }
+        app.state.assert_invariants_for_test();
+    }
+}
+
+#[tokio::test]
+async fn detached_exit_without_metadata_still_removes_exact_runtime() {
+    let (mut app, pane, _, _) = fixture();
+    let (runtime, _) = TerminalRuntime::test_with_channel(40, 5);
+    let record = runtime.exit_record();
+    record.test_record(ChildExitReason::WaitFailed);
+    let detached = TerminalId::alloc();
+    app.terminal_runtimes.insert(detached.clone(), runtime);
+    app.state.terminal_runtime_shutdowns.push(detached.clone());
+    app.handle_internal_event(event(pane, &record));
+    assert!(record.is_claimed());
+    assert!(app.terminal_runtimes.get(&detached).is_none());
+    assert!(app.state.terminal_runtime_shutdowns.is_empty());
+    assert!(app.find_pane(pane).is_some());
     app.state.assert_invariants_for_test();
 }
 

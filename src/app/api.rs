@@ -136,6 +136,13 @@ impl App {
         ev: AppEvent,
         exit_claim: Option<super::runtime_exit::RuntimeExitClaim>,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let exit_claim = match exit_claim {
+            Some(claim) if claim.is_detached() => {
+                self.finish_detached_runtime_exit(claim);
+                return Vec::new();
+            }
+            claim => claim,
+        };
         let mut worktree_restore_failed = false;
         let ev = match ev {
             AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request } => {

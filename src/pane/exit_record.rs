@@ -109,6 +109,72 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn observed_exit_drop_closes_actor_descriptor_without_process_signaling() {
+        use std::io::Read;
+        let (mut runtime, actor, mut peer, _) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_actor();
+        let probe = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        runtime.test_set_process_shutdown_probe(probe.clone());
+        runtime.exit_record.test_record(ChildExitReason::Exited);
+        drop(runtime);
+        assert!(actor
+            .try_write_user_input(bytes::Bytes::from_static(b"after exit"))
+            .is_err());
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
+        assert_eq!(probe.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn observed_exit_disposal_never_invokes_numeric_process_shutdown() {
+        let evidence = [
+            ExitEvidence::ChildWait(ChildExitReason::Exited),
+            ExitEvidence::ChildWait(ChildExitReason::Interrupted),
+            ExitEvidence::ChildWait(ChildExitReason::WaitFailed),
+            #[cfg(unix)]
+            ExitEvidence::ImportedReaderEnded,
+        ];
+        for evidence in evidence {
+            for explicit_shutdown in [false, true] {
+                let (mut runtime, input) = crate::pane::PaneRuntime::test_with_channel(40, 5);
+                let probe = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                runtime.test_set_process_shutdown_probe(probe.clone());
+                let detector = runtime.detect_handle.clone().unwrap();
+                assert!(runtime
+                    .exit_record
+                    .record(evidence, &AtomicBool::new(false)));
+                if explicit_shutdown {
+                    runtime.shutdown();
+                } else {
+                    drop(runtime);
+                }
+                assert_eq!(probe.load(Ordering::Relaxed), 0);
+                assert!(input.is_closed());
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    while !detector.is_finished() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+        }
+        for explicit_shutdown in [false, true] {
+            let (mut runtime, _) = crate::pane::PaneRuntime::test_with_channel(40, 5);
+            let probe = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            runtime.test_set_process_shutdown_probe(probe.clone());
+            if explicit_shutdown {
+                runtime.shutdown();
+            } else {
+                drop(runtime);
+            }
+            assert_eq!(probe.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn real_child_watcher_retains_outcome_with_full_or_closed_owner_channel() {
         use crate::pane::{AgentDetection, PaneLaunchEnv, PaneRuntime};
         for closed in [false, true] {

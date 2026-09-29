@@ -24,6 +24,119 @@ fn fixture() -> (
 }
 
 #[tokio::test]
+async fn detached_exit_closes_only_exact_terminal_attach_and_observe_streams() {
+    let (mut server, pane, old_terminal, record) = fixture();
+    let mut controls = Vec::new();
+    for client_id in [7, 8, 9] {
+        let (writer, control, _) = test_client_writer();
+        server.handle_server_event(ServerEvent::ClientConnected {
+            client_id,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            writer,
+        });
+        controls.push(control);
+    }
+    server.handle_server_event(ServerEvent::ClientAttachTerminal {
+        client_id: 7,
+        terminal_id: old_terminal.to_string(),
+        takeover: false,
+    });
+    server.handle_server_event(ServerEvent::ClientObserveTerminal {
+        client_id: 8,
+        target: old_terminal.to_string(),
+    });
+    let replacement_id = crate::terminal::TerminalId::alloc();
+    let (replacement, _) = TerminalRuntime::test_with_channel(40, 5);
+    let replacement_record = replacement.exit_record();
+    server.app.state.terminals.insert(
+        replacement_id.clone(),
+        crate::terminal::TerminalState::new(replacement_id.clone(), std::env::temp_dir()),
+    );
+    server
+        .app
+        .terminal_runtimes
+        .insert(replacement_id.clone(), replacement);
+    server.app.state.workspaces[0].tabs[0]
+        .panes
+        .get_mut(&pane)
+        .unwrap()
+        .attached_terminal_id = replacement_id.clone();
+    server.handle_server_event(ServerEvent::ClientAttachTerminal {
+        client_id: 9,
+        terminal_id: replacement_id.to_string(),
+        takeover: false,
+    });
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&replacement_id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Working,
+        );
+    let before = server.app.event_hub.events_after(0).len();
+    let focus = server.app.state.workspaces[0].tabs[0].layout.focused();
+    record.test_record(ChildExitReason::Exited);
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::RuntimeExited {
+            pane_id: pane,
+            record: record.clone()
+        })
+    );
+    for client_id in [7, 8] {
+        assert!(!server.clients.contains_key(&client_id));
+    }
+    assert!(server.clients.contains_key(&9));
+    for control in &controls[..2] {
+        assert_eq!(
+            read_server_shutdown_reason(control.recv_timeout(Duration::from_secs(2)).unwrap()),
+            Some(format!("terminal {old_terminal} exited"))
+        );
+    }
+    assert!(server.app.terminal_runtimes.get(&old_terminal).is_none());
+    assert!(!server.app.state.terminals.contains_key(&old_terminal));
+    assert!(!server
+        .app
+        .state
+        .direct_attach_resize_locks
+        .contains(&old_terminal));
+    assert!(server
+        .app
+        .state
+        .direct_attach_resize_locks
+        .contains(&replacement_id));
+    assert!(server
+        .app
+        .terminal_runtimes
+        .get(&replacement_id)
+        .unwrap()
+        .exit_record()
+        .same_runtime(&replacement_record));
+    assert_eq!(
+        server.app.state.terminals[&replacement_id].state,
+        crate::detect::AgentState::Working
+    );
+    assert_eq!(
+        server.app.state.workspaces[0].tabs[0].layout.focused(),
+        focus
+    );
+    assert_eq!(server.app.event_hub.events_after(0).len(), before);
+    assert!(
+        !server.handle_internal_event_with_forwarding(AppEvent::RuntimeExited {
+            pane_id: pane,
+            record
+        })
+    );
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
 async fn runtime_exit_queued_stale_identity_has_no_headless_effects() {
     let (mut server, pane, terminal, record) = fixture();
     record.test_record(ChildExitReason::Interrupted);

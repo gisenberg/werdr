@@ -38,15 +38,21 @@ impl WorktreeRestoreRequest {
     }
 }
 
-/// A move-only proof of an owner claim. Only this module constructs it.
+/// A move-only validated exit destination. Attached and retired exits are already
+/// claimed; detached candidates are revalidated and claimed at removal instead.
+/// Only this module constructs it.
 pub(crate) struct RuntimeExitClaim {
     retired_terminal: Option<crate::terminal::TerminalId>,
+    detached: Option<(crate::terminal::TerminalId, crate::pane::ExitRecord)>,
 }
 
 #[cfg(test)]
 mod tests;
 
 impl RuntimeExitClaim {
+    pub(crate) fn is_detached(&self) -> bool {
+        self.detached.is_some()
+    }
     pub(crate) fn is_retired(&self) -> bool {
         self.retired_terminal.is_some()
     }
@@ -98,14 +104,32 @@ impl App {
                 popup.pane_id
             } else {
                 // Resolve the current attachment, never the producer's old pane.
-                // Detached evidence remains unclaimed and retained by its runtime.
-                self.state
+                let attachment = self
+                    .state
                     .workspaces
                     .iter()
                     .flat_map(|workspace| &workspace.tabs)
                     .flat_map(|tab| &tab.panes)
                     .find(|(_, pane)| &pane.attached_terminal_id == terminal_id)
-                    .map(|(id, _)| *id)?
+                    .map(|(id, _)| *id);
+                if let Some(pane_id) = attachment {
+                    pane_id
+                } else {
+                    record.evidence()?;
+                    if record.is_claimed() {
+                        return None;
+                    }
+                    return Some(ValidatedOwnerEvent {
+                        event: AppEvent::RuntimeExited {
+                            pane_id,
+                            record: record.clone(),
+                        },
+                        exit: Some(RuntimeExitClaim {
+                            retired_terminal: None,
+                            detached: Some((terminal_id.clone(), record)),
+                        }),
+                    });
+                }
             }
         };
         let exit_reason = record.claim()?;
@@ -114,7 +138,51 @@ impl App {
                 pane_id: target,
                 exit_reason,
             },
-            exit: Some(RuntimeExitClaim { retired_terminal }),
+            exit: Some(RuntimeExitClaim {
+                retired_terminal,
+                detached: None,
+            }),
         })
+    }
+
+    /// Revalidate at removal, so even a retained token cannot target a replacement
+    /// or a terminal reattached since normalization. No await separates claim and
+    /// removal. This never applies the old producer pane's exit policy.
+    pub(crate) fn finish_detached_runtime_exit(
+        &mut self,
+        claim: RuntimeExitClaim,
+    ) -> Option<crate::terminal::TerminalId> {
+        let (terminal_id, record) = claim.detached?;
+        if self
+            .state
+            .popup_pane
+            .as_ref()
+            .is_some_and(|popup| popup.terminal_id == terminal_id)
+            || self
+                .state
+                .workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.tabs)
+                .flat_map(|tab| tab.panes.values())
+                .any(|pane| pane.attached_terminal_id == terminal_id)
+            || !self
+                .terminal_runtimes
+                .get(&terminal_id)
+                .is_some_and(|runtime| runtime.exit_record().same_runtime(&record))
+        {
+            return None;
+        }
+        record.claim()?;
+        let runtime = self.terminal_runtimes.remove(&terminal_id)?;
+        self.state.terminals.remove(&terminal_id);
+        self.state.direct_attach_resize_locks.remove(&terminal_id);
+        self.state
+            .terminal_runtime_shutdowns
+            .retain(|queued| queued != &terminal_id);
+        // Observed-exit disposal releases owned PTY/task resources without using
+        // a potentially reused numeric child PID to signal unrelated processes.
+        drop(runtime);
+        self.sync_agent_metadata_deadline();
+        Some(terminal_id)
     }
 }

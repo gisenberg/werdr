@@ -1399,6 +1399,8 @@ pub struct PaneRuntime {
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
     preserve_processes_on_drop: bool,
+    #[cfg(test)]
+    process_shutdown_probe: Option<Arc<std::sync::atomic::AtomicUsize>>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
@@ -1588,19 +1590,15 @@ pub enum WheelRouting {
 
 impl Drop for PaneRuntime {
     fn drop(&mut self) {
-        // Abort detection task immediately and terminate the owned session.
-        // The PTY actor shuts down before the process/session policy runs.
+        // Release owned terminal tasks and I/O before process/session policy.
+        // Observed exits no longer authorize numeric PID/session signaling.
         if let Some(handle) = &self.detect_handle {
             handle.abort();
         }
         self.compression.abort();
         self.io.shutdown();
         if !self.preserve_processes_on_drop {
-            shutdown_pane_processes(
-                self.pane_id,
-                self.child_pid.load(Ordering::Acquire),
-                self.child_wait_completed.as_deref(),
-            );
+            self.shutdown_owned_processes();
         }
     }
 }
@@ -2102,6 +2100,37 @@ fn publish_reported_cwd(
 }
 
 impl PaneRuntime {
+    fn shutdown_owned_processes(&self) {
+        // Once exit evidence exists, numeric PID/session lookup is no longer
+        // authority over that process or its descendants. WaitFailed and imported
+        // reader termination also do not prove ownership of a live numeric PID.
+        // Drop/shutdown still release our PTY and tasks; do not signal descendants
+        // without retained process ownership. Closing the owned PTY may itself
+        // deliver the platform's normal terminal hangup.
+        if self.exit_record.evidence().is_some() {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(probe) = &self.process_shutdown_probe {
+            probe.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        shutdown_pane_processes(
+            self.pane_id,
+            self.child_pid.load(Ordering::Acquire),
+            self.child_wait_completed.as_deref(),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_process_shutdown_probe(
+        &mut self,
+        probe: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        self.process_shutdown_probe = Some(probe);
+        self.preserve_processes_on_drop = false;
+    }
+
     // Cloning preserves incarnation identity without consuming exit evidence.
     pub(crate) fn exit_record(&self) -> ExitRecord {
         self.exit_record.clone()
@@ -2113,11 +2142,7 @@ impl PaneRuntime {
         }
         self.compression.abort();
         self.io.shutdown();
-        shutdown_pane_processes(
-            self.pane_id,
-            self.child_pid.load(Ordering::Acquire),
-            self.child_wait_completed.as_deref(),
-        );
+        self.shutdown_owned_processes();
         self.preserve_processes_on_drop = true;
     }
 
@@ -2555,6 +2580,8 @@ impl PaneRuntime {
             detect_reset_notify,
             pending_release,
             preserve_processes_on_drop: true,
+            #[cfg(test)]
+            process_shutdown_probe: None,
             compression,
             detect_handle: Some(detect_handle),
             detection_pause: Some(detection_pause),
@@ -3170,6 +3197,8 @@ impl PaneRuntime {
             detect_reset_notify,
             pending_release,
             preserve_processes_on_drop: false,
+            #[cfg(test)]
+            process_shutdown_probe: None,
             compression,
             detect_handle,
             detection_pause,
@@ -3900,6 +3929,7 @@ impl PaneRuntime {
                 detect_reset_notify: Arc::new(Notify::new()),
                 pending_release: Arc::new(Mutex::new(None)),
                 preserve_processes_on_drop: true,
+                process_shutdown_probe: None,
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
                 detection_pause: None,
@@ -5052,6 +5082,7 @@ mod tests {
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
+            process_shutdown_probe: None,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
             detection_pause: None,
@@ -5094,6 +5125,7 @@ mod tests {
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
+            process_shutdown_probe: None,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
             detection_pause: None,
