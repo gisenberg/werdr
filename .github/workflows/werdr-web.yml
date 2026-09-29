@@ -2,16 +2,8 @@ name: Werdr web
 
 on:
   pull_request:
-    paths:
-      - 'web/**'
-      - 'werdr/**'
-      - '.github/workflows/werdr-web.yml'
   push:
     branches: [master]
-    paths:
-      - 'web/**'
-      - 'werdr/**'
-      - '.github/workflows/werdr-web.yml'
 
 permissions:
   contents: read
@@ -20,7 +12,7 @@ jobs:
   web:
     if: github.repository == 'gisenberg/werdr'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -35,7 +27,39 @@ jobs:
       - run: npm run check
         working-directory: web
       - run: node werdr/fetch-runtime.mjs
+      # Candidate-only API and close semantics require a matching owner.
+      # Keep the downloaded older runtime for a separate compatibility check.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: 1.96.1
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+      - name: Install just
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2.81.9
+        with:
+          tool: just
+      - name: Restore native build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: werdr-web-release
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Build candidate runtime and terminal client
+        run: just build
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npm run test:e2e
+      - name: Candidate browser suite
+        run: npm run test:e2e
         working-directory: web
+        env:
+          WERDR_TEST_HERDR_BIN: ${{ github.workspace }}/target/release/herdr
+          WERDR_TERMINAL_CLIENT_BIN: ${{ github.workspace }}/target/release/herdr
+          WERDR_WORKSPACE_ROWS_NATIVE_BIN: ${{ github.workspace }}/target/release/herdr
+      - name: Older owning-runtime compatibility
+        run: npm run test:e2e -- terminal-client.spec.ts --output=test-results-compatibility
+        working-directory: web
+        env:
+          WERDR_TEST_HERDR_BIN: ${{ github.workspace }}/.local/bin/herdr
+          WERDR_TERMINAL_CLIENT_BIN: ${{ github.workspace }}/target/release/herdr
