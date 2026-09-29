@@ -37,6 +37,7 @@ If a regression requires a native fix, add a focused herdr test and patch with t
 Stage `werdr/install-windows-server.ps1` on a Windows host and run it in a visible wmux pane with `pwsh -NoLogo -NoProfile -File <staged-script>`.
 The script installs the complete checksum-pinned Windows ZIP, including app-local ConPTY libraries, into `%LOCALAPPDATA%\werdr\herdr\<version>`.
 It preserves other herdr installations and never replaces a running managed runtime with a different version.
+An existing managed task must have the expected description and exactly one action targeting the pinned executable and requested session; differing tasks are rejected before startup.
 The `Werdr Herdr Server` Scheduled Task owns the explicit `werdr` session independently of wmux's pane processes.
 Where permitted, an S4U task starts at system boot; unprivileged accounts fall back to a task that starts at that user's logon.
 Both modes restart failed servers and have no execution-time limit.

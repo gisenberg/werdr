@@ -10,6 +10,7 @@ $release = Join-Path $base $version
 $binary = Join-Path $release 'herdr.exe'
 $taskName = if ($Session -eq 'werdr') { 'Werdr Herdr Server' } else { 'Werdr Herdr Server ' + $Session }
 $description = 'Managed by werdr/install-windows-server.ps1; owns the ' + $Session + ' session only.'
+$taskArguments = '--session ' + $Session + ' server'
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'This release requires x64 Windows.' }
 New-Item -ItemType Directory -Force -Path $base | Out-Null
 if (-not (Test-Path $release)) {
@@ -28,9 +29,9 @@ if (-not (Test-Path $release)) {
 }
 if (-not (Test-Path $binary) -or (Get-Content -LiteralPath (Join-Path $release '.archive-sha256') -Raw).Trim() -ne $digest) { throw 'Existing managed release is incomplete or unrecognized.' }
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing -and ($existing.Description -ne $description -or $existing.Actions.Execute -ne $binary)) { throw 'Existing task differs; a live-runtime upgrade requires an explicit handoff.' }
+if ($existing -and ($existing.Description -ne $description -or @($existing.Actions).Count -ne 1 -or $existing.Actions[0].Execute -ne $binary -or $existing.Actions[0].Arguments -cne $taskArguments)) { throw 'Existing task differs; a live-runtime upgrade requires an explicit handoff.' }
 if (-not $existing) {
-    $action = New-ScheduledTaskAction -Execute $binary -Argument ('--session ' + $Session + ' server') -WorkingDirectory $env:USERPROFILE
+    $action = New-ScheduledTaskAction -Execute $binary -Argument $taskArguments -WorkingDirectory $env:USERPROFILE
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
