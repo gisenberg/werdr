@@ -103,7 +103,10 @@ These fixtures never install a runtime and do not replace the remaining live onb
 Live onboarding through the management service passed against both compatible Windows endpoints with an isolated local catalog.
 Each endpoint registered without an installation prompt, and its owner boot and pane identities plus the production catalog remained unchanged.
 A real POSIX SSH host-key rejection also produced the prerequisite error without prompting for installation or modifying the isolated catalog.
-These checks do not cover browser-form behavior, successful POSIX onboarding, or installation on older, incompatible and partially installed live endpoints.
+The deployed browser host-management form also registered both compatible Windows endpoints through an isolated gateway/catalog, with readable completion dialogs and accessible controls at desktop and phone sizes.
+The browser surfaced a real POSIX SSH prerequisite failure with host-key/login guidance, no installation prompt and no catalog mutation.
+These browser checks opened no terminal connections and left the production catalog unchanged.
+Successful POSIX onboarding and installation on older, incompatible and partially installed live endpoints remain unverified.
 
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
