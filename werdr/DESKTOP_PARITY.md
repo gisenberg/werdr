@@ -39,7 +39,10 @@ Wire evidence shows a desktop terminal settled at 129 columns reconnecting at 13
 The deployed browser fits its initial attachment before authoritative scrollbar screen metadata establishes the normal-screen gutter.
 The candidate now reads validated native screen metadata before initial fitting, with a bounded optional read, stale-attachment cancellation and terminal-identity checking.
 Desktop and phone regressions cover primary and alternate geometry without inferring screen state from prior connections.
-The correction still requires Windows and deployment verification; surviving the extra resize is not equivalent to avoiding it.
+The candidate passed the expanded Windows matrix on both hosts with explicit assertions that desktop, phone and alternate-screen reloads begin at their settled width.
+Deployment verification remains outstanding; surviving an extra resize is not equivalent to avoiding it.
+Expanded Windows validation also exposed a dropped rapid resize during the fitting library's 50 ms guard.
+The candidate uses its dimension measurement directly so each observer delivery retains the latest requested geometry, with a consecutive-animation-frame regression.
 The alternate-screen fixture also does not establish full-screen application redraw behavior, complete semantic color/theme parity, or OS-level keyboard layout and IME acceptance.
 
 ## Acceptance matrix

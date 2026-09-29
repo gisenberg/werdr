@@ -39,6 +39,16 @@ test('fitting forwards geometry even when a native frame already resized the ren
     await expect.poll(() => sizes.some(size => size.cols === width + 1 && size.rows === height)).toBe(true);
     await expect.poll(() => latest.width).toBe(width + 1);
     await expect(page.locator('#shield')).toBeHidden();
+    // Two consecutive animation frames can resize inside FitAddon's guard.
+    // The final geometry must not wait for another unrelated metadata event.
+    sizes.length = 0;
+    await page.locator('.pane-active .pane-content').evaluate(async node => {
+      (node as HTMLElement).style.width = '600px';
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      (node as HTMLElement).style.width = '400px';
+    });
+    await expect.poll(() => sizes.at(-1)?.cols).toBe(Math.max(2, Math.floor((400 - 15) / cell)));
+    await expect.poll(() => latest.width).toBe(sizes.at(-1)!.cols);
   } finally { await runtime.close(); }
 });
 

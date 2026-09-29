@@ -132,7 +132,13 @@ export class TerminalController {
       if (metrics?.width && metrics.height) {
         const cols = Math.max(2, Math.floor(this.content.clientWidth / metrics.width)), rows = Math.max(1, Math.floor(this.content.clientHeight / metrics.height));
         if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
-      } else fit.fit();
+      } else {
+        // The addon's fit() drops changes during its 50ms resize guard and
+        // caches geometry independently of authoritative native frames.
+        // Measure each observer delivery and retain its latest desired size.
+        const size = fit.proposeDimensions();
+        if (size && (size.cols !== term.cols || size.rows !== term.rows)) term.resize(size.cols, size.rows);
+      }
       desired = { cols: term.cols, rows: term.rows }; this.scrollbar?.sync();
       // A native frame can already have resized the renderer to the fitted
       // size. FitAddon then emits no resize event, but the server still needs
