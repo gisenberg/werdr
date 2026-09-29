@@ -88,7 +88,7 @@ A temporary repository on each host progressed from one commit ahead to two, the
 Each probe used a cancelled workspace-row settings preview, closed only its recorded test workspace, and verified unchanged saved preferences, pre-existing pane identities and owner boot identity.
 This establishes passive Git refresh through the deployed gateway on Linux and both Windows hosts.
 
-An isolated Windows owner using the installed runtime passed configured shell target identity, pane placement and input, popup geometry and phone resize, exact closure, retained underlying pane and popup process exit.
+Isolated owners on both Windows hosts using the installed runtime passed configured shell target identity, pane placement and input, popup geometry and phone resize, exact closure, retained underlying pane and popup process exit.
 The phone screenshot exposed wrapping popup toolbar controls; the browser now hides recovery controls while connected and uses accessible compact controls in narrow popups.
 The browser regression also disconnects a minimum-size popup and verifies keyboard access to each recovery control before retrying.
 This browser repair still requires gateway deployment; isolated owner checks do not establish configured-command behavior on the production owners, whose catalogs are empty.
