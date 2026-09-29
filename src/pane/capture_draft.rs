@@ -1,8 +1,8 @@
 //! Private terminal-only capture through the real Unix PTY actor.
 //!
 //! This is not a runtime handoff or an event ownership cut. Queued application
-//! effects, child-exit state and detector state are not captured here. Runtimes
-//! with a detector are rejected until cooperative detector suspension exists.
+//! effects, child-exit state and detector state are not captured here. Detector
+//! suspension preserves its live task state, not a transferable representation.
 //! Keep this disconnected from the production handoff protocol.
 
 use super::{
@@ -18,18 +18,23 @@ impl PaneRuntime {
     /// actor before taking the existing core/reply snapshot locks. No lock is
     /// held while waiting for the actor, which may still need to parse output
     /// and produce replies to finish draining accepted input.
-    pub(super) fn capture_terminal_state_draft(
+    pub(super) async fn capture_terminal_state_draft(
         &mut self,
         limits: DraftLimits,
         timeout: Duration,
     ) -> Result<PaneStateDraft, String> {
-        TerminalDraftPause::begin(self, timeout)?.capture(limits)
+        TerminalDraftPause::begin(self, timeout)
+            .await?
+            .capture(limits)
     }
 }
 
 struct TerminalDraftPause<'a> {
     runtime: &'a mut PaneRuntime,
     active: bool,
+    // Resume the detector only after the actor has been resumed (or that
+    // failure reported). Drop also releases this on cancellation/unwind.
+    _detector: Option<super::detection_pause::Paused>,
 }
 
 impl<'a> TerminalDraftPause<'a> {
@@ -48,10 +53,16 @@ impl<'a> TerminalDraftPause<'a> {
         }
     }
 
-    fn begin(runtime: &'a mut PaneRuntime, timeout: Duration) -> Result<Self, String> {
-        if runtime.detect_handle.is_some() {
-            return Err("terminal draft capture requires an acknowledged detector pause".into());
-        }
+    async fn begin(runtime: &'a mut PaneRuntime, timeout: Duration) -> Result<Self, String> {
+        let detector = if runtime.detect_handle.is_some() {
+            let controller = runtime
+                .detection_pause
+                .as_mut()
+                .ok_or("terminal draft capture requires an acknowledged detector pause")?;
+            Some(controller.pause(timeout).await.map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         // Failure belongs to begin_handoff, including its timeout rollback.
         // Do not resume somebody else's pre-existing pause on rejection.
         runtime
@@ -61,6 +72,7 @@ impl<'a> TerminalDraftPause<'a> {
         Ok(Self {
             runtime,
             active: true,
+            _detector: detector,
         })
     }
 
@@ -158,6 +170,89 @@ mod tests {
         assert_eq!(&received, b"resumed");
     }
 
+    fn attach_basic_detector(runtime: &mut PaneRuntime) -> mpsc::Receiver<crate::events::AppEvent> {
+        let (events, events_rx) = mpsc::channel(16);
+        let (handle, reset, release, controller) = super::super::spawn_basic_detection_task(
+            runtime.pane_id,
+            runtime.child_pid.clone(),
+            runtime.terminal.clone(),
+            runtime.detection_content_seq.clone(),
+            runtime.full_lifecycle_authority_active.clone(),
+            runtime.self_reported_agent_active.clone(),
+            events,
+        );
+        runtime.detect_handle = Some(handle);
+        runtime.detect_reset_notify = reset;
+        runtime.pending_release = release;
+        runtime.detection_pause = Some(controller);
+        events_rx
+    }
+
+    #[tokio::test]
+    async fn basic_detector_survives_capture_failure_and_actor_resume_failure() {
+        let (mut runtime, mut peer, reads) = fixture();
+        let _events = attach_basic_detector(&mut runtime);
+        feed(&mut peer, &reads, b"\x1b]2;pending");
+        let mut limits = test_limits();
+        limits.native_bytes = 0;
+        assert!(runtime
+            .capture_terminal_state_draft(limits, TIMEOUT)
+            .await
+            .is_err());
+        assert_input_resumed(&runtime, &mut peer);
+        runtime
+            .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
+            .unwrap();
+        assert!(!runtime.detect_handle.as_ref().unwrap().is_finished());
+        let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT)
+            .await
+            .unwrap();
+        pause.runtime.io.shutdown();
+        let err = pause.capture(test_limits()).err().unwrap();
+        assert!(err.contains("PTY resume failed"), "{err}");
+        // Actor failure must not leave the unrelated detector parked forever.
+        let detector = runtime
+            .detection_pause
+            .as_mut()
+            .unwrap()
+            .pause(TIMEOUT)
+            .await
+            .unwrap();
+        drop(detector);
+        assert!(!runtime.detect_handle.as_ref().unwrap().is_finished());
+    }
+
+    #[tokio::test]
+    async fn spawned_detector_and_actor_can_be_paused_and_resumed_repeatedly() {
+        use crate::pane::{AgentDetection, PaneLaunchEnv};
+        let (events, _event_rx) = mpsc::channel(16);
+        let mut runtime = PaneRuntime::spawn_shell_command(
+            crate::layout::PaneId::from_raw(42),
+            5,
+            40,
+            std::env::temp_dir(),
+            "cat",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Enabled,
+            100_000,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(crate::render_signal::RenderSignal::new()),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT)
+                .await
+                .unwrap();
+            assert!(!pause.runtime.detect_handle.as_ref().unwrap().is_finished());
+            pause.resume().unwrap();
+        }
+        runtime.shutdown();
+    }
+
     #[tokio::test]
     async fn actor_capture_restores_partial_input_and_resumes_original() {
         let (mut runtime, mut peer, reads) = fixture();
@@ -168,6 +263,7 @@ mod tests {
         );
         let draft = runtime
             .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
             .unwrap();
         // This pre-cut query was returned by on_read, then drained by the actor.
         // It is neither lost nor copied into the restored terminal's reply queue.
@@ -200,6 +296,7 @@ mod tests {
         limits.native_bytes = 0;
         let err = runtime
             .capture_terminal_state_draft(limits, TIMEOUT)
+            .await
             .err()
             .unwrap();
         assert!(err.contains("native snapshot exceeds limit"), "{err}");
@@ -209,21 +306,32 @@ mod tests {
         assert!(runtime.visible_text().contains("after"));
         runtime
             .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
             .unwrap();
     }
 
     #[tokio::test]
     async fn preexisting_pause_is_not_resumed_by_rejected_capture() {
         let (mut runtime, mut peer, _) = fixture();
+        let _events = attach_basic_detector(&mut runtime);
         runtime.pause_handoff_reader(TIMEOUT).unwrap();
         let err = runtime
             .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
             .err()
             .unwrap();
         assert!(err.contains("already in progress"), "{err}");
         assert!(runtime
             .try_send_bytes(Bytes::from_static(b"blocked"))
             .is_err());
+        let detector = runtime
+            .detection_pause
+            .as_mut()
+            .unwrap()
+            .pause(TIMEOUT)
+            .await
+            .unwrap();
+        drop(detector);
         runtime.io.set_handoff_paused(false).unwrap();
         assert_input_resumed(&runtime, &mut peer);
     }
@@ -234,6 +342,7 @@ mod tests {
         runtime.detect_handle = Some(tokio::spawn(std::future::pending::<()>()).abort_handle());
         let err = runtime
             .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
             .err()
             .unwrap();
         assert!(err.contains("acknowledged detector pause"), "{err}");
@@ -244,7 +353,9 @@ mod tests {
     async fn actor_loss_does_not_report_successful_capture_or_hide_capture_error() {
         for fail_capture in [false, true] {
             let (mut runtime, _peer, _) = fixture();
-            let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT).unwrap();
+            let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT)
+                .await
+                .unwrap();
             // Shutdown is queued before resume on the same control channel.
             pause.runtime.io.shutdown();
             let mut limits = test_limits();
@@ -264,14 +375,49 @@ mod tests {
     #[tokio::test]
     async fn unwinding_capture_scope_resumes_actor() {
         let (mut runtime, mut peer, _) = fixture();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT).unwrap();
+        let _events = attach_basic_detector(&mut runtime);
+        let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT)
+            .await
+            .unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _pause = pause;
             panic!("test capture unwind");
         }));
         assert!(result.is_err());
         assert_input_resumed(&runtime, &mut peer);
         runtime
             .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_capture_while_waiting_for_detector_leaves_actor_running() {
+        use std::{future::Future, task::Poll};
+        let (mut runtime, mut peer, _) = fixture();
+        let (controller, mut worker) = super::super::detection_pause::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let detector = tokio::spawn(async move {
+            release_rx.await.unwrap();
+            while worker.checkpoint().await {
+                worker.changed().await;
+            }
+        });
+        runtime.detect_handle = Some(detector.abort_handle());
+        runtime.detection_pause = Some(controller);
+        let mut capture = Box::pin(runtime.capture_terminal_state_draft(test_limits(), TIMEOUT));
+        std::future::poll_fn(|cx| {
+            assert!(capture.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(capture);
+        assert_input_resumed(&runtime, &mut peer);
+        release_tx.send(()).unwrap();
+        runtime
+            .capture_terminal_state_draft(test_limits(), TIMEOUT)
+            .await
+            .unwrap();
+        assert_input_resumed(&runtime, &mut peer);
     }
 }

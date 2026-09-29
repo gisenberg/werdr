@@ -28,6 +28,7 @@ mod agent_detection;
 #[cfg(unix)]
 mod capture_draft;
 mod cursor;
+mod detection_pause;
 mod input;
 mod kitty_keyboard;
 mod osc;
@@ -804,11 +805,13 @@ fn spawn_basic_detection_task(
     tokio::task::AbortHandle,
     Arc<Notify>,
     Arc<Mutex<Option<PendingAgentRelease>>>,
+    detection_pause::Controller,
 ) {
     let detect_reset_notify = Arc::new(Notify::new());
     let detect_reset = detect_reset_notify.clone();
     let pending_release = Arc::new(Mutex::new(None));
     let pending_release_for_task = pending_release.clone();
+    let (detection_pause, mut detection_checkpoint) = detection_pause::channel();
 
     let handle = tokio::spawn(async move {
         let mut agent_presence = AgentDetectionPresence::from_agent(None);
@@ -833,12 +836,16 @@ fn spawn_basic_detection_task(
         let mut last_self_reported_shell_check = None;
 
         loop {
+            if !detection_checkpoint.checkpoint().await {
+                break;
+            }
             let sleep_duration = if pending_idle.active() {
                 AGENT_PENDING_IDLE_RECHECK
             } else {
                 std::time::Duration::from_millis(300)
             };
             tokio::select! {
+                _ = detection_checkpoint.changed() => continue,
                 _ = tokio::time::sleep(sleep_duration) => {}
                 _ = detect_reset.notified() => {
                     publish_codex_prompt_observation(
@@ -1114,7 +1121,12 @@ fn spawn_basic_detection_task(
         }
     });
 
-    (handle.abort_handle(), detect_reset_notify, pending_release)
+    (
+        handle.abort_handle(),
+        detect_reset_notify,
+        pending_release,
+        detection_pause,
+    )
 }
 
 impl AgentDetectionPresence {
@@ -1378,6 +1390,10 @@ pub struct PaneRuntime {
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
+    // Retained on every platform so detector checkpoints have a live owner.
+    // Only private Unix draft capture requests suspension today.
+    #[cfg_attr(windows, allow(dead_code))]
+    detection_pause: Option<detection_pause::Controller>,
 }
 
 enum PaneRuntimeIo {
@@ -2488,15 +2504,16 @@ impl PaneRuntime {
 
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         let self_reported_agent_active = Arc::new(AtomicBool::new(false));
-        let (detect_handle, detect_reset_notify, pending_release) = spawn_basic_detection_task(
-            pane_id,
-            child_pid.clone(),
-            terminal.clone(),
-            detection_content_seq.clone(),
-            full_lifecycle_authority_active.clone(),
-            self_reported_agent_active.clone(),
-            events,
-        );
+        let (detect_handle, detect_reset_notify, pending_release, detection_pause) =
+            spawn_basic_detection_task(
+                pane_id,
+                child_pid.clone(),
+                terminal.clone(),
+                detection_content_seq.clone(),
+                full_lifecycle_authority_active.clone(),
+                self_reported_agent_active.clone(),
+                events,
+            );
 
         Ok(Self {
             pane_id,
@@ -2519,6 +2536,7 @@ impl PaneRuntime {
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(detect_handle),
+            detection_pause: Some(detection_pause),
         })
     }
 
@@ -2682,9 +2700,7 @@ impl PaneRuntime {
         };
 
         // --- Detection task ---
-        let (detect_handle, detect_reset_notify, pending_release) = if agent_detection
-            == AgentDetection::Enabled
-        {
+        let detection = if agent_detection == AgentDetection::Enabled {
             use crate::detect;
             use std::time::{Duration, Instant};
 
@@ -2704,6 +2720,7 @@ impl PaneRuntime {
             let detect_reset = detect_reset_notify.clone();
             let pending_release = Arc::new(Mutex::new(None));
             let pending_release_for_task = pending_release.clone();
+            let (detection_pause, mut detection_checkpoint) = detection_pause::channel();
 
             let handle = tokio::spawn(async move {
                 let mut agent_presence =
@@ -2734,6 +2751,9 @@ impl PaneRuntime {
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
                 loop {
+                    if !detection_checkpoint.checkpoint().await {
+                        break;
+                    }
                     let now_for_tick = Instant::now();
                     let tick = if active_pending_release(&pending_release_for_task, now_for_tick)
                         .is_some()
@@ -2748,6 +2768,7 @@ impl PaneRuntime {
                         TICK_IDENTIFIED
                     };
                     tokio::select! {
+                        _ = detection_checkpoint.changed() => continue,
                         _ = tokio::time::sleep(tick) => {}
                         _ = detect_reset.notified() => {
                             publish_codex_prompt_observation(
@@ -3096,10 +3117,17 @@ impl PaneRuntime {
                 Some(handle.abort_handle()),
                 detect_reset_notify,
                 pending_release,
+                Some(detection_pause),
             )
         } else {
-            (None, Arc::new(Notify::new()), Arc::new(Mutex::new(None)))
+            (
+                None,
+                Arc::new(Notify::new()),
+                Arc::new(Mutex::new(None)),
+                None,
+            )
         };
+        let (detect_handle, detect_reset_notify, pending_release, detection_pause) = detection;
 
         Ok(Self {
             pane_id,
@@ -3122,6 +3150,7 @@ impl PaneRuntime {
             preserve_processes_on_drop: false,
             compression,
             detect_handle,
+            detection_pause,
         })
     }
 
@@ -3850,6 +3879,7 @@ impl PaneRuntime {
                 preserve_processes_on_drop: true,
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+                detection_pause: None,
             },
             rx,
         )
@@ -5000,6 +5030,7 @@ mod tests {
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+            detection_pause: None,
         };
 
         assert!(runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
@@ -5040,6 +5071,7 @@ mod tests {
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+            detection_pause: None,
         };
 
         assert!(!runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
