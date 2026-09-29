@@ -6,7 +6,26 @@ const root = process.env.WERDR_ONBOARDING_TEST_ROOT;
 if (!root || !basename(root).startsWith('werdr-onboarding-test-')) throw new Error('Missing isolated onboarding fixture');
 const args = process.argv.slice(2), kind = basename(process.argv[1]);
 await appendFile(join(root, 'calls.jsonl'), JSON.stringify({ kind, args }) + '\n');
-if (kind === 'herdr' && args.join(' ') === 'machine list --json') {
+if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove'].includes(args[1])) {
+  const scenario = JSON.parse(await readFile(join(root, 'scenario.json'), 'utf8'));
+  if (!scenario.posix) throw new Error('Unexpected native catalog mutation');
+  const path = join(root, 'state/herdr/client/endpoints.json');
+  const catalog = JSON.parse(await readFile(path, 'utf8'));
+  if (args[1] === 'remove') {
+    if (args[2] !== '22222222222222222222222222222222') throw new Error('Refusing to remove unrelated host');
+    catalog.ssh = catalog.ssh.filter(machine => machine.id !== args[2]);
+  } else {
+    if (args[2] !== 'onboarding.invalid') throw new Error('Unexpected native setup target');
+    if (scenario.posix === 'decline') {
+      console.log('Install compatible runtime? [y/N]');
+      for await (const chunk of process.stdin) { if (chunk.toString().trim()) break; }
+      console.error('Native installation declined'); process.exit(1);
+    }
+    if (scenario.posix === 'failed') { console.error('NATIVE_SETUP_FAILED'); process.exit(1); }
+    catalog.ssh.push({ id: '22222222222222222222222222222222', target: args[2], label: args[args.indexOf('--label') + 1], session: args[args.indexOf('--remote-session') + 1], enabled: true });
+  }
+  await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
+} else if (kind === 'herdr' && args.join(' ') === 'machine list --json') {
   console.log(JSON.stringify(JSON.parse(await readFile(join(root, 'state/herdr/client/endpoints.json'), 'utf8')).ssh));
 } else if (kind === 'ssh') {
   if (!args.includes('onboarding.invalid')) throw new Error('Unexpected SSH target');
