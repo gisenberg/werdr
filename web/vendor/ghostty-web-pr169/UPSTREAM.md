@@ -55,3 +55,15 @@ The patch includes selection-manager regressions for visible and scrolled viewpo
 Build and package as above with the new version; do not rebuild WASM or edit generated bundles manually.
 Both packaged WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
 Remove this patch when an adopted upstream package includes these fixes and the native-selection browser checks still pass.
+
+## Werdr idle theme repaint
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr3.tgz`, version `0.4.1-pr169.faf6fbd.werdr3`.
+Its SHA-256 is `8b6096ab0404c7abf32bf41f282f3c0e4a0d24f409ce1883a50eb68c4921b859`.
+Apply `werdr-idle-theme-repaint.patch` after the six patches above.
+Theme changes previously updated renderer and terminal color configuration without scheduling a repaint, leaving idle canvases in the old palette until unrelated output arrived.
+The patch schedules a full repaint through the normal render loop, retaining synchronized-output deferral and preserving explicit application colors, terminal contents and identity.
+The browser regression in `web/test/terminal-theme.spec.ts` checks actual canvas pixels with cursor blinking disabled, light/dark transitions, explicit RGB cells, stable dimensions and synchronized-output behavior.
+Build and package from source as above with the new version and include `LICENSE`; do not edit generated bundles or rebuild WASM.
+Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove this patch when the adopted upstream package reliably repaints idle theme changes and the painted-color regression passes.

@@ -1,0 +1,58 @@
+diff --git a/lib/terminal.ts b/lib/terminal.ts
+--- a/lib/terminal.ts
++++ b/lib/terminal.ts
+@@ -180,6 +180,7 @@
+   // Bootstrap blank state
+   private bootstrapCells: GhosttyCell[][] | null = null;
+   private bootstrapDirty: boolean = false;
++  private themeDirty: boolean = false;
+   private bootstrapBuffer: IRenderable;
+ 
+   constructor(options: ITerminalOptions = {}) {
+@@ -213,8 +214,7 @@
+         if (this.bootstrapDirty) return true;
+         if (this.bootstrapCells) return false;
+         const wasmTerm = this.wasmTerm as unknown as
+-          | { needsFullRedraw?: () => boolean }
+-          | undefined;
++          { needsFullRedraw?: () => boolean } | undefined;
+         return wasmTerm?.needsFullRedraw?.() ?? false;
+       },
+       clearDirty: () => {
+@@ -227,8 +227,7 @@
+           return cell ? String.fromCodePoint(cell.codepoint || 32) : ' ';
+         }
+         const wasmTerm = this.wasmTerm as unknown as
+-          | { getGraphemeString?: (row: number, col: number) => string }
+-          | undefined;
++          { getGraphemeString?: (row: number, col: number) => string } | undefined;
+         return wasmTerm?.getGraphemeString?.(row, col) ?? ' ';
+       },
+     };
+@@ -263,6 +262,10 @@
+ 
+           this.renderer.setTheme(this.currentTheme);
+           this.wasmTerm.setColors(this.buildThemeColorsConfig(this.currentTheme));
++          // Idle terminals need a scheduled full repaint too. Keep it in the
++          // normal render loop so synchronized output still defers presentation.
++          this.themeDirty = true;
++          this.requestRender();
+         }
+         break;
+ 
+@@ -1011,7 +1014,14 @@
+     }
+     this.syncOutputStartTime = undefined;
+ 
+-    this.renderer!.render(this.wasmTerm!, false, this.viewportY, this, this.scrollbarOpacity);
++    this.renderer!.render(
++      this.wasmTerm!,
++      this.themeDirty,
++      this.viewportY,
++      this,
++      this.scrollbarOpacity
++    );
++    this.themeDirty = false;
+     this.renderEmitter.fire({ start: 0, end: this.rows - 1 });
+ 
+     const cursor = this.wasmTerm!.getCursor();
