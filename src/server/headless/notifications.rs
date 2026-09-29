@@ -396,11 +396,21 @@ impl HeadlessServer {
                 }
                 false
             }
-            AppEvent::ClipboardWrite { content } => {
+            AppEvent::ClipboardWrite { pane_id, content } => {
                 // Clipboard writes are client-local side effects. Forward them only to
-                // the foreground client instead of broadcasting to every attached client.
+                // the foreground shell client and to the client controlling the source
+                // pane's terminal stream, never to observers or unrelated clients.
                 let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
-                self.send_to_foreground_client(ServerMessage::Clipboard { data });
+                let controllers = self
+                    .terminal_id_for_pane(*pane_id)
+                    .map(|terminal_id| {
+                        terminal_attach_client_ids(&self.clients, terminal_id.as_str())
+                    })
+                    .unwrap_or_default();
+                self.send_to_foreground_client(ServerMessage::Clipboard { data: data.clone() });
+                for client_id in controllers {
+                    self.send_to_client(client_id, ServerMessage::Clipboard { data: data.clone() });
+                }
                 false
             }
             AppEvent::StateChanged { pane_id, agent, .. } => {

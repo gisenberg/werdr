@@ -229,6 +229,7 @@ async fn capture_stages_blocked_detector_publication_without_running_handlers() 
         vec![
             AppEvent::TerminalBell { pane_id, count: 1 },
             AppEvent::ClipboardWrite {
+                pane_id,
                 content: b"kept".to_vec(),
             },
             AppEvent::PaneDied {
@@ -260,7 +261,7 @@ async fn capture_stages_blocked_detector_publication_without_running_handlers() 
         server.app.event_rx.recv().await,
         Some(AppEvent::TerminalBell { count: 1, .. })
     ));
-    let AppEvent::ClipboardWrite { content } = server.app.event_rx.try_recv().unwrap() else {
+    let AppEvent::ClipboardWrite { content, .. } = server.app.event_rx.try_recv().unwrap() else {
         panic!("clipboard lost");
     };
     assert_eq!(content, b"kept");
@@ -548,6 +549,7 @@ async fn prefix_preserves_normal_foreground_effect_forwarding() {
         .app
         .event_tx
         .try_send(AppEvent::ClipboardWrite {
+            pane_id,
             content: b"payload".to_vec(),
         })
         .unwrap();

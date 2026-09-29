@@ -499,6 +499,23 @@ pub(crate) fn terminal_stream_client_ids(
         .collect()
 }
 
+/// Clients controlling a terminal stream. Observers are read-only viewers and
+/// must not receive side effects such as clipboard writes.
+pub(crate) fn terminal_attach_client_ids(
+    clients: &HashMap<u64, ClientConnection>,
+    terminal_id: &str,
+) -> Vec<u64> {
+    clients
+        .iter()
+        .filter_map(|(&client_id, client)| match &client.mode {
+            ClientConnectionMode::TerminalAttach {
+                terminal_id: attached,
+            } if attached == terminal_id => Some(client_id),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(crate) fn render_targets(
     clients: &HashMap<u64, ClientConnection>,
     foreground_client_id: Option<u64>,

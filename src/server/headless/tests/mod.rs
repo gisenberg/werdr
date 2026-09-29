@@ -6711,6 +6711,7 @@ fn clipboard_write_targets_foreground_client_only() {
     server.sync_foreground_client_state();
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 
@@ -6737,6 +6738,7 @@ fn clipboard_write_without_foreground_client_does_not_change_visual_state() {
     server.foreground_client_id = None;
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 
@@ -6763,6 +6765,7 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
     server.foreground_client_id = Some(1);
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 
@@ -6771,6 +6774,75 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
         !server.clients.contains_key(&1),
         "failed targeted send should remove the broken foreground client"
     );
+}
+
+#[test]
+fn clipboard_write_reaches_only_the_source_terminal_controller() {
+    with_terminal_session_test_server(|server, _runtime_terminal_id, terminal_id, _| {
+        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
+        let (controller_tx, controller_rx, _controller_frames) = test_client_writer();
+        let (observer_tx, observer_rx, _observer_frames) = test_client_writer();
+        let (other_tx, other_rx, _other_frames) = test_client_writer();
+        for (client_id, mode, writer) in [
+            (
+                1,
+                ClientConnectionMode::TerminalAttach {
+                    terminal_id: terminal_id.clone(),
+                },
+                controller_tx,
+            ),
+            (
+                2,
+                ClientConnectionMode::TerminalObserve {
+                    terminal_id: terminal_id.clone(),
+                },
+                observer_tx,
+            ),
+            (
+                3,
+                ClientConnectionMode::TerminalAttach {
+                    terminal_id: "unrelated-terminal".to_string(),
+                },
+                other_tx,
+            ),
+        ] {
+            server.clients.insert(
+                client_id,
+                ClientConnection::new_with_mode(
+                    mode,
+                    (80, 24),
+                    crate::kitty_graphics::HostCellSize::default(),
+                    client_id,
+                    RenderEncoding::TerminalAnsi,
+                    Some(writer),
+                ),
+            );
+        }
+        server.foreground_client_id = None;
+
+        let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+            pane_id,
+            content: b"copied".to_vec(),
+        });
+
+        assert!(!changed);
+        match read_server_message(
+            controller_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("controller clipboard message"),
+        ) {
+            ServerMessage::Clipboard { data } => assert_eq!(data, "Y29waWVk"),
+            other => panic!("expected clipboard message, got {other:?}"),
+        }
+        assert!(
+            observer_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "read-only observers must not receive clipboard writes"
+        );
+        assert!(
+            other_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "controllers of other terminals must not receive clipboard writes"
+        );
+    });
 }
 
 #[test]

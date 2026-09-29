@@ -11,6 +11,7 @@ import { TerminalImagePaste } from './terminal-image-paste';
 import { NativeSelection } from './native-selection';
 import { terminalSelectionColors } from './terminal-selection';
 import { initialPaneScroll } from './initial-pane-scroll';
+import { TerminalClipboardRequests } from './terminal-osc52';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -23,6 +24,7 @@ export class TerminalController {
   private readonly mouse: NativeMouse;
   private readonly scrollbar?: NativeScrollbar;
   private readonly selectionMode?: NativeSelection;
+  private readonly clipboardRequests: TerminalClipboardRequests;
   private terminal?: Terminal;
   private socket?: WebSocket;
   private keyboard?: NativeKeyboard;
@@ -50,6 +52,7 @@ export class TerminalController {
     this.title.append(this.titleLabel);
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
+    this.clipboardRequests = new TerminalClipboardRequests(this.element, report, copied);
     if (!target) this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report, copied, () => { this.selectionMode?.clear(); this.links?.cancel(); this.mouse.release(); });
     if (!target) this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, text => this.imagePaste?.send({ type: 'terminal.input', text }), () => ({ paneOwns: !!this.target || this.rightClickPassthrough, modifier: this.preferences.rightClickPassthroughModifier }));
@@ -91,14 +94,14 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
-    this.imagePaste?.cancel();
+    this.imagePaste?.cancel(); this.clipboardRequests.cancel();
     this.scrollbar?.reset(); this.mouse.setEnabled(false); this.copyMode?.exit(true, false); this.links?.cancel(); this.selectionMode?.clear();
     this.imagePaste?.dispose(); this.imagePaste = undefined;
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.keyboard = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
-  dispose() { this.reset(); this.scrollbar?.dispose(); this.mouse.dispose(); this.links?.dispose(); this.selectionMode?.dispose(); this.element.remove(); }
+  dispose() { this.reset(); this.clipboardRequests.dispose(); this.scrollbar?.dispose(); this.mouse.dispose(); this.links?.dispose(); this.selectionMode?.dispose(); this.element.remove(); }
   async connect(takeover = false, retry = false) {
     this.reset(); if (!this.visible) return; if (!retry) this.attempt = 0;
     const epoch = this.epoch; if (!retry) this.failure = undefined; this.shield.textContent = this.failure || 'Attaching to Herdr...'; this.changed();
@@ -201,6 +204,7 @@ export class TerminalController {
         const frame = JSON.parse(event.data);
         if (frame.type === 'terminal.capabilities') { images.capabilities(frame.clipboard_image_max_bytes); return; }
         if (frame.type === 'terminal.image') { images.result(frame.status, frame.message); return; }
+        if (frame.type === 'terminal.clipboard') { this.clipboardRequests.receive(frame.data); return; }
         if (frame.type === 'terminal.scroll-state') { this.scrollbar?.update(frame.scroll); scrollReady = frame.ready !== false; if (scrollReady) { clearTimeout(scrollTimeout); fitVisible(); reveal(); } return; }
         if (frame.type === 'terminal.keyboard') { keyboard.update(frame.flags, frame.modify_other_keys_level); return; }
         if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { if (frame.enabled) this.selectionMode?.clear(); this.mouse.setEnabled(frame.enabled); return; }
