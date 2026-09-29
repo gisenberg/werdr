@@ -9,6 +9,8 @@ export class HostManager {
   private job?: SetupJob;
   private timer?: ReturnType<typeof setTimeout>;
   private renameId = '';
+  private followOutput = true;
+  private readonly outputResize: ResizeObserver;
   constructor(private readonly api: Api, private readonly select: (id: string) => void) {
     element('host-manager-done').onclick = () => element<HTMLDialogElement>('host-manager').close();
     element('host-rename-cancel').onclick = () => element<HTMLDialogElement>('host-rename-dialog').close();
@@ -37,7 +39,12 @@ export class HostManager {
     };
     element('setup-open-host').onclick = () => { if (this.job?.machineId) select(this.job.machineId); element<HTMLDialogElement>('setup-dialog').close(); };
     element('setup-done').onclick = () => element<HTMLDialogElement>('setup-dialog').close();
-    element('setup-dialog').addEventListener('close', () => clearTimeout(this.timer));
+    const output = element('setup-output');
+    output.addEventListener('scroll', () => { this.followOutput = output.scrollHeight - output.scrollTop - output.clientHeight < 30; });
+    // Rewrapping on phone rotation or viewport resize must retain the prompt,
+    // without dragging a reader who deliberately scrolled into earlier output.
+    this.outputResize = new ResizeObserver(() => { if (this.followOutput) output.scrollTop = output.scrollHeight; });
+    element('setup-dialog').addEventListener('close', () => { clearTimeout(this.timer); this.outputResize.disconnect(); });
   }
   update(hosts: HostView[]) { this.hosts = hosts; if (element<HTMLDialogElement>('host-manager').open) this.render(); }
   open() {
@@ -82,12 +89,16 @@ export class HostManager {
   }
   private showJob(job: SetupJob) {
     this.job = job; element<HTMLDialogElement>('host-manager').close(); element('setup-error').textContent = '';
-    element<HTMLDialogElement>('setup-dialog').showModal(); this.renderJob(); void this.poll();
+    this.followOutput = true;
+    const dialog = element<HTMLDialogElement>('setup-dialog');
+    dialog.showModal(); this.renderJob();
+    element('setup-output').scrollTop = element('setup-output').scrollHeight;
+    this.outputResize.observe(element('setup-output')); void this.poll();
   }
   private renderJob() {
     if (!this.job) return;
     const job = this.job, output = element('setup-output');
-    const follow = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
+    const follow = this.followOutput;
     if (output.textContent !== job.output) { output.textContent = job.output; if (follow) output.scrollTop = output.scrollHeight; }
     element('setup-status').textContent = `${job.label} / ${job.target} [${job.state.toUpperCase()}]`;
     element('setup-input-form').hidden = job.state !== 'running' || job.cancellable === false; element('setup-cancel').hidden = job.state !== 'running' || job.cancellable === false;
