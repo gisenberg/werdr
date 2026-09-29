@@ -25,6 +25,13 @@ if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove'].includes(args
     catalog.ssh.push({ id: '22222222222222222222222222222222', target: args[2], label: args[args.indexOf('--label') + 1], session: args[args.indexOf('--remote-session') + 1], enabled: true });
   }
   await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
+  if (args[1] === 'add' && scenario.posix.endsWith('-saved')) {
+    await writeFile(join(root, 'native-saved'), 'ready');
+    if (scenario.posix === 'failed-saved') { console.error('NATIVE_SETUP_FAILED'); process.exit(1); }
+    // Stay alive after the catalog write so cancellation cannot race the fixture exit.
+    await new Promise(resolve => setTimeout(resolve, 10000));
+    throw new Error('Saved native repair was not cancelled');
+  }
 } else if (kind === 'herdr' && args.join(' ') === 'machine list --json') {
   console.log(JSON.stringify(JSON.parse(await readFile(join(root, 'state/herdr/client/endpoints.json'), 'utf8')).ssh));
 } else if (kind === 'ssh') {

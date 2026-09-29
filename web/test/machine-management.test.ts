@@ -30,9 +30,9 @@ test('onboarding preserves catalog and owner boundaries through compatibility ch
     while (!await check()) { assert.ok(Date.now() < deadline, 'Onboarding fixture timed out'); await new Promise(resolve => setTimeout(resolve, 10)); }
   };
   const ready = { running: true, compatible: true, endpoint_compatible: true };
-  for (const scenarioMode of ['ready', 'decline', 'install-ready', 'install-unready', 'install-failed', 'repair-install-ready', 'repair-install-unready', 'cancel-probe', 'cancel-unready-probe', 'revoke-probe', 'stop-probe', 'posix-ready', 'posix-decline', 'posix-failed', 'posix-repair-ready', 'posix-repair-failed'] as const) await t.test(scenarioMode, async () => {
+  for (const scenarioMode of ['ready', 'decline', 'install-ready', 'install-unready', 'install-failed', 'repair-install-ready', 'repair-install-unready', 'cancel-probe', 'cancel-unready-probe', 'revoke-probe', 'stop-probe', 'posix-ready', 'posix-decline', 'posix-failed', 'posix-repair-ready', 'posix-repair-failed', 'posix-repair-failed-saved', 'posix-repair-cancel-saved', 'posix-repair-revoke-saved', 'posix-repair-stop-saved'] as const) await t.test(scenarioMode, async () => {
     const posix = scenarioMode.startsWith('posix-'), mode = posix ? scenarioMode.slice(6) : scenarioMode;
-    for (const name of ['status-started', 'status-release', 'platforms.json', 'calls.jsonl', 'installer-staged', 'installer-finished']) await rm(join(root, name), { force: true });
+    for (const name of ['status-started', 'status-release', 'native-saved', 'platforms.json', 'calls.jsonl', 'installer-staged', 'installer-finished']) await rm(join(root, name), { force: true });
     const repairing = mode.startsWith('repair-');
     const record = repairing ? { ...original, target: 'onboarding.invalid' } : original;
     const savedCase = repairing ? JSON.stringify({ version: 1, ssh: [record] }) : saved;
@@ -52,7 +52,14 @@ test('onboarding preserves catalog and owner boundaries through compatibility ch
       assert.throws(() => manager.get('other-owner', job.id), /not found/);
       assert.throws(() => manager.input('other-owner', job.id, 'yes'), /not found/);
       assert.throws(() => manager.cancel('other-owner', job.id), /not found/);
-      if (mode === 'decline' || installing) {
+      const cancelledRepair = mode.endsWith('-saved') && mode !== 'repair-failed-saved';
+      if (cancelledRepair) {
+        await wait(async () => { try { await access(join(root, 'native-saved')); return true; } catch { return false; } });
+        assert.equal(JSON.parse(await readFile(catalog, 'utf8')).ssh.length, 2, 'Cancellation must happen after native registration');
+        if (mode === 'repair-cancel-saved') manager.cancel('owner', job.id);
+        else if (mode === 'repair-revoke-saved') manager.revoke(['owner']);
+        else manager.stop();
+      } else if (mode === 'decline' || installing) {
         await wait(() => manager.get('owner', job.id).output.includes('[y/N]'));
         manager.input('owner', job.id, installing ? 'yes' : 'no');
       } else if (mode.endsWith('probe')) {
@@ -65,7 +72,7 @@ test('onboarding preserves catalog and owner boundaries through compatibility ch
       await wait(() => manager.get('owner', job.id).state !== 'running');
       await done;
       const result = manager.get('owner', job.id);
-      assert.equal(result.state, succeeds ? 'complete' : installing || posix ? 'failed' : 'cancelled');
+      assert.equal(result.state, succeeds ? 'complete' : cancelledRepair ? 'cancelled' : installing || posix ? 'failed' : 'cancelled');
       const current = JSON.parse(await readFile(catalog, 'utf8'));
       assert.deepEqual(current.ssh[0], record);
       if (succeeds && repairing) {
@@ -88,8 +95,8 @@ test('onboarding preserves catalog and owner boundaries through compatibility ch
       if (posix) {
         const mutations = calls.filter(call => call.kind === 'herdr' && call.args[1] !== 'list');
         assert.equal(mutations.filter(call => call.args[1] === 'add').length, 1);
-        assert.equal(mutations.filter(call => call.args[1] === 'remove').length, repairing && succeeds ? 1 : 0);
-        if (!succeeds) assert.match(result.output, /Native installation declined|NATIVE_SETUP_FAILED/);
+        assert.equal(mutations.filter(call => call.args[1] === 'remove').length, repairing && (succeeds || mode.endsWith('-saved')) ? 1 : 0);
+        if (!succeeds) assert.match(result.output, cancelledRepair ? /CANCELLED/ : /Native installation declined|NATIVE_SETUP_FAILED/);
       } else assert.ok(calls.filter(call => call.kind === 'herdr').every(call => call.args.join(' ') === 'machine list --json'));
       if (mode.endsWith('probe')) assert.doesNotMatch(result.output, /\[y\/N\]/, 'Cancelled probes must not create an installation prompt');
       if (!installing || mode === 'install-failed') assert.doesNotMatch(result.output, /HERDR_INSTALL_OK/);
