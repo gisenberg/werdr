@@ -643,16 +643,21 @@ mod tests {
 
     #[test]
     fn seed_history_updates_fallback() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(5, 2, 1024).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        for (rows, expected) in [(2, "abcde\nfghij\nend\n"), (3, "abcdefghij\nend\n")] {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::ghostty::Terminal::new(5, rows, 1024).unwrap();
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        pane.seed_history_ansi("abcdefghij\r\nend");
-        pane.resize(3, 10, 8, 16);
+            pane.seed_history_ansi("abcdefghij\r\nend");
+            pane.resize(3, 10, 8, 16);
 
-        let core = pane.core.lock().unwrap();
-        assert_eq!(recent_text(&core, 10, false).text, "abcdefghij\nend\n");
-        assert_eq!(recent_text(&core, 10, true).text, "abcdefghij\nend\n");
+            // With two original rows, the prefix is history and fixed-origin
+            // reflow splits its soft wrap at the active boundary. With three,
+            // the entire logical line is active and still unwraps normally.
+            let core = pane.core.lock().unwrap();
+            assert_eq!(recent_text(&core, 10, false).text, expected);
+            assert_eq!(recent_text(&core, 10, true).text, expected);
+        }
     }
 
     #[test]
