@@ -81,3 +81,34 @@ test('native keyboard releases held keys exactly once on blur and protocol chang
     assert.equal(f.dispatch('keyup', 'b', 'KeyB').defaultPrevented, false);
   } finally { f.close(); }
 });
+
+test('AltGraph text is not encoded as Ctrl+Alt or mistaken for paste', () => {
+  const f = fixture();
+  try {
+    const altGraph = { ctrlKey: true, altKey: true, getModifierState: (name: string) => name === 'AltGraph' };
+    for (const code of ['KeyQ', 'KeyV']) {
+      assert.equal(f.dispatch('keydown', '@', code, altGraph).defaultPrevented, true);
+      assert.equal(f.events.at(-1)!.mods, 0);
+      assert.equal(f.events.at(-1)!.utf8, '@');
+      f.dispatch('keyup', '@', code, altGraph);
+      assert.equal(f.events.at(-1)!.mods, 0);
+    }
+    f.dispatch('keydown', '€', 'KeyE', { ...altGraph, shiftKey: true, metaKey: true });
+    assert.equal(f.events.at(-1)!.mods, library.Mods.SHIFT | library.Mods.SUPER);
+    f.dispatch('keyup', '€', 'KeyE');
+    f.dispatch('keydown', 'q', 'KeyQ', { ctrlKey: true, altKey: true });
+    assert.equal(f.events.at(-1)!.mods, library.Mods.CTRL | library.Mods.ALT);
+    f.dispatch('keyup', 'q', 'KeyQ');
+    f.dispatch('keydown', 'ArrowLeft', 'ArrowLeft', altGraph);
+    assert.equal(f.events.at(-1)!.mods, library.Mods.CTRL | library.Mods.ALT);
+    f.dispatch('keyup', 'ArrowLeft', 'ArrowLeft', altGraph);
+    f.dispatch('keydown', '@', 'KeyQ', altGraph);
+    f.dispatch('keydown', '@', 'KeyQ', { ...altGraph, repeat: true });
+    assert.equal(f.events.at(-1)!.action, library.KeyAction.REPEAT);
+    f.content.dispatchEvent(new Event('focusout'));
+    assert.equal(f.events.at(-1)!.mods, 0);
+    assert.equal(f.events.at(-1)!.action, library.KeyAction.RELEASE);
+    assert.equal(f.dispatch('keyup', 'q', 'KeyQ').defaultPrevented, false);
+    assert.equal(f.dispatch('keydown', 'v', 'KeyV', { ctrlKey: true }).defaultPrevented, false);
+  } finally { f.close(); }
+});

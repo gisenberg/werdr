@@ -38,7 +38,11 @@ export class NativeKeyboard {
   }
   private modifiers(event: KeyboardEvent) {
     const { Mods } = this.library;
-    return (event.shiftKey ? Mods.SHIFT : 0) | (event.ctrlKey ? Mods.CTRL : 0) | (event.altKey ? Mods.ALT : 0) | (event.metaKey ? Mods.SUPER : 0)
+    // Browsers may expose the text-producing AltGraph modifier as Ctrl+Alt.
+    // It is a layout selector, not a terminal Ctrl/Alt chord. Only normalize
+    // explicit AltGraph text; an ordinary Ctrl+Alt chord stays distinct.
+    const altGraphText = event.getModifierState('AltGraph') && [...event.key].length === 1;
+    return (event.shiftKey ? Mods.SHIFT : 0) | (event.ctrlKey && !altGraphText ? Mods.CTRL : 0) | (event.altKey && !altGraphText ? Mods.ALT : 0) | (event.metaKey ? Mods.SUPER : 0)
       | (event.getModifierState('CapsLock') ? Mods.CAPSLOCK : 0) | (event.getModifierState('NumLock') ? Mods.NUMLOCK : 0);
   }
   // A literal prefix from copy mode is a complete tap, encoded by the same
@@ -64,7 +68,7 @@ export class NativeKeyboard {
   private down = (event: KeyboardEvent) => {
     if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented) return;
     // Let the browser and existing clipboard handler complete paste/copy gestures.
-    if (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC')) return;
+    if (!event.getModifierState('AltGraph') && (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC'))) return;
     const input = this.encodeInput(event); if (!input) return;
     event.preventDefault(); event.stopImmediatePropagation(); this.held.set(event.code, input); this.emit(input);
   };
