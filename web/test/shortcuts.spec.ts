@@ -310,6 +310,40 @@ test('mobile Navigate retains unavailable hosts, isolates scroll, and follows na
   } finally { await runtime.close(); }
 });
 
+for (const populated of [false, true]) test(`pending selection verification ${populated ? 'resets Navigate when it resolves a pane' : 'preserves empty Navigate'}`, async ({ page }) => {
+  const runtime = await fixture();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const target = populated ? JSON.parse(await runtime.cli('workspace', 'create')).result.root_pane : undefined;
+    await page.route('**/api/snapshot?machine=local', async route => {
+      const response = await route.fetch(); await pending; await route.fulfill({ response });
+    });
+    await page.goto(runtime.url + '/?machine=local');
+    await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    await expect(page.locator('#shield')).toContainText('Checking requested selection');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#navigate-toggle').click();
+    const switcher = page.locator('#navigate-switcher'); await expect(switcher).toBeVisible();
+    release();
+    if (target) {
+      await expect(page.locator('.pane-active')).toHaveAttribute('data-pane', target.pane_id);
+      await expect(page.locator('#shield')).toBeHidden();
+      await expect(switcher).toBeHidden();
+      return;
+    }
+    await expect(page.locator('#shield')).toContainText('No panes.');
+    await expect(switcher).toBeVisible();
+    await switcher.getByRole('button', { name: 'KEYBOARD SHORTCUTS', exact: true }).click();
+    await expect(page.locator('#shortcut-help')).toBeVisible();
+    await page.locator('#shortcut-help button').click(); await expect(switcher).toBeVisible();
+  } finally {
+    release();
+    try { await page.unrouteAll({ behavior: 'wait' }); await page.close(); }
+    finally { await runtime.close(); }
+  }
+});
+
 test('mobile empty switcher returns after dismissing settings or keyboard help', async ({ page }) => {
   const runtime = await fixture();
   try {

@@ -733,7 +733,12 @@ function selectKeyboardTarget(target: { workspace: string; tab: string; pane: st
   selectTarget(machineId, target.workspace, target.tab, target.pane); if (paneId) surface.requestFocus(paneId);
 }
 shortcuts = new DesktopShortcuts(preferences.shortcuts,
-  () => ({ identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${(!!pendingPane || restoration.active)}`, attachment: surface.active, available: authenticated && lifecycle.active, ready: !!surface.active?.ready, navigateIdentity: JSON.stringify([machineContext(machineId), workspaceId, tabId, paneId, selectedHost()?.connection, !!pendingPane || restoration.active]) }),
+  () => {
+    // Verifying an empty host selection does not change its shortcut target.
+    // If verification resolves a workspace/pane, those IDs still reset modes.
+    const pendingSelection = !!(workspaceId || tabId || paneId) && (!!pendingPane || restoration.active);
+    return { identity: `${machineId}/${selectedHost()?.machine.target}/${selectedHost()?.machine.session}/${workspaceId}/${tabId}/${paneId}/${surface.active?.attachmentGeneration}/${surface.active?.ready}/${selectedHost()?.connection}/${pendingSelection}`, attachment: surface.active, available: authenticated && lifecycle.active, ready: !!surface.active?.ready, navigateIdentity: JSON.stringify([machineContext(machineId), workspaceId, tabId, paneId, selectedHost()?.connection, pendingSelection]) };
+  },
   () => { refreshCommands(); return commands; },
   (action, index) => { const target = keyboardTargets(action === 'switch_tab' ? 'tab' : action === 'focus_agent' ? 'agent' : 'workspace')[index]; if (target) { if (shortcuts?.isNavigating && action === 'switch_workspace') surface.active?.copyMode?.exit(true, false); shortcuts?.reset(); selectKeyboardTarget(target); } },
   () => { if (paneId) surface.requestFocus(paneId); }, event => surface.active?.sendKey(event), {

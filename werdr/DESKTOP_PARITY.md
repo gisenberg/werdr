@@ -42,6 +42,8 @@ Unit tests cover endpoint replacement, gateway generations, old-stream deltas, s
 `web/test/shortcuts.spec.ts` verifies native prefix commands, double-prefix forwarding in terminal and copy modes, held-key suppression, persistent resizing, indexed tab selection, IME bypass, editable-control isolation, remapping, preview cancellation, gateway restart, offline help, and delayed native layout responses.
 Navigate browser cases verify request-free preview, stable-ID confirmation, invalid digits, preview-targeted rename, Copy cancellation and commit, and delayed attachment of a previously hidden pane.
 Phone cases cover workspaces, tabs, creation, menus, empty-session return, unavailable hosts, agent targets, scroll isolation, and restored typing after cancellation or rotation.
+Controlled selection-response tests keep empty Navigate open when verification confirms the unchanged empty host selection, while still dismissing it when verification resolves a real pane.
+This prevents a late verification response from hiding the phone switcher between opening it and clicking its first menu action.
 `web/test/navigate-scale.spec.ts` profiles preview handling at fixed desktop and phone geometry with one and fifteen populated workspaces, while asserting retained controls, terminal identity, and unchanged selection.
 A forced move-response race verifies destination selection after automatic native fallback, while explicit navigation round trips and newer commands supersede older focus replies.
 The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.
