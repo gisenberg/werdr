@@ -106,7 +106,9 @@ A real POSIX SSH host-key rejection also produced the prerequisite error without
 The deployed browser host-management form also registered both compatible Windows endpoints through an isolated gateway/catalog, with readable completion dialogs and accessible controls at desktop and phone sizes.
 The browser surfaced a real POSIX SSH prerequisite failure with host-key/login guidance, no installation prompt and no catalog mutation.
 These browser checks opened no terminal connections and left the production catalog unchanged.
-Successful POSIX onboarding and installation on older, incompatible and partially installed live endpoints remain unverified.
+Compatible POSIX onboarding also passed through a real, loopback-only OpenSSH server using ephemeral credentials, pinned host trust, the installed owning-runtime binary and isolated local/remote configuration and state.
+Native setup started and registered the unique named session without an installation prompt; cleanup stopped and deleted that session, and the production catalog remained byte-identical.
+This verifies the real POSIX SSH/native setup path, not production-host authentication or installation on older, incompatible and partially installed endpoints.
 
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
