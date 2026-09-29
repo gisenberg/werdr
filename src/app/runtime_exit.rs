@@ -3,6 +3,41 @@
 use super::App;
 use crate::events::AppEvent;
 
+/// Retaining the allocation prevents an old timer from matching a later A/B/A
+/// registration. This identity is process-local, not part of the wire protocol.
+#[derive(Clone, Debug)]
+pub struct WorktreeRestoreRequest {
+    operation_id: u64,
+    terminal_id: crate::terminal::TerminalId,
+    identity: std::sync::Arc<()>,
+}
+
+impl WorktreeRestoreRequest {
+    pub(crate) fn new(operation_id: u64, terminal_id: crate::terminal::TerminalId) -> Self {
+        Self {
+            operation_id,
+            terminal_id,
+            identity: std::sync::Arc::new(()),
+        }
+    }
+
+    pub(crate) fn matches_binding(
+        &self,
+        operation_id: u64,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> bool {
+        self.operation_id == operation_id && &self.terminal_id == terminal_id
+    }
+
+    pub(crate) fn same_registration(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    pub(crate) fn terminal_id(&self) -> &crate::terminal::TerminalId {
+        &self.terminal_id
+    }
+}
+
 /// A move-only proof of an owner claim. Only this module constructs it.
 pub(crate) struct RuntimeExitClaim {
     retired_terminal: Option<crate::terminal::TerminalId>,

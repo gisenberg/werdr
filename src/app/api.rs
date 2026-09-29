@@ -138,11 +138,8 @@ impl App {
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
         let mut worktree_restore_failed = false;
         let ev = match ev {
-            AppEvent::WorktreeRuntimeRestoreFailed {
-                pane_id,
-                operation_id,
-            } => {
-                if !self.claim_worktree_runtime_restore_failure(pane_id, operation_id) {
+            AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request } => {
+                if !self.claim_worktree_runtime_restore_failure(pane_id, &request) {
                     return Vec::new();
                 }
                 worktree_restore_failed = true;
@@ -262,9 +259,10 @@ impl App {
                         let restore_requested = self
                             .pending_worktree_remove_runtime_restores
                             .remove(pane_id)
-                            .is_some_and(|(_, target)| {
-                                self.find_pane(*pane_id)
-                                    .is_some_and(|(_, pane)| pane.attached_terminal_id == target)
+                            .is_some_and(|request| {
+                                self.find_pane(*pane_id).is_some_and(|(_, pane)| {
+                                    &pane.attached_terminal_id == request.terminal_id()
+                                })
                             })
                             && exit_claim.as_ref().is_none_or(|claim| {
                                 self.find_pane(*pane_id).is_some_and(|(_, pane)| {
@@ -681,19 +679,17 @@ impl App {
     pub(crate) fn claim_worktree_runtime_restore_failure(
         &mut self,
         pane_id: crate::layout::PaneId,
-        operation_id: u64,
+        request: &super::runtime_exit::WorktreeRestoreRequest,
     ) -> bool {
-        let Some((expected_operation, terminal_id)) =
-            self.pending_worktree_remove_runtime_restores.get(&pane_id)
-        else {
+        let Some(expected) = self.pending_worktree_remove_runtime_restores.get(&pane_id) else {
             return false;
         };
-        if *expected_operation != operation_id {
+        if !expected.same_registration(request) {
             return false;
         }
         let applies = self.find_pane(pane_id).is_some_and(|(_, pane)| {
-            &pane.attached_terminal_id == terminal_id
-                && self.terminal_runtimes.get(terminal_id).is_none()
+            &pane.attached_terminal_id == request.terminal_id()
+                && self.terminal_runtimes.get(request.terminal_id()).is_none()
         });
         self.pending_worktree_remove_runtime_restores
             .remove(&pane_id);
@@ -716,18 +712,45 @@ impl App {
         Some(update)
     }
 
-    fn queue_worktree_runtime_restore_failed(
-        &self,
+    pub(crate) fn schedule_worktree_runtime_restore(
+        &mut self,
         pane_id: crate::layout::PaneId,
         operation_id: u64,
+        terminal_id: crate::terminal::TerminalId,
+    ) -> bool {
+        if self
+            .pending_worktree_remove_runtime_restores
+            .get(&pane_id)
+            .is_some_and(|request| request.matches_binding(operation_id, &terminal_id))
+        {
+            return false;
+        }
+        self.queue_worktree_runtime_restore_failed(
+            pane_id,
+            operation_id,
+            terminal_id,
+            Duration::from_secs(1),
+        );
+        true
+    }
+
+    fn queue_worktree_runtime_restore_failed(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        operation_id: u64,
+        terminal_id: crate::terminal::TerminalId,
+        delay: Duration,
     ) {
+        let request = super::runtime_exit::WorktreeRestoreRequest::new(operation_id, terminal_id);
+        self.pending_worktree_remove_runtime_restores
+            .insert(pane_id, request.clone());
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             let _ = event_tx
-                .send(AppEvent::WorktreeRuntimeRestoreFailed {
-                    pane_id,
-                    operation_id,
-                })
+                .send(AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request })
                 .await;
         });
     }
@@ -2498,30 +2521,60 @@ mod tests {
             pane_id,
             vec![(terminal_id.clone(), crate::pane::ExitRecord::default())],
         );
-        app.pending_worktree_remove_runtime_restores
-            .insert(pane_id, (8, terminal_id.clone()));
+        app.pending_worktree_remove_runtime_restores.insert(
+            pane_id,
+            crate::app::runtime_exit::WorktreeRestoreRequest::new(8, terminal_id.clone()),
+        );
 
         app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
             pane_id,
-            operation_id: 7,
+            request: crate::app::runtime_exit::WorktreeRestoreRequest::new(7, terminal_id.clone()),
         });
-        assert_eq!(
-            app.pending_worktree_remove_runtime_restores
-                .get(&pane_id)
-                .map(|(operation, _)| operation),
-            Some(&8)
-        );
+        assert!(app
+            .pending_worktree_remove_runtime_restores
+            .get(&pane_id)
+            .is_some_and(|request| request.matches_binding(8, &terminal_id)));
         assert!(app.event_rx.try_recv().is_err());
 
         app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
             pane_id,
-            operation_id: 8,
+            request: app.pending_worktree_remove_runtime_restores[&pane_id].clone(),
         });
 
         assert!(app.find_pane(pane_id).is_none());
         assert!(app.terminal_runtimes.get(&terminal_id).is_none());
         assert!(app.pending_worktree_remove_runtime_exits.is_empty());
         assert!(app.pending_worktree_remove_runtime_restores.is_empty());
+    }
+
+    #[tokio::test]
+    async fn immediate_restore_failure_supersedes_same_binding_delayed_timer() {
+        let (_, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let pane = crate::layout::PaneId::alloc();
+        let terminal = crate::terminal::TerminalId::alloc();
+        assert!(app.schedule_worktree_runtime_restore(pane, 7, terminal.clone()));
+        let delayed = app.pending_worktree_remove_runtime_restores[&pane].clone();
+        app.queue_worktree_runtime_restore_failed(pane, 7, terminal, Duration::ZERO);
+        let immediate = app.pending_worktree_remove_runtime_restores[&pane].clone();
+        assert!(!immediate.same_registration(&delayed));
+        let event = tokio::time::timeout(Duration::from_secs(5), app.event_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request } = event else {
+            panic!("expected immediate restore failure")
+        };
+        assert_eq!(pane_id, pane);
+        assert!(request.same_registration(&immediate));
+        assert!(!app.claim_worktree_runtime_restore_failure(pane, &delayed));
+        assert!(app.pending_worktree_remove_runtime_restores[&pane].same_registration(&immediate));
     }
 
     #[test]

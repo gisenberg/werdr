@@ -97,14 +97,14 @@ async fn runtime_exit_headless_timeout_rebound_without_runtime_has_no_exit_effec
         .app
         .pending_worktree_remove_runtime_exits
         .insert(pane, vec![(old_terminal.clone(), old.clone())]);
-    server
-        .app
-        .pending_worktree_remove_runtime_restores
-        .insert(pane, (7, old_terminal));
+    server.app.pending_worktree_remove_runtime_restores.insert(
+        pane,
+        crate::app::runtime_exit::WorktreeRestoreRequest::new(7, old_terminal),
+    );
     let before = server.app.event_hub.events_after(0).len();
     server.handle_internal_event_with_forwarding(AppEvent::WorktreeRuntimeRestoreFailed {
         pane_id: pane,
-        operation_id: 7,
+        request: server.app.pending_worktree_remove_runtime_restores[&pane].clone(),
     });
     assert!(server.app.find_pane(pane).is_some());
     assert_eq!(server.app.event_hub.events_after(0).len(), before);

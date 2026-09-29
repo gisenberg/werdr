@@ -4965,7 +4965,7 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
     );
     server.app.pending_worktree_remove_runtime_restores.insert(
         pane_id,
-        (
+        crate::app::runtime_exit::WorktreeRestoreRequest::new(
             7,
             server
                 .app
@@ -4980,7 +4980,7 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::WorktreeRuntimeRestoreFailed {
             pane_id,
-            operation_id: 7,
+            request: server.app.pending_worktree_remove_runtime_restores[&pane_id].clone(),
         })
     );
 

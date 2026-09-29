@@ -638,28 +638,20 @@ impl App {
                     .pending_worktree_remove_runtime_exits
                     .contains_key(&pane_id)
                 {
-                    if self
-                        .pending_worktree_remove_runtime_restores
-                        .insert(pane_id, (operation_id, terminal_id.clone()))
-                        .is_none()
-                    {
-                        let event_tx = self.event_tx.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            let _ = event_tx
-                                .send(AppEvent::WorktreeRuntimeRestoreFailed {
-                                    pane_id,
-                                    operation_id,
-                                })
-                                .await;
-                        });
-                    }
+                    self.schedule_worktree_runtime_restore(
+                        pane_id,
+                        operation_id,
+                        terminal_id.clone(),
+                    );
                 } else {
                     pane_updates.extend(self.publish_worktree_runtime_agent_release(pane_id));
                     if !self.respawn_shell_for_launch_pane(pane_id, false) {
-                        self.pending_worktree_remove_runtime_restores
-                            .insert(pane_id, (operation_id, terminal_id.clone()));
-                        self.queue_worktree_runtime_restore_failed(pane_id, operation_id);
+                        self.queue_worktree_runtime_restore_failed(
+                            pane_id,
+                            operation_id,
+                            terminal_id.clone(),
+                            Duration::ZERO,
+                        );
                     }
                 }
             }

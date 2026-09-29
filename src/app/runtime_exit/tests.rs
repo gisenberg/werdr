@@ -35,6 +35,124 @@ fn event(pane_id: PaneId, record: &ExitRecord) -> AppEvent {
 }
 
 #[tokio::test]
+async fn restore_timer_replacement_and_aba_get_distinct_deliverable_registrations() {
+    let (mut app, pane, terminal, _) = fixture();
+    app.terminal_runtimes.remove(&terminal);
+    let other = TerminalId::alloc();
+    let mut registrations = Vec::new();
+    for (operation, target) in [
+        (1, terminal.clone()),
+        (2, terminal.clone()),
+        (2, other),
+        (2, terminal.clone()),
+    ] {
+        assert!(app.schedule_worktree_runtime_restore(pane, operation, target.clone()));
+        let registered = app.pending_worktree_remove_runtime_restores[&pane].clone();
+        assert!(!app.schedule_worktree_runtime_restore(pane, operation, target));
+        assert!(app.pending_worktree_remove_runtime_restores[&pane].same_registration(&registered));
+        registrations.push(registered);
+    }
+    assert!(!registrations[1].same_registration(&registrations[3]));
+    let latest = registrations.last().unwrap().clone();
+    let mut seen = vec![false; registrations.len()];
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        for _ in 0..registrations.len() {
+            let AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request } =
+                app.event_rx.recv().await.unwrap()
+            else {
+                panic!("expected restore timer")
+            };
+            assert_eq!(pane_id, pane);
+            let index = registrations
+                .iter()
+                .position(|registered| registered.same_registration(&request))
+                .unwrap();
+            assert!(!seen[index]);
+            seen[index] = true;
+            if !request.same_registration(&latest) {
+                assert!(!app.claim_worktree_runtime_restore_failure(pane, &request));
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(seen.into_iter().all(|seen| seen));
+    assert!(app.event_rx.try_recv().is_err());
+    assert!(app.pending_worktree_remove_runtime_restores[&pane].same_registration(&latest));
+    app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
+        pane_id: pane,
+        request: latest.clone(),
+    });
+    assert!(app.find_pane(pane).is_none());
+    assert!(!app.claim_worktree_runtime_restore_failure(pane, &latest));
+    app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn restore_timer_retirement_completion_invalidates_queued_timeout() {
+    let (mut app, pane, terminal, _) = fixture();
+    let retired = ExitRecord::test_recorded(ChildExitReason::Exited);
+    app.pending_worktree_remove_runtime_exits
+        .insert(pane, vec![(terminal.clone(), retired.clone())]);
+    assert!(app.schedule_worktree_runtime_restore(pane, 7, terminal.clone()));
+    app.handle_internal_event(event(pane, &retired));
+    assert!(app.pending_worktree_remove_runtime_restores.is_empty());
+    let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), app.event_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    app.handle_internal_event(timeout);
+    assert!(app.find_pane(pane).is_some());
+    assert!(app.terminal_runtimes.get(&terminal).is_some());
+    app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn restore_timer_bounded_queue_preserves_superseding_registration() {
+    let (mut app, pane, terminal, _) = fixture();
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    app.event_tx = sender;
+    app.event_rx = crate::events::OwnerInbox::new(receiver);
+    app.event_tx
+        .try_send(AppEvent::TerminalBell {
+            pane_id: pane,
+            count: 1,
+        })
+        .unwrap();
+    assert!(app.schedule_worktree_runtime_restore(pane, 1, terminal.clone()));
+    let first = app.pending_worktree_remove_runtime_restores[&pane].clone();
+    assert!(app.schedule_worktree_runtime_restore(pane, 2, terminal));
+    let latest = app.pending_worktree_remove_runtime_restores[&pane].clone();
+    // Keep the capacity-one queue full across both timer deadlines.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(matches!(
+        app.event_rx.recv().await,
+        Some(AppEvent::TerminalBell { .. })
+    ));
+    let mut delivered = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        for _ in 0..2 {
+            let AppEvent::WorktreeRuntimeRestoreFailed { request, .. } =
+                app.event_rx.recv().await.unwrap()
+            else {
+                panic!("expected restore timer")
+            };
+            delivered.push(request);
+        }
+    })
+    .await
+    .unwrap();
+    assert!(delivered
+        .iter()
+        .any(|request| request.same_registration(&first)));
+    assert!(delivered
+        .iter()
+        .any(|request| request.same_registration(&latest)));
+    assert!(!app.claim_worktree_runtime_restore_failure(pane, &first));
+    assert!(app.pending_worktree_remove_runtime_restores[&pane].same_registration(&latest));
+}
+
+#[tokio::test]
 async fn runtime_exit_timeout_rebound_without_runtime_preserves_new_attachment() {
     let (mut app, pane, current_terminal, _) = fixture();
     app.terminal_runtimes.remove(&current_terminal);
@@ -43,10 +161,10 @@ async fn runtime_exit_timeout_rebound_without_runtime_preserves_new_attachment()
     app.pending_worktree_remove_runtime_exits
         .insert(pane, vec![(old_terminal.clone(), old.clone())]);
     app.pending_worktree_remove_runtime_restores
-        .insert(pane, (7, old_terminal));
+        .insert(pane, WorktreeRestoreRequest::new(7, old_terminal));
     app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
         pane_id: pane,
-        operation_id: 7,
+        request: app.pending_worktree_remove_runtime_restores[&pane].clone(),
     });
     assert!(app.find_pane(pane).is_some());
     assert!(app.terminal_runtimes.get(&current_terminal).is_none());
@@ -102,7 +220,7 @@ async fn runtime_exit_retired_out_of_order_duplicate_cannot_consume_other_expect
         ],
     );
     app.pending_worktree_remove_runtime_restores
-        .insert(pane, (7, terminal.clone()));
+        .insert(pane, WorktreeRestoreRequest::new(7, terminal.clone()));
     let replacement = app.terminal_runtimes.get(&terminal).unwrap().exit_record();
     app.handle_internal_event(event(pane, &second));
     assert_eq!(app.pending_worktree_remove_runtime_exits[&pane].len(), 1);
@@ -133,14 +251,15 @@ async fn runtime_exit_timeout_never_closes_replacement_or_accepts_late_retired_e
     app.pending_worktree_remove_runtime_exits
         .insert(pane, vec![(terminal.clone(), retired.clone())]);
     app.pending_worktree_remove_runtime_restores
-        .insert(pane, (8, terminal));
-    assert!(!app.claim_worktree_runtime_restore_failure(pane, 7));
+        .insert(pane, WorktreeRestoreRequest::new(8, terminal.clone()));
+    assert!(!app
+        .claim_worktree_runtime_restore_failure(pane, &WorktreeRestoreRequest::new(7, terminal)));
     assert!(app
         .pending_worktree_remove_runtime_exits
         .contains_key(&pane));
     app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
         pane_id: pane,
-        operation_id: 8,
+        request: app.pending_worktree_remove_runtime_restores[&pane].clone(),
     });
     assert!(app.pending_worktree_remove_runtime_exits.is_empty());
     app.handle_internal_event(event(pane, &retired));
@@ -197,7 +316,7 @@ async fn runtime_exit_retired_rebound_attachment_does_not_respawn() {
     app.pending_worktree_remove_runtime_exits
         .insert(pane, vec![(TerminalId::alloc(), retired.clone())]);
     app.pending_worktree_remove_runtime_restores
-        .insert(pane, (7, terminal.clone()));
+        .insert(pane, WorktreeRestoreRequest::new(7, terminal.clone()));
     app.handle_internal_event(event(pane, &retired));
     assert!(app.terminal_runtimes.get(&terminal).is_none());
     assert!(app.pending_worktree_remove_runtime_exits.is_empty());

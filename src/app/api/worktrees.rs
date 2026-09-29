@@ -2558,7 +2558,7 @@ mod tests {
         );
         app.pending_worktree_remove_runtime_restores.insert(
             child_pane_id,
-            (
+            crate::app::runtime_exit::WorktreeRestoreRequest::new(
                 7,
                 app.find_pane(child_pane_id)
                     .unwrap()

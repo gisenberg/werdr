@@ -9,7 +9,7 @@ pub(crate) mod agent_view;
 mod agents;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
-mod runtime_exit;
+pub(crate) mod runtime_exit;
 #[cfg(test)]
 pub(crate) use api::test_support::exiting_test_command;
 mod api_helpers;
@@ -128,7 +128,7 @@ pub struct App {
     pub(crate) pending_worktree_remove_runtime_exits:
         HashMap<crate::layout::PaneId, Vec<(crate::terminal::TerminalId, crate::pane::ExitRecord)>>,
     pub(crate) pending_worktree_remove_runtime_restores:
-        HashMap<crate::layout::PaneId, (u64, crate::terminal::TerminalId)>,
+        HashMap<crate::layout::PaneId, runtime_exit::WorktreeRestoreRequest>,
     pub(crate) next_api_worktree_operation_id: u64,
     pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
