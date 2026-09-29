@@ -23,6 +23,23 @@ Phone screenshots were inspected on both Windows hosts; these checks did not cha
 Full Linux and Windows native checks passed before publishing the runtime, along with render-scaling checks.
 Lossless live transfer, OS-level keyboard layout and IME acceptance, the remaining onboarding matrix, and complete native-reference visual parity remain separate acceptance work.
 
+## Post-deployment Windows terminal acceptance
+
+Isolated named sessions on both Windows hosts exercised the deployed owner with the unchanged deployed gateway and terminal companion.
+Browser input and rendered output retained accented Latin text, Japanese, emoji and a combining accent through desktop and phone reloads.
+Resizing during a 100-line Unicode output stream retained every numbered line exactly once, and native scrollback returned to the live bottom correctly.
+Alternate-screen output survived a phone reload, and returning to the primary screen recovered its hidden marker.
+Restarting the isolated gateway preserved the shell PID and a shell variable; independent browser contexts required explicit takeover before the second viewer could write.
+Exact pane closure terminated the selected shell while preserving a sibling shell.
+All test owners were stopped and their named sessions deleted after evidence was archived.
+These checks used the throwaway-session and wmux isolation procedures and did not restart production owners.
+
+The unchanged-size reconnect requirement remains open despite retained text.
+Wire evidence shows a desktop terminal settled at 129 columns reconnecting at 130 columns, and a phone terminal settled at 40 columns reconnecting at 41 columns.
+The browser currently fits its initial attachment before authoritative scrollbar screen metadata establishes the normal-screen gutter.
+This requires a geometry regression and correction; surviving the extra resize is not equivalent to avoiding it.
+The alternate-screen fixture also does not establish full-screen application redraw behavior, complete semantic color/theme parity, or OS-level keyboard layout and IME acceptance.
+
 ## Acceptance matrix
 
 | Capability | Required browser behavior | Current evidence |
