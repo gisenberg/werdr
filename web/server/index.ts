@@ -422,11 +422,13 @@ const cleanup = setInterval(() => {
   }
 }, 30_000);
 cleanup.unref();
+let shuttingDown = false;
 function shutdown() {
-  management.stop(); pluginInstallations.stop(); fleet.stop();
+  if (shuttingDown) return; shuttingDown = true;
+  const managementStopped = management.stop(); pluginInstallations.stop(); fleet.stop();
   for (const ws of sockets.keys()) closeSocket(ws, 1001, 'Gateway restarting');
   server.close(); clearInterval(cleanup); clearInterval(certificateTimer);
-  setTimeout(() => process.exit(0), 3000).unref();
+  void managementStopped.then(() => { setTimeout(() => process.exit(0), 3000).unref(); });
 }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 server.listen(port, host, () => console.log(`werdr: ${origin}\nAccess-token file: ${tokenPath}`));

@@ -90,7 +90,7 @@ export class HostManager {
     const follow = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
     if (output.textContent !== job.output) { output.textContent = job.output; if (follow) output.scrollTop = output.scrollHeight; }
     element('setup-status').textContent = `${job.label} / ${job.target} [${job.state.toUpperCase()}]`;
-    element('setup-input-form').hidden = job.state !== 'running'; element('setup-cancel').hidden = job.state !== 'running';
+    element('setup-input-form').hidden = job.state !== 'running' || job.cancellable === false; element('setup-cancel').hidden = job.state !== 'running' || job.cancellable === false;
     element('setup-open-host').hidden = job.state !== 'complete' || !job.machineId;
   }
   private async poll() {

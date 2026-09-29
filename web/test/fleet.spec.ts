@@ -8,6 +8,29 @@ let runtime: Awaited<ReturnType<typeof fixture>>;
 test.beforeAll(async () => { runtime = await fixture(); });
 test.afterAll(async () => { await runtime?.close(); });
 
+test('host setup hides response and cancellation controls during final publication', async ({ page }) => {
+  let job = { id: 'publication-fixture', target: '127.0.0.1', label: 'Publication fixture', platform: 'posix', state: 'running', output: 'Checking host', started: 1, cancellable: true };
+  await page.route('**/api/hosts/setup', route => route.fulfill({ json: { job } }));
+  await page.route('**/api/setup/job?*', route => route.fulfill({ json: { job } }));
+  await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token);
+  await expect(page.locator('#boot')).toBeHidden();
+  await page.locator('#manage-hosts').click();
+  await page.locator('#host-target').fill('127.0.0.1');
+  await page.locator('#host-label').fill(job.label);
+  await page.getByRole('button', { name: 'CHECK AND SET UP', exact: true }).click();
+  await expect(page.locator('#setup-cancel')).toBeVisible();
+  await expect(page.locator('#setup-input-form')).toBeVisible();
+  job = { ...job, cancellable: false, output: 'Finalizing saved host; cancellation is no longer available.' };
+  await expect(page.locator('#setup-output')).toContainText('Finalizing saved host');
+  await expect(page.locator('#setup-cancel')).toBeHidden();
+  await expect(page.locator('#setup-input-form')).toBeHidden();
+  await expect(page.locator('#setup-done')).toBeVisible();
+  job = { ...job, state: 'complete', output: 'Host registered and ready.' };
+  await expect(page.locator('#setup-status')).toContainText('[COMPLETE]');
+  await page.locator('#setup-done').click();
+  await expect(page.locator('#setup-dialog')).toBeHidden();
+});
+
 test('background agent activity, native rename, saved selection, host management and notifications survive reconnect', async ({ page }) => {
   const first = JSON.parse(await runtime.cli('workspace', 'create')).result.root_pane;
   const second = JSON.parse(await runtime.cli('workspace', 'create')).result.root_pane;

@@ -6,7 +6,7 @@ const root = process.env.WERDR_ONBOARDING_TEST_ROOT;
 if (!root || !basename(root).startsWith('werdr-onboarding-test-')) throw new Error('Missing isolated onboarding fixture');
 const args = process.argv.slice(2), kind = basename(process.argv[1]);
 await appendFile(join(root, 'calls.jsonl'), JSON.stringify({ kind, args }) + '\n');
-if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove'].includes(args[1])) {
+if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove', 'rename'].includes(args[1])) {
   const scenario = JSON.parse(await readFile(join(root, 'scenario.json'), 'utf8'));
   if (!scenario.posix) throw new Error('Unexpected native catalog mutation');
   const path = join(root, 'state/herdr/client/endpoints.json');
@@ -14,6 +14,22 @@ if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove'].includes(args
   if (args[1] === 'remove') {
     if (args[2] !== '22222222222222222222222222222222') throw new Error('Refusing to remove unrelated host');
     catalog.ssh = catalog.ssh.filter(machine => machine.id !== args[2]);
+  } else if (args[1] === 'rename') {
+    if (args[2] !== '22222222222222222222222222222222') throw new Error('Refusing to rename unrelated host');
+    const record = catalog.ssh.find(machine => machine.id === args[2]);
+    if (!record) throw new Error('Missing staged host');
+    if (['rename-cancel', 'rename-revoke', 'rename-stop'].includes(scenario.posix)) {
+      await writeFile(join(root, 'rename-started'), 'ready');
+      const deadline = Date.now() + 10000;
+      while (true) {
+        try { await access(join(root, 'rename-release')); break; } catch {}
+        if (Date.now() > deadline) throw new Error('Rename gate timed out');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    if (scenario.posix === 'rename-failed') { console.error('RENAME_FAILED'); process.exit(1); }
+    record.label = args[args.indexOf('--label') + 1];
+    if (scenario.posix === 'rename-external') { record.label = 'Externally adopted'; record.enabled = false; }
   } else {
     if (args[2] !== 'onboarding.invalid') throw new Error('Unexpected native setup target');
     if (scenario.posix === 'decline') {
@@ -25,6 +41,7 @@ if (kind === 'herdr' && args[0] === 'machine' && ['add', 'remove'].includes(args
     catalog.ssh.push({ id: '22222222222222222222222222222222', target: args[2], label: args[args.indexOf('--label') + 1], session: args[args.indexOf('--remote-session') + 1], enabled: true });
   }
   await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
+  if (args[1] === 'rename' && scenario.posix === 'rename-error') { console.error('RENAME_ACK_FAILED'); process.exit(1); }
   if (args[1] === 'add' && scenario.posix.endsWith('-saved')) {
     await writeFile(join(root, 'native-saved'), 'ready');
     if (scenario.posix === 'failed-saved') { console.error('NATIVE_SETUP_FAILED'); process.exit(1); }

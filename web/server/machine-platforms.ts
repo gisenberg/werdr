@@ -26,3 +26,9 @@ export async function savePlatform(machine: Machine, platform: PlatformRecord['p
   next.push({ id: machine.id, target: machine.target, session: machine.session, platform });
   await writePrivateJson(storePath, { version: 1, machines: next }); records = next;
 }
+// Roll back only metadata belonging to an unpublished setup candidate.
+export async function forgetPlatform(machine: Machine) {
+  const next = records.filter(record => record.id !== machine.id || record.target !== machine.target || record.session !== machine.session);
+  if (next.length === records.length || !storePath) return;
+  await writePrivateJson(storePath, { version: 1, machines: next }); records = next;
+}

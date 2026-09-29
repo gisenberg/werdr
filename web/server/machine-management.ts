@@ -11,13 +11,13 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Machine, SetupJob, SetupRequest } from '../shared/fleet.ts';
 import { allowedBind } from './policy.ts';
 import { binary, command, environment, isWindows, localMachine, machines } from './herdr.ts';
-import { initializePlatforms, savePlatform } from './machine-platforms.ts';
+import { forgetPlatform, initializePlatforms, savePlatform } from './machine-platforms.ts';
 import { powershellCommand, quotePowerShell, terminate } from './native-api.ts';
 import { readPrivateJson, writePrivateJson } from './private-json.ts';
 
 const exec = promisify(execFile);
 const maximumOutput = 128 * 1024;
-interface Job { view: SetupJob; owner: string; child?: ChildProcessWithoutNullStreams; cancelled: boolean; answer?: (answer: string) => void; done?: Promise<void> }
+interface Job { view: SetupJob; owner: string; child?: ChildProcessWithoutNullStreams; cancelled: boolean; finalizing?: boolean; answer?: (answer: string) => void; done?: Promise<void> }
 export class ManagementError extends Error { constructor(message: string, public readonly status = 400) { super(message); } }
 export function setupRequest(value: Record<string, unknown>): SetupRequest {
   if (typeof value.target !== 'string' || value.target.length > 1024 || !/^(?:ssh:\/\/)?(?:[A-Za-z0-9._-]+@)?(?:[A-Za-z0-9][A-Za-z0-9._-]*|\[[a-fA-F0-9:]+\])(?::[0-9]{1,5})?$/.test(value.target)) throw new ManagementError('Use an SSH alias, hostname, or user@host without passwords or shell syntax.');
@@ -43,7 +43,7 @@ export class MachineManagement {
   private cached: Machine[] = [];
   private stopped = false;
   private cleanupTimer?: ReturnType<typeof setInterval>;
-  constructor(private readonly platformPath: string, private readonly changed: () => Promise<void>) {}
+  constructor(private readonly platformPath: string, private readonly changed: () => Promise<void>, private readonly platformPersistence = { save: savePlatform, forget: forgetPlatform }) {}
   async start() {
     await initializePlatforms(this.platformPath);
     this.cached = [localMachine()];
@@ -109,12 +109,20 @@ export class MachineManagement {
   }
   cancel(owner: string, id: string) {
     this.get(owner, id); const job = this.jobs.get(id)!;
-    if (job.view.state !== 'running') return;
+    if (job.view.state !== 'running' || job.finalizing) return;
     job.cancelled = true; job.answer?.('no'); job.answer = undefined; if (job.child) terminate(job.child);
   }
   revoke(ownerIds: string[]) { for (const job of this.jobs.values()) if (ownerIds.includes(job.owner)) this.cancel(job.owner, job.view.id); }
   private print(job: Job, text: string) { job.view = { ...job.view, output: (job.view.output + stripVTControlCharacters(text).replace(/\r\n/g, '\n')).slice(-maximumOutput) }; }
-  private check(job: Job) { if (job.cancelled || this.stopped) throw new ManagementError('Setup cancelled.'); }
+  private check(job: Job) { if (!job.finalizing && (job.cancelled || this.stopped)) throw new ManagementError('Setup cancelled.'); }
+  private finalize(job: Job) {
+    this.check(job);
+    // Publication is bounded but not reversible once native consumers can see it.
+    // Late cancellation must not misreport an already published host as cancelled.
+    job.finalizing = true;
+    job.view = { ...job.view, cancellable: false };
+    this.print(job, 'Finalizing saved host; cancellation is no longer available.\n');
+  }
   private runChild(job: Job, file: string, args: string[], input?: string, timeout = 10 * 60_000) {
     this.check(job);
     return new Promise<void>((resolve, reject) => {
@@ -151,22 +159,44 @@ export class MachineManagement {
     }
   }
   private async preparePosix(job: Job, request: SetupRequest, existing?: Machine) {
-    const label = existing ? `werdr-setup-${job.view.id}` : request.label;
+    const label = `werdr-setup-${job.view.id}`;
     const before = new Set((await machines()).map(machine => machine.id));
+    let publishedConfirmed = false;
     this.print(job, 'Herdr will check compatibility and ask before installation or any unsupported runtime replacement. Answer its prompts below.\n');
     try {
       await this.runChild(job, 'python3', [fileURLToPath(new URL('./setup-pty.py', import.meta.url)), binary, 'machine', 'add', request.target, '--label', label, '--remote-session', request.session]);
       this.check(job);
-      const added = (await machines()).find(machine => !before.has(machine.id) && machine.target === request.target && machine.session === request.session && machine.label === label);
+      const current = await machines(); this.check(job);
+      const added = current.find(machine => !before.has(machine.id) && machine.target === request.target && machine.session === request.session && machine.label === label && machine.enabled);
       if (!added) throw new ManagementError('Herdr did not save the prepared host.', 502);
+      if (!existing) {
+        this.finalize(job);
+        await this.platformPersistence.save(added, 'posix', new Set(current.map(machine => machine.id)));
+        const staged = (await machines()).find(machine => machine.id === added.id);
+        if (!staged || staged.target !== added.target || staged.session !== added.session || staged.label !== label || staged.enabled !== added.enabled) {
+          throw new ManagementError('Prepared host changed before publication. Refresh the catalog before retrying.', 409);
+        }
+        // A CLI can fail after the atomic catalog write. Reconcile by the captured
+        // ID, never by the requested label, before deciding publication failed.
+        await exec(binary, ['machine', 'rename', added.id, '--label', request.label], { env: environment, timeout: 10_000, maxBuffer: 128 * 1024 }).catch(() => {});
+        let published: Machine | undefined;
+        try { published = (await machines()).find(machine => machine.id === added.id); }
+        catch { throw new ManagementError('Host publication could not be confirmed. Inspect the saved catalog before retrying.', 502); }
+        if (!published || published.target !== added.target || published.session !== added.session || published.label !== request.label || published.enabled !== added.enabled) {
+          throw new ManagementError('Host publication failed or the saved host changed during setup. Refresh the catalog before retrying.', 409);
+        }
+        publishedConfirmed = true;
+      }
       job.view = { ...job.view, machineId: existing?.id || added.id };
-      if (!existing) await savePlatform(added, 'posix', new Set((await machines()).map(machine => machine.id)));
     } finally {
-      // Native machine add also performs compatibility repair. For an existing
-      // host, retain its original public ID and retire only our temporary entry.
-      if (existing) {
-        const temporary = (await machines()).filter(machine => !before.has(machine.id) && machine.label === label && machine.target === request.target && machine.session === request.session);
-        for (const machine of temporary) await exec(binary, ['machine', 'remove', machine.id], { env: environment, timeout: 10_000, maxBuffer: 128 * 1024 });
+      // Retire only still-owned staging records, including writes made before
+      // native failure/cancellation. Published or externally edited records stay.
+      if (!publishedConfirmed) {
+        const temporary = (await machines()).filter(machine => !before.has(machine.id) && machine.label === label && machine.target === request.target && machine.session === request.session && machine.enabled);
+        for (const machine of temporary) {
+          await exec(binary, ['machine', 'remove', machine.id], { env: environment, timeout: 10_000, maxBuffer: 128 * 1024 });
+          await this.platformPersistence.forget(machine);
+        }
       }
     }
   }
@@ -201,7 +231,8 @@ export class MachineManagement {
       const current = await machines(); const original = current.find(machine => machine.id === existing.id);
       this.check(job);
       if (!original || original.target !== existing.target || original.session !== existing.session) throw new ManagementError('Host changed during setup; refresh before retrying.', 409);
-      await savePlatform(original, 'windows', new Set(current.map(machine => machine.id)));
+      this.finalize(job);
+      await this.platformPersistence.save(original, 'windows', new Set(current.map(machine => machine.id)));
     } else {
       // Upstream automatic preparation is POSIX-only. Preserve its exact catalog
       // schema for the already-validated Windows runtime; no parallel inventory.
@@ -213,15 +244,24 @@ export class MachineManagement {
       const stored = await readPrivateJson(path, 64 * 1024) as any || { version: 1, ssh: [] };
       this.check(job);
       if (stored.version !== 1 || !Array.isArray(stored.ssh) || stored.ssh.length >= 64) throw new ManagementError('Native machine catalog is unsupported or full.');
-      await savePlatform(candidate, 'windows', new Set([...current.map(machine => machine.id), candidate.id]));
+      this.finalize(job);
+      await this.platformPersistence.save(candidate, 'windows', new Set([...current.map(machine => machine.id), candidate.id]));
       this.check(job);
       const { platform: _, ...record } = candidate;
-      stored.ssh.push(record); await writePrivateJson(path, stored);
+      stored.ssh.push(record);
+      await writePrivateJson(path, stored).catch(() => {});
+      // Reconcile the atomic rename even if its following directory sync failed.
+      const published = (await machines()).find(machine => machine.id === candidate.id);
+      if (!published || published.target !== candidate.target || published.session !== candidate.session || published.label !== candidate.label || published.enabled !== candidate.enabled) {
+        if (!published) await this.platformPersistence.forget(candidate);
+        throw new ManagementError('Host publication failed or the saved host changed during setup. Refresh the catalog before retrying.', 409);
+      }
     }
     job.view = { ...job.view, machineId: candidate.id };
   }
   stop() {
     this.stopped = true; clearInterval(this.cleanupTimer);
     for (const job of this.jobs.values()) if (job.view.state === 'running') this.cancel(job.owner, job.view.id);
+    return Promise.allSettled([...this.jobs.values()].map(job => job.done)).then(() => {});
   }
 }

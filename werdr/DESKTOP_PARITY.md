@@ -99,6 +99,11 @@ Controlled Windows onboarding subprocess tests now cover successful installation
 Only the verified-compatible result registers a new host.
 Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
 These fixtures never install a runtime and do not replace the remaining live onboarding compatibility matrix.
+POSIX setup now uses job-specific staging labels for new hosts as well as repairs, so failed or cancelled native preparation can remove only its still-owned temporary registration.
+Final publication is explicitly non-cancellable: the browser hides response/cancel controls, and shutdown drains setup work before its forced-exit timer begins.
+Publication is verified by the captured native host identity, including recovery when a catalog write succeeds but its acknowledgement fails.
+Regression tests cover cancellation, revocation and shutdown after native registration, cancellation during platform persistence and rename, failed publication, externally adopted entries and unrelated matching-label additions.
+These changes provide cancellation-safe ownership boundaries, not cross-process native catalog locking or crash-atomic updates across the catalog and platform files.
 
 Live onboarding through the management service passed against both compatible Windows endpoints with an isolated local catalog.
 Each endpoint registered without an installation prompt, and its owner boot and pane identities plus the production catalog remained unchanged.

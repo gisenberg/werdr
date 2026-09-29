@@ -25,5 +25,5 @@ export const noticeEndpointKey = (machine: Machine) => JSON.stringify([machine.t
 export interface FleetState { generation: string; revision: number; hosts: HostView[]; notices: Notice[] }
 export type FleetEvent = { type: 'fleet.snapshot'; state: FleetState } | { type: 'fleet.host'; revision: number; host: HostView } | { type: 'fleet.catalog'; revision: number; hosts: HostView[] } | { type: 'fleet.notices'; revision: number; notices: Notice[]; added?: Notice };
 export interface SetupRequest { target: string; label: string; session: string; platform: 'posix' | 'windows' }
-export interface SetupJob { id: string; machineId?: string; state: 'running' | 'complete' | 'failed' | 'cancelled'; target: string; label: string; platform: 'posix' | 'windows'; output: string; started: number; ended?: number; error?: string }
+export interface SetupJob { id: string; machineId?: string; state: 'running' | 'complete' | 'failed' | 'cancelled'; cancellable?: boolean; target: string; label: string; platform: 'posix' | 'windows'; output: string; started: number; ended?: number; error?: string }
 export const emptySnapshot = (): Snapshot => ({ version: '', protocol: 0, workspaces: [], tabs: [], panes: [], agents: [], layouts: [] });
