@@ -304,8 +304,10 @@ mod tests {
         assert!(source.kitty_fingerprints.lock().unwrap().is_empty());
     }
 
+    // FileStore's secure file-backed exports are currently Unix-only.
+    #[cfg(unix)]
     #[test]
-    fn graphics_snapshot_attachment_collision_and_bad_provenance_cleanup() {
+    fn graphics_snapshot_attachment_collision_cleanup() {
         let first = Arc::new(FileStore::default().export(&[1, 2, 3, 4]).unwrap());
         let second = Arc::new(FileStore::default().export(&[4, 3, 2, 1]).unwrap());
         assert_eq!(first.fingerprint(), second.fingerprint());
@@ -331,14 +333,37 @@ mod tests {
         }
         assert_eq!(Arc::strong_count(&first), 1);
         assert_eq!(Arc::strong_count(&second), 1);
+    }
+
+    #[test]
+    fn graphics_snapshot_rejects_foreign_provenance_and_missing_attachments() {
         let bad = ffi::GhosttyKittyImageFileBacking {
             context: std::ptr::dangling_mut(),
             ..Default::default()
         };
         // Rejected before the deliberately invalid foreign context is read.
         assert!(unsafe { native_source::retain_backing(&bad) }.is_err());
+        let mut capture = Capture {
+            attachments: HashMap::new(),
+            error: None,
+        };
+        assert!(!unsafe { retain((&mut capture as *mut Capture).cast(), &bad) });
+        assert!(capture.attachments.is_empty());
+        assert!(capture.error.is_some());
+
+        let attachments = HashMap::new();
+        let mut context = Restore {
+            attachments: &attachments,
+            error: None,
+        };
+        let mut out = ffi::GhosttyKittyImageFileBacking::default();
+        assert!(!unsafe { resolve((&mut context as *mut Restore<'_>).cast(), 1, 4, &mut out) });
+        assert!(out.context.is_null());
+        assert!(context.error.is_some());
     }
 
+    // Successful reference transfer requires a real Unix OwnedExport.
+    #[cfg(unix)]
     #[test]
     fn graphics_snapshot_resolver_checks_identity_length_and_transfers_one_reference() {
         let source = Arc::new(FileStore::default().export(&[1, 2, 3, 4]).unwrap());
@@ -359,6 +384,13 @@ mod tests {
             out.release.unwrap()(out.context);
         }
         assert_eq!(Arc::strong_count(&source), 2);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graphics_snapshot_file_export_is_explicitly_unsupported() {
+        let result = FileStore::default().export(&[1, 2, 3, 4]);
+        assert!(matches!(result, Err(error) if error.kind() == std::io::ErrorKind::Unsupported));
     }
 
     #[cfg(target_os = "linux")]
