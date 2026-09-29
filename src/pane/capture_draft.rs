@@ -60,12 +60,27 @@ impl PaneRuntime {
     pub(crate) fn test_for_draft_capture_with_delayed_detector(
         bytes: &[u8],
     ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        Self::test_for_draft_capture_with_publishing_detector(bytes, None)
+    }
+
+    pub(crate) fn test_for_draft_capture_with_publishing_detector(
+        bytes: &[u8],
+        publication: Option<(
+            tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+            Vec<crate::events::AppEvent>,
+        )>,
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
         let mut runtime = Self::test_for_draft_capture(bytes);
         let (controller, mut worker) = super::detection_pause::channel();
         let (release, wait) = tokio::sync::oneshot::channel();
         let detector = tokio::spawn(async move {
             if wait.await.is_err() {
                 return;
+            }
+            if let Some((sender, events)) = publication {
+                for event in events {
+                    sender.send(event).await.unwrap();
+                }
             }
             while worker.checkpoint().await {
                 worker.changed().await;

@@ -5,6 +5,9 @@
 
 use std::time::Instant;
 
+mod inbox;
+pub(crate) use inbox::OwnerInbox;
+
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;
 use crate::workspace::{GitStatusCacheEntry, WorkspaceGitStatus};

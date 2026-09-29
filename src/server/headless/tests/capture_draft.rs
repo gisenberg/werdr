@@ -20,6 +20,162 @@ fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
 }
 
 #[tokio::test]
+async fn capture_stages_blocked_detector_publication_without_running_handlers() {
+    let (mut server, terminal_id, pane_id) = fixture();
+    let (sender, receiver) = mpsc::channel(1);
+    server.app.event_tx = sender.clone();
+    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    let (runtime, release) = TerminalRuntime::test_for_draft_capture_with_publishing_detector(
+        sender,
+        vec![
+            AppEvent::TerminalBell { pane_id, count: 1 },
+            AppEvent::ClipboardWrite {
+                content: b"kept".to_vec(),
+            },
+            AppEvent::PaneDied {
+                pane_id,
+                exit_reason: crate::platform::ChildExitReason::Exited,
+            },
+        ],
+    );
+    server
+        .app
+        .terminal_runtimes
+        .insert(terminal_id.clone(), runtime);
+    let mut capture = Box::pin(server.capture_terminal_after_queued_prefix(
+        &terminal_id,
+        crate::pane::draft_test_limits(),
+        Duration::from_secs(2),
+    ));
+    std::future::poll_fn(|cx| {
+        assert!(capture.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    release.send(()).unwrap();
+    let error = capture.await.err().unwrap();
+    assert!(error.contains("events arrived"), "{error}");
+    // PaneDied must not run under a borrowed/paused runtime, nor disappear.
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+    assert!(matches!(
+        server.app.event_rx.recv().await,
+        Some(AppEvent::TerminalBell { count: 1, .. })
+    ));
+    let AppEvent::ClipboardWrite { content } = server.app.event_rx.try_recv().unwrap() else {
+        panic!("clipboard lost");
+    };
+    assert_eq!(content, b"kept");
+    let death = server.app.event_rx.try_recv().unwrap();
+    assert!(matches!(death, AppEvent::PaneDied { .. }));
+    server.handle_internal_event_with_forwarding(death);
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+    assert!(server.app.event_rx.is_empty());
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn cancelled_capture_retains_staged_events_before_later_publication() {
+    let (mut server, terminal_id, pane_id) = fixture();
+    let (runtime, release) = TerminalRuntime::test_for_draft_capture_with_delayed_detector(b"kept");
+    server
+        .app
+        .terminal_runtimes
+        .insert(terminal_id.clone(), runtime);
+    let sender = server.app.event_tx.clone();
+    let mut capture = Box::pin(server.capture_terminal_after_queued_prefix(
+        &terminal_id,
+        crate::pane::draft_test_limits(),
+        Duration::from_secs(2),
+    ));
+    std::future::poll_fn(|cx| {
+        assert!(capture.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    sender
+        .try_send(AppEvent::TerminalBell { pane_id, count: 1 })
+        .unwrap();
+    std::future::poll_fn(|cx| {
+        assert!(capture.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(capture);
+    sender
+        .try_send(AppEvent::TerminalBell { pane_id, count: 2 })
+        .unwrap();
+    for expected in [1, 2] {
+        let AppEvent::TerminalBell { count, .. } = server.app.event_rx.try_recv().unwrap() else {
+            panic!("bell lost");
+        };
+        assert_eq!(count, expected);
+    }
+    release.send(()).unwrap();
+    server
+        .capture_terminal_after_queued_prefix(
+            &terminal_id,
+            crate::pane::draft_test_limits(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn capture_staging_exhaustion_rolls_back_without_losing_blocked_publications() {
+    let (mut server, terminal_id, pane_id) = fixture();
+    let (sender, receiver) = mpsc::channel(1);
+    server.app.event_tx = sender.clone();
+    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    let count = crate::app::APP_EVENT_CHANNEL_CAPACITY as u16 + 2;
+    let (runtime, release) = TerminalRuntime::test_for_draft_capture_with_publishing_detector(
+        sender,
+        (1..=count)
+            .map(|count| AppEvent::TerminalBell { pane_id, count })
+            .collect(),
+    );
+    server
+        .app
+        .terminal_runtimes
+        .insert(terminal_id.clone(), runtime);
+    let mut capture = Box::pin(server.capture_terminal_after_queued_prefix(
+        &terminal_id,
+        crate::pane::draft_test_limits(),
+        Duration::from_secs(2),
+    ));
+    std::future::poll_fn(|cx| {
+        assert!(capture.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    release.send(()).unwrap();
+    let error = capture.await.err().unwrap();
+    assert!(error.contains("staging limit"), "{error}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        for expected in 1..=count {
+            let Some(AppEvent::TerminalBell { count, .. }) = server.app.event_rx.recv().await
+            else {
+                panic!("bell lost");
+            };
+            assert_eq!(count, expected);
+        }
+    })
+    .await
+    .unwrap();
+    server
+        .capture_terminal_after_queued_prefix(
+            &terminal_id,
+            crate::pane::draft_test_limits(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    assert!(server.app.event_rx.is_empty());
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
 async fn prior_cwd_and_detection_events_apply_before_owner_capture() {
     let (mut server, terminal_id, pane_id) = fixture();
     let cwd = std::env::temp_dir();

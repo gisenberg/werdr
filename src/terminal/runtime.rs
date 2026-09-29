@@ -54,6 +54,19 @@ impl TerminalRuntime {
         self.0.shutdown();
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_publishing_detector(
+        events: mpsc::Sender<AppEvent>,
+        publication: Vec<AppEvent>,
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let (runtime, release) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_publishing_detector(
+                b"kept",
+                Some((events, publication)),
+            );
+        (Self(runtime), release)
+    }
+
     #[cfg(unix)]
     pub fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
         self.0.duplicate_handoff_fd()

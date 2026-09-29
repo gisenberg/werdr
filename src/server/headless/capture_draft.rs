@@ -4,6 +4,9 @@
 //! Handlers may remove/replace runtimes and reapply geometry, so they must never
 //! run while a terminal capture guard holds one. Later events, in-flight
 //! producers and work spawned by these handlers are NOT acknowledged here.
+//! Stage new events while awaiting detector acknowledgement, then reject the
+//! draft if any are pending. Staging cannot run during the synchronous actor
+//! pause, and an empty inbox is not proof of a producer or shared-session cut.
 //! Keep this disconnected from production handoff and endpoint negotiation.
 
 use super::*;
@@ -27,13 +30,42 @@ impl HeadlessServer {
             .capture_identity();
         let prefix_len = self.app.event_rx.len();
         self.apply_capture_prefix(prefix_len)?;
-        let runtime = self.capture_runtime_if_unchanged(terminal_id, &identity)?;
-        let draft = runtime
-            .capture_terminal_state_draft(limits, timeout)
-            .await?;
+        self.capture_runtime_if_unchanged(terminal_id, &identity)?;
+        let result = {
+            // Borrow disjoint owner fields. Never apply handlers while the
+            // runtime operation owns its producer pauses: they can remove or
+            // resize that runtime. The inbox retains events even if cancelled.
+            let inbox = &mut self.app.event_rx;
+            let runtime = self
+                .app
+                .terminal_runtimes
+                .get_mut(terminal_id)
+                .ok_or("terminal runtime missing after identity validation")?;
+            let capture = runtime.capture_terminal_state_draft(limits, timeout);
+            tokio::pin!(capture);
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut capture => break result,
+                    staged = inbox.stage_next(crate::app::APP_EVENT_CHANNEL_CAPACITY) => {
+                        match staged {
+                            Ok(true) => {},
+                            Ok(false) => break Err("event channel closed during capture".into()),
+                            Err(err) => break Err(err.into()),
+                        }
+                    }
+                }
+            }
+        };
         // Shutdown may arrive while awaiting detector acknowledgement. The
         // scoped runtime operation has already resumed its producers here.
         self.check_capture_shutdown()?;
+        let draft = result?;
+        if !self.app.event_rx.is_empty() {
+            return Err(
+                "events arrived during terminal capture; apply them before retrying".into(),
+            );
+        }
         Ok(draft)
     }
 
