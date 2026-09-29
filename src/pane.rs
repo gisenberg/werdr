@@ -39,7 +39,7 @@ mod terminal;
 mod xtgettcap;
 
 #[cfg(unix)]
-pub(crate) use capture_draft::CaptureIdentity;
+pub(crate) use capture_draft::{CaptureIdentity, TerminalDraftPause};
 #[cfg(all(test, unix))]
 pub(crate) use terminal::state_draft::test_limits as draft_test_limits;
 #[cfg(unix)]

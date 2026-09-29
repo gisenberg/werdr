@@ -63,6 +63,54 @@ pub(crate) struct PaneStateDraft {
     observer: Option<crate::ghostty::TrackedRowSnapshot>,
 }
 
+impl PaneStateDraft {
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_restored_text(self) -> String {
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        GhosttyPaneTerminal::restore_state_draft(self, test_limits(), tx)
+            .unwrap()
+            .visible_text()
+    }
+    /// Charge retained payload and fixed Rust records, not peak native capture
+    /// allocations or allocator overhead. Shared attachments are charged per
+    /// draft so a batch does not assume a future transport will deduplicate them.
+    #[cfg(unix)]
+    pub(crate) fn retained_bytes(&self) -> Option<usize> {
+        let mut total = std::mem::size_of::<Self>();
+        for bytes in [
+            &self.native,
+            &self.caller,
+            &self.clipboard_write,
+            &self.dnd,
+            &self.handler,
+            &self.osc_capture,
+            &self.apc,
+        ] {
+            total = total.checked_add(bytes.len())?;
+        }
+        total = total.checked_add(self.graphics.retained_payload_bytes()?)?;
+        total = total.checked_add(self.graphics_policy.retained_payload_bytes()?)?;
+        for queue in [
+            &self.callbacks.pwd_changes,
+            &self.callbacks.clipboard_writes,
+        ] {
+            total = total.checked_add(queue.len().checked_mul(std::mem::size_of::<Vec<u8>>())?)?;
+            for bytes in queue {
+                total = total.checked_add(bytes.len())?;
+            }
+        }
+        total = total.checked_add(
+            self.replies
+                .len()
+                .checked_mul(std::mem::size_of::<Bytes>())?,
+        )?;
+        for reply in &self.replies {
+            total = total.checked_add(reply.len())?;
+        }
+        Some(total)
+    }
+}
+
 #[derive(Serialize)]
 struct CallerRef<'a> {
     version: u8,

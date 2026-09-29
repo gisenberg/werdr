@@ -11,6 +11,8 @@
 
 use super::*;
 
+mod batch;
+
 // This coordinator remains private until queued-effect transfer, child-exit
 // ownership and the complete runtime snapshot protocol are implemented.
 #[allow(dead_code)]

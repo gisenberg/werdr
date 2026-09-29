@@ -34,6 +34,18 @@ pub struct GraphicsSnapshot {
     attachments: HashMap<u64, Arc<OwnedExport>>,
 }
 
+impl GraphicsSnapshot {
+    /// Logical retained payload, including immutable file attachments once per
+    /// identity. This does not measure allocator or filesystem block overhead.
+    pub fn retained_payload_bytes(&self) -> Option<usize> {
+        self.attachments
+            .values()
+            .try_fold(self.bytes.len(), |total, attachment| {
+                total.checked_add(attachment.len())
+            })
+    }
+}
+
 impl std::fmt::Debug for GraphicsSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphicsSnapshot")

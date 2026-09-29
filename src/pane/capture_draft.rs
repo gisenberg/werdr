@@ -18,6 +18,21 @@ pub(crate) struct CaptureIdentity(std::sync::Arc<super::PaneTerminal>);
 // Deliberately opt-in until the complete runtime/effect ownership cut exists.
 #[allow(dead_code)]
 impl PaneRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_for_draft_capture_with_actor() -> (
+        Self,
+        crate::pty::actor::PtyIoActorHandle,
+        std::os::unix::net::UnixStream,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (runtime, peer, reads) = tests::fixture();
+        let super::PaneRuntimeIo::Actor(actor) = &runtime.io else {
+            unreachable!()
+        };
+        let actor = actor.clone();
+        (runtime, actor, peer, reads)
+    }
+
     pub(crate) fn capture_identity(&self) -> CaptureIdentity {
         CaptureIdentity(self.terminal.clone())
     }
@@ -93,7 +108,7 @@ impl PaneRuntime {
     }
 }
 
-struct TerminalDraftPause<'a> {
+pub(crate) struct TerminalDraftPause<'a> {
     runtime: &'a mut PaneRuntime,
     actor: Option<crate::pty::actor::CapturePause>,
     timeout: Duration,
@@ -103,8 +118,12 @@ struct TerminalDraftPause<'a> {
 }
 
 impl<'a> TerminalDraftPause<'a> {
+    pub(crate) fn snapshot(&self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
+        self.runtime.terminal.ghostty.capture_state_draft(limits)
+    }
+
     async fn capture(self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
-        let draft = self.runtime.terminal.ghostty.capture_state_draft(limits);
+        let draft = self.snapshot(limits);
         let resumed = self.resume().await;
         match (draft, resumed) {
             (Ok(draft), Ok(())) => Ok(draft),
@@ -118,7 +137,10 @@ impl<'a> TerminalDraftPause<'a> {
         }
     }
 
-    async fn begin(runtime: &'a mut PaneRuntime, timeout: Duration) -> Result<Self, String> {
+    pub(crate) async fn begin(
+        runtime: &'a mut PaneRuntime,
+        timeout: Duration,
+    ) -> Result<Self, String> {
         let detector = if runtime.detect_handle.is_some() {
             let controller = runtime
                 .detection_pause
@@ -146,7 +168,7 @@ impl<'a> TerminalDraftPause<'a> {
         })
     }
 
-    async fn resume(mut self) -> Result<(), String> {
+    pub(crate) async fn resume(mut self) -> Result<(), String> {
         if let Some(actor) = self.actor.take() {
             actor
                 .resume(self.timeout)
@@ -175,7 +197,7 @@ mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(2);
 
-    fn fixture() -> (PaneRuntime, UnixStream, channel::Receiver<Vec<u8>>) {
+    pub(super) fn fixture() -> (PaneRuntime, UnixStream, channel::Receiver<Vec<u8>>) {
         let (mut runtime, _) = PaneRuntime::test_with_channel(40, 5);
         runtime.detect_handle.take().unwrap().abort();
         runtime.compression.abort();

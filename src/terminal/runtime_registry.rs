@@ -48,6 +48,11 @@ impl TerminalRuntimeRegistry {
     }
 
     #[cfg(unix)]
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (&TerminalId, &mut TerminalRuntime)> {
+        self.runtimes.iter_mut()
+    }
+
+    #[cfg(unix)]
     pub(crate) fn set_handoff_readers_paused(&self, paused: bool) {
         for runtime in self.runtimes.values() {
             runtime.set_handoff_reader_paused(paused);

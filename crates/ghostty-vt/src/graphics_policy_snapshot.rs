@@ -24,6 +24,16 @@ pub struct GraphicsPolicySnapshot {
     source_forwarding: bool,
 }
 
+impl GraphicsPolicySnapshot {
+    /// Variable policy payload, excluding the fixed DTO and allocator overhead.
+    pub fn retained_payload_bytes(&self) -> Option<usize> {
+        self.screens[0]
+            .directory
+            .len()
+            .checked_add(self.screens[1].directory.len())
+    }
+}
+
 fn check_lengths(lengths: [usize; 2], limit: usize) -> Result<(), Error> {
     if lengths[0].checked_add(lengths[1]).is_none_or(|n| n > limit) {
         return Err(Error(ffi::GhosttyResult_GHOSTTY_LIMIT_EXCEEDED));

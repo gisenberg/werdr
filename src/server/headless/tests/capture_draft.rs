@@ -2,6 +2,9 @@ use super::*;
 use crate::terminal::{TerminalId, TerminalRuntime};
 use std::{future::Future, task::Poll};
 
+#[path = "capture_batch.rs"]
+mod batch_tests;
+
 fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("capture-prefix");

@@ -16,7 +16,46 @@ use crate::layout::PaneId;
 /// type instead of the pane module's implementation detail.
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
+/// Exclusive terminal-only pause. The registry borrow prevents mutation while
+/// an owner captures several runtimes together; this is not process ownership.
+#[cfg(unix)]
+pub(crate) struct TerminalCaptureGuard<'a>(crate::pane::TerminalDraftPause<'a>);
+
+#[cfg(unix)]
+impl TerminalCaptureGuard<'_> {
+    pub(crate) fn snapshot(
+        &self,
+        limits: crate::pane::DraftLimits,
+    ) -> Result<crate::pane::PaneStateDraft, String> {
+        self.0.snapshot(limits)
+    }
+
+    pub(crate) async fn resume(self) -> Result<(), String> {
+        self.0.resume().await
+    }
+}
+
 impl TerminalRuntime {
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_actor() -> (
+        Self,
+        crate::pty::actor::PtyIoActorHandle,
+        std::os::unix::net::UnixStream,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (runtime, actor, peer, reads) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_actor();
+        (Self(runtime), actor, peer, reads)
+    }
+    #[cfg(unix)]
+    pub(crate) async fn pause_for_terminal_capture(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<TerminalCaptureGuard<'_>, String> {
+        crate::pane::TerminalDraftPause::begin(&mut self.0, timeout)
+            .await
+            .map(TerminalCaptureGuard)
+    }
     #[cfg(unix)]
     pub(crate) fn capture_identity(&self) -> crate::pane::CaptureIdentity {
         self.0.capture_identity()
