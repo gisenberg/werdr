@@ -77,6 +77,12 @@ An empty custom name remains custom in the native reference, and the browser dis
 These probes retained owner boot identity, preserved pre-existing panes, closed their recorded test workspaces, and left saved browser preferences unchanged.
 They establish the agent-view and tab-label behavior, not the remaining live acceptance of every advertised capability.
 
+Live semantic-notification probes passed through the deployed gateway on all three hosts.
+They verified literal custom text, requested positioning and dismissal, attention notices with exact machine/pane/terminal targets, completion delivery, cancellation after work resumes, and no re-alert after browser reload.
+The delayed case used a cancelled browser settings preview; saved preferences remained byte-for-byte unchanged.
+Cleanup preserved original pane and owner identities and marked only the probe's own notices read.
+This does not establish live update-event delivery, OS desktop-notification behavior, or the complete custom-audio matrix.
+
 Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
 Only the verified-compatible result registers a new host.
 Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
