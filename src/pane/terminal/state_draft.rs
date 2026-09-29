@@ -31,7 +31,7 @@ fn check_graphics_domains(exclusions: u64) -> Result<(), String> {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::pane) struct DraftLimits {
+pub(crate) struct DraftLimits {
     pub native_bytes: usize,
     pub caller_bytes: usize,
     pub reply_bytes: usize,
@@ -47,7 +47,7 @@ pub(in crate::pane) struct DraftLimits {
     pub apc_bytes: usize,
 }
 
-pub(in crate::pane) struct PaneStateDraft {
+pub(crate) struct PaneStateDraft {
     native: Vec<u8>,
     caller: Vec<u8>,
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
@@ -340,7 +340,7 @@ impl GhosttyPaneTerminal {
 }
 
 #[cfg(test)]
-pub(in crate::pane) fn test_limits() -> DraftLimits {
+pub(crate) fn test_limits() -> DraftLimits {
     DraftLimits {
         native_bytes: 16 << 20,
         caller_bytes: 1 << 20,

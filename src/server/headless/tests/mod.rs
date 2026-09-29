@@ -1,5 +1,7 @@
 use super::*;
 
+#[cfg(unix)]
+mod capture_draft;
 mod event_fairness;
 mod idle_shutdown;
 mod native_graphics;

@@ -11,14 +11,26 @@ use super::{
 };
 use std::time::Duration;
 
+/// Retains the allocation, not process authority, so runtime replacement cannot
+/// pass an identity check even if its terminal id (or allocator address) is reused.
+pub(crate) struct CaptureIdentity(std::sync::Arc<super::PaneTerminal>);
+
 // Deliberately opt-in until the complete runtime/effect ownership cut exists.
 #[allow(dead_code)]
 impl PaneRuntime {
+    pub(crate) fn capture_identity(&self) -> CaptureIdentity {
+        CaptureIdentity(self.terminal.clone())
+    }
+
+    pub(crate) fn matches_capture_identity(&self, identity: &CaptureIdentity) -> bool {
+        std::sync::Arc::ptr_eq(&self.terminal, &identity.0)
+    }
+
     /// Excludes owner-side mutations with an exclusive borrow, then drains the
     /// actor before taking the existing core/reply snapshot locks. No lock is
     /// held while waiting for the actor, which may still need to parse output
     /// and produce replies to finish draining accepted input.
-    pub(super) async fn capture_terminal_state_draft(
+    pub(crate) async fn capture_terminal_state_draft(
         &mut self,
         limits: DraftLimits,
         timeout: Duration,
@@ -26,6 +38,42 @@ impl PaneRuntime {
         TerminalDraftPause::begin(self, timeout)
             .await?
             .capture(limits)
+    }
+}
+
+#[cfg(test)]
+impl PaneRuntime {
+    pub(crate) fn test_for_draft_capture(bytes: &[u8]) -> Self {
+        let (mut runtime, _) = Self::test_with_channel(40, 5);
+        runtime.detect_handle.take().unwrap().abort();
+        runtime.compression.abort();
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        let mut native =
+            crate::ghostty::Terminal::new_with_snapshot_tracking(40, 5, 100_000, 4096).unwrap();
+        native.write(bytes);
+        runtime.terminal = std::sync::Arc::new(super::PaneTerminal::new(
+            super::GhosttyPaneTerminal::new(native, tx).unwrap(),
+        ));
+        runtime
+    }
+
+    pub(crate) fn test_for_draft_capture_with_delayed_detector(
+        bytes: &[u8],
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let mut runtime = Self::test_for_draft_capture(bytes);
+        let (controller, mut worker) = super::detection_pause::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let detector = tokio::spawn(async move {
+            if wait.await.is_err() {
+                return;
+            }
+            while worker.checkpoint().await {
+                worker.changed().await;
+            }
+        });
+        runtime.detect_handle = Some(detector.abort_handle());
+        runtime.detection_pause = Some(controller);
+        (runtime, release)
     }
 }
 

@@ -73,6 +73,8 @@ use crate::server::socket_paths::{
 use crate::server::terminal_attach::paste_payload_for_runtime;
 
 mod bootstrap;
+#[cfg(unix)]
+mod capture_draft;
 mod client_views;
 mod endpoint_requests;
 mod lifecycle;

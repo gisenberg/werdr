@@ -17,6 +17,39 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
+    #[cfg(unix)]
+    pub(crate) fn capture_identity(&self) -> crate::pane::CaptureIdentity {
+        self.0.capture_identity()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn matches_capture_identity(&self, identity: &crate::pane::CaptureIdentity) -> bool {
+        self.0.matches_capture_identity(identity)
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn capture_terminal_state_draft(
+        &mut self,
+        limits: crate::pane::DraftLimits,
+        timeout: std::time::Duration,
+    ) -> Result<crate::pane::PaneStateDraft, String> {
+        self.0.capture_terminal_state_draft(limits, timeout).await
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture(bytes: &[u8]) -> Self {
+        Self(crate::pane::PaneRuntime::test_for_draft_capture(bytes))
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_delayed_detector(
+        bytes: &[u8],
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let (runtime, release) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_delayed_detector(bytes);
+        (Self(runtime), release)
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
     }

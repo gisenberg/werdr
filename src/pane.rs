@@ -37,6 +37,13 @@ mod state;
 mod terminal;
 mod xtgettcap;
 
+#[cfg(unix)]
+pub(crate) use capture_draft::CaptureIdentity;
+#[cfg(all(test, unix))]
+pub(crate) use terminal::state_draft::test_limits as draft_test_limits;
+#[cfg(unix)]
+pub(crate) use terminal::state_draft::{DraftLimits, PaneStateDraft};
+
 use self::agent_detection::{
     codex_prompt_ready, decide_detection_screen_read, decide_screen_detection_publish,
     detection_update_for_publish_with_osc, mark_detection_content_changed,
