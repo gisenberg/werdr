@@ -47,6 +47,9 @@ Copy hints distinguish selection, search cancellation, Escape clearing and exit 
 These checks and browser screenshots do not establish complete native-reference visual parity across every mode and palette.
 Configured native commands are implemented and verified against the candidate runtime as described below.
 Complete keyboard-layout/protocol coverage remains outstanding.
+`web/test/native-keyboard-ime.spec.ts` compares browser routing with the bundled native encoder for navigation, editing, function, keypad and international physical keys under Kitty flags 1 and 31 and modifyOtherKeys level 2.
+The matrix covers press, repeat and release, plain and Ctrl+Shift input, and normal and application cursor/keypad modes.
+These synthetic DOM checks complement the existing Unicode and AltGraph cases but do not establish OS-level layout or IME composition acceptance.
 Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.
 Its request epoch cancels delayed reads and actions, fences stale authentication failures, and keeps online/visibility wakeups idle.
 Resume validates the preserved endpoint and terminal identity through a fresh snapshot, including after an expired login; missing or replaced targets require explicit selection.
