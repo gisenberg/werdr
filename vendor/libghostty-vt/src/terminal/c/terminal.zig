@@ -1808,6 +1808,7 @@ fn resizeWithScrollback(
         .cols = cols,
         .rows = rows,
         .pull_scrollback = pull_scrollback,
+        .conpty_padding = !pull_scrollback,
         .cell_size_px = .{
             .width = cell_width_px,
             .height = cell_height_px,

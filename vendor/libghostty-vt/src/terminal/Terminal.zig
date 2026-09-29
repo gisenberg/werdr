@@ -3990,6 +3990,8 @@ pub const Resize = struct {
     /// Keep false for consoles whose growth and reflow retain the active origin.
     /// This is a per-resize policy, not terminal state or a scrollback limit.
     pull_scrollback: bool = true,
+    /// Match ConPTY's nonwrapped trailing-space measurement during reflow.
+    conpty_padding: bool = false,
     cell_size_px: ?struct {
         width: u32,
         height: u32,
@@ -4096,6 +4098,7 @@ pub fn resize(
         .reflow = self.modes.get(.wraparound),
         .prompt_redraw = self.flags.shell_redraws_prompt,
         .pull_scrollback = opts.pull_scrollback,
+        .conpty_padding = opts.conpty_padding,
     });
 
     // Alternate screen, if it exists, doesn't reflow. The primary resize
@@ -4110,6 +4113,7 @@ pub fn resize(
                 .rows = opts.rows,
                 .reflow = false,
                 .pull_scrollback = opts.pull_scrollback,
+                .conpty_padding = opts.conpty_padding,
             }) catch |err| break :resize err;
 
             // Resize succeeded.

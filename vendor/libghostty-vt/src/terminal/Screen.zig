@@ -2014,6 +2014,7 @@ pub const Resize = struct {
 
     /// Whether growth or column reflow may pull history into the active area.
     pull_scrollback: bool = true,
+    conpty_padding: bool = false,
 
     /// Set this to enable prompt redraw on resize. This signals
     /// that the running program can redraw the prompt if the cursor is
@@ -2112,6 +2113,7 @@ pub inline fn resize(
         .cols = opts.cols,
         .reflow = opts.reflow,
         .pull_scrollback = opts.pull_scrollback,
+        .conpty_padding = opts.conpty_padding,
         .cursor = .{
             .x = self.cursor.x,
             .y = self.cursor.y,

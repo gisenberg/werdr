@@ -1076,6 +1076,8 @@ impl Terminal {
     /// into the active screen on enlargement, such as ConPTY.
     /// Column reflow separates history from active content at their boundary,
     /// preserving historical cells but splitting any soft wrap across it.
+    /// Nonwrapped active rows follow ConPTY's trailing-space measurement;
+    /// padding styles remain visible without adding wrapped rows.
     pub fn resize_preserve_active(
         &mut self,
         cols: u16,
@@ -4682,6 +4684,105 @@ mod tests {
                 terminal.write(b"\x1b]52;c;?\x07\x1b]52;p;YQBi\x07");
                 assert!(terminal.take_clipboard_writes().is_empty());
                 assert!(replies.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_origin_padding_preserves_cursor_wraps_and_interior_spaces() {
+        let cases = [
+            (format!("prefix{}", " ".repeat(105)), 2),
+            (
+                format!(
+                    "{}{}TAIL\r\nMARKER\r\nprompt> ",
+                    "a".repeat(100),
+                    " ".repeat(30)
+                ),
+                5,
+            ),
+            (
+                format!("prefix{}TAIL\r\nMARKER\r\nprompt> ", " ".repeat(100)),
+                4,
+            ),
+            (
+                format!(
+                    "{}{}\r\nMARKER\r\nprompt> ",
+                    "界".repeat(30),
+                    " ".repeat(41)
+                ),
+                3,
+            ),
+        ];
+        for (text, expected_y) in cases {
+            let mut terminal = Terminal::new(130, 42, 100).unwrap();
+            terminal.write(text.as_bytes());
+            terminal.resize_preserve_active(40, 38, 0, 0).unwrap();
+            assert_eq!(terminal.cursor_y().unwrap(), expected_y, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn fixed_origin_styled_padding_follows_wide_reflow_cursor() {
+        for width in [3, 5, 7, 9] {
+            let prefix = format!("{}界", "a".repeat(usize::from(width - 1)));
+            let mut terminal = Terminal::new(30, 10, 100).unwrap();
+            terminal.write(format!("{prefix}\x1b[41m          \x1b[0m\r\nMARK\r\np> ").as_bytes());
+            let mut reference = Terminal::new(30, 10, 100).unwrap();
+            reference.write(format!("{prefix}\r\nMARK\r\np> ").as_bytes());
+            terminal.resize_preserve_active(width, 10, 0, 0).unwrap();
+            reference.resize_preserve_active(width, 10, 0, 0).unwrap();
+            assert_eq!(
+                terminal.cursor_y().unwrap(),
+                reference.cursor_y().unwrap(),
+                "width={width}"
+            );
+            assert_eq!(
+                terminal
+                    .read_text_viewport((0, 0), (width - 1, 9), true)
+                    .unwrap(),
+                reference
+                    .read_text_viewport((0, 0), (width - 1, 9), true)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_resize_retains_literal_trailing_spaces() {
+        let mut terminal = Terminal::new(130, 42, 100).unwrap();
+        terminal.write(
+            format!("{}{}\r\nMARKER\r\nprompt> ", "a".repeat(70), " ".repeat(41)).as_bytes(),
+        );
+        terminal.resize(40, 38, 0, 0).unwrap();
+        assert_eq!(terminal.cursor_y().unwrap(), 4);
+    }
+
+    #[test]
+    fn fixed_origin_resize_matches_conpty_trailing_padding() {
+        // Captured with the packaged ConPTY 1.24.260710001: native cursor
+        // (8, 2) becomes (8, 3) at 40 columns, including styled padding.
+        // Literal trailing spaces must not manufacture a third command row.
+        for styled in [false, true] {
+            let mut terminal = Terminal::new(130, 42, 100).unwrap();
+            let padding = if styled {
+                format!("\x1b[41m{}\x1b[0m", " ".repeat(41))
+            } else {
+                " ".repeat(41)
+            };
+            terminal
+                .write(format!("{}{}\r\nMARKER\r\nprompt> ", "a".repeat(70), padding).as_bytes());
+            terminal.resize_preserve_active(40, 38, 0, 0).unwrap();
+            assert_eq!(terminal.cursor_y().unwrap(), 3, "styled={styled}");
+            // A subsequent absolute-addressed redraw must not overwrite output.
+            terminal.write(b"\x1b[4;9HNEXT");
+            assert_eq!(
+                terminal.read_text_viewport((0, 2), (39, 3), true).unwrap(),
+                "MARKER\nprompt> NEXT",
+                "styled={styled}"
+            );
+            if styled {
+                let ansi = terminal.read_ansi_viewport((30, 1), (39, 1), true).unwrap();
+                assert!(ansi.contains("41m") || ansi.contains("48;5;1m"), "{ansi:?}");
             }
         }
     }

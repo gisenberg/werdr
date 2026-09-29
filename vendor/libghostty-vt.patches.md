@@ -35,6 +35,10 @@ Both screens receive the policy, including the hidden primary screen.
 Column reflow tracks the old active top, treats history and active content as separate reflow domains, and fills newly vacant active rows with blanks rather than history.
 Splitting a soft wrap at that boundary retains historical cell content but intentionally removes its logical-line connection to active content.
 Cursor preservation counts wrapping only within the tracked active domain.
+The fixed-origin C entry point also opts into ConPTY trailing-padding measurement for nonwrapped active rows.
+Literal trailing spaces do not create additional rows, while padding styles remain painted within the actual final destination row.
+The padding boundary is computed after text reflow so wide-character margin spacers cannot add a spurious row.
+Interior spaces, wrapped rows, retained history, cursor positions and managed or semantic content retain their existing handling.
 
 verification: The bottom-cursor regression failed before implementation with expected row 2, actual row 4.
 The native `zig build test-lib-vt -Demit-lib-vt=true -Dtest-filter=resize` suite passed after implementation.
@@ -46,6 +50,13 @@ The column-policy regression failed before implementation with expected cursor r
 The expanded column tests pass for history-free reference equivalence, wrapped boundary content and flags, repeated width cycles, wide characters, blank rows, narrowing, combined geometry changes, hidden primary screens, and saved cursors.
 Full `just check` passed for the expanded policy, including 4,049 Rust tests and Windows cross-target lint.
 Native Windows and live validation of the expanded policy remain pending.
+Controlled traces with the packaged ConPTY 1.24.260710001 reproduce a trailing-space mismatch independently of PowerShell: a native prompt at row 3 becomes Ghostty row 4.
+The wrapper regression failed before the padding correction and passes afterward for default and background-styled padding, including subsequent absolute cursor writes.
+Additional tests cover cursor-in-padding, interior spaces, wrapped spaces, wide text, odd-width wide-character boundaries and unchanged ordinary resize behavior.
+The complete captured PowerShell trace now replays through resize and subsequent input without overwriting the preceding output marker.
+The native resize suite and full `just check` pass, including 4,147 Rust tests and vendor reverse-apply validation.
+All seven render-scale scenarios pass; combined active-pane medians are 553 microseconds for one pane and 608 for fifteen, with background-workspace medians 560 and 568.
+The revised padding policy still requires full native Windows and live deployment validation.
 
 remove when: upstream supplies an equivalent fixed-origin growth policy through its C API, and retained-history, cursor-write, hidden-primary, size-report and live ConPTY resize regressions pass without this patch.
 

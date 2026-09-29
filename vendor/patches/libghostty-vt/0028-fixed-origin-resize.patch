@@ -1,8 +1,8 @@
 diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
-index c45672ab..d838213e 100644
+index c45672ab..1d5f4cb0 100644
 --- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
 +++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
-@@ -2083,6 +2083,28 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
+@@ -2083,6 +2083,30 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
                                        uint32_t cell_width_px,
                                        uint32_t cell_height_px);
 
@@ -16,6 +16,8 @@ index c45672ab..d838213e 100644
 + * Column reflow keeps history and active content in separate domains, splitting
 + * soft wraps at their boundary while retaining historical cell content.
 + * Vacant rows after unwrapping are filled with blanks, not retained history.
++ * Nonwrapped active rows measure trailing spaces like ConPTY. Padding styles
++ * remain visible within the final row without manufacturing additional rows.
 + * This per-call policy is intended for fixed-origin consoles such as ConPTY.
 + * NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.
 + *
@@ -44,10 +46,10 @@ index 97f0b788..ae8f0cab 100644
          if (features.input_encode) {
              @export(&c.key_event_new, .{ .name = "ghostty_key_event_new" });
 diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
-index 2e300302..212694fb 100644
+index 2e300302..22c76fa2 100644
 --- a/vendor/libghostty-vt/src/terminal/PageList.zig
 +++ b/vendor/libghostty-vt/src/terminal/PageList.zig
-@@ -1236,6 +1236,11 @@ pub const Resize = struct {
+@@ -1236,6 +1236,13 @@ pub const Resize = struct {
      /// be truncated if the new size is smaller than the old size.
      reflow: bool = true,
 
@@ -55,33 +57,36 @@ index 2e300302..212694fb 100644
 +    /// Disable to keep history and active content in separate reflow domains
 +    /// and append blank rows when growth or unwrapping creates vacant space.
 +    pull_scrollback: bool = true,
++    /// Measure active nonwrapped rows like ConPTY, independently of styling.
++    conpty_padding: bool = false,
 +
      /// Set this to the current cursor position in the active area. Some
      /// resize/reflow behavior depends on the cursor position.
      cursor: ?Cursor = null,
-@@ -1301,7 +1306,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+@@ -1301,7 +1308,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
          .gt => {
              // We grow rows after cols so that we can do our unwrapping/reflow
              // before we do a no-reflow grow.
 -            try self.resizeCols(cols, opts.cursor);
-+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
++            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
              try self.resizeWithoutReflow(opts);
          },
 
-@@ -1313,7 +1318,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+@@ -1313,7 +1320,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
                  copy.cols = self.cols;
                  break :opts copy;
              });
 -            try self.resizeCols(cols, opts.cursor);
-+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
++            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
          },
      }
 
-@@ -1338,9 +1343,18 @@ fn resizeCols(
+@@ -1338,9 +1345,19 @@ fn resizeCols(
      self: *PageList,
      cols: size.CellCountInt,
      cursor: ?Resize.Cursor,
 +    pull_scrollback: bool,
++    conpty_padding: bool,
  ) Allocator.Error!void {
      assert(cols != self.cols);
 
@@ -96,7 +101,7 @@ index 2e300302..212694fb 100644
      // If we have a cursor position (x,y), then we try under any col resizing
      // to keep the same number remaining active rows beneath it. This is a
      // very special case if you can imagine clearing the screen (i.e.
-@@ -1461,7 +1475,21 @@ fn resizeCols(
+@@ -1461,11 +1478,26 @@ fn resizeCols(
      // Reflow all our rows.
      {
          var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
@@ -118,7 +123,12 @@ index 2e300302..212694fb 100644
              try reflow_cursor.reflowRow(
                  self,
                  row,
-@@ -1521,7 +1549,14 @@ fn resizeCols(
+                 if (preserved_cursor) |c| c.tracked_pin else null,
++                conpty_padding and reached_active_top,
+             );
+
+             // Once we're done reflowing a page, we're done with it, so
+@@ -1521,7 +1553,14 @@ fn resizeCols(
              c.tracked_pin.*,
          ) orelse break :cursor;
 
@@ -134,7 +144,7 @@ index 2e300302..212694fb 100644
 
          // We need to determine how many rows we wrapped from the original
          // and subtract that from the remaining rows we expect because if
-@@ -1530,6 +1565,12 @@ fn resizeCols(
+@@ -1530,6 +1569,12 @@ fn resizeCols(
          const wrapped = wrapped: {
              var wrapped: usize = 0;
 
@@ -147,7 +157,7 @@ index 2e300302..212694fb 100644
              var row_it = c.tracked_pin.rowIterator(.left_up, active_pin);
              while (row_it.next()) |next| {
                  const row = next.rowAndCell().row;
-@@ -1550,6 +1591,17 @@ fn resizeCols(
+@@ -1550,6 +1595,17 @@ fn resizeCols(
              req_rows -= 1;
          }
      }
@@ -165,7 +175,99 @@ index 2e300302..212694fb 100644
  }
 
  // We use a cursor to track where we are in the src/dst. This is very
-@@ -2857,6 +2909,16 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
+@@ -1627,6 +1683,7 @@ const ReflowCursor = struct {
+         list: *PageList,
+         row: Pin,
+         cursor_pin: ?*Pin,
++        conpty_padding: bool,
+     ) Allocator.Error!void {
+         const src_page: *Page = row.node.page();
+         const src_row = row.rowAndCell().row;
+@@ -1636,9 +1693,19 @@ const ReflowCursor = struct {
+         // Calculate the columns in this row. First up we trim non-semantic
+         // rightmost blanks.
+         var cols_len = src_page.size.cols;
++        var styled_padding = false;
+         if (!src_row.wrap) {
+             while (cols_len > 0) {
+-                if (!cells[cols_len - 1].isEmpty()) break;
++                const cell = cells[cols_len - 1];
++                const padding = conpty_padding and
++                    cell.wide == .narrow and !cell.hasGrapheme() and
++                    !cell.protected and !cell.hyperlink and
++                    cell.semantic_content == .output and
++                    (cell.codepoint() == 0 or cell.codepoint() == ' ');
++                if (!cell.isEmpty() and !padding) break;
++                if (padding and (cell.hasStyling() or
++                    cell.content_tag == .bg_color_palette or
++                    cell.content_tag == .bg_color_rgb)) styled_padding = true;
+                 cols_len -= 1;
+             }
+
+@@ -1688,9 +1755,14 @@ const ReflowCursor = struct {
+             }
+         }
+
++        // ConPTY copies row attributes separately from measured text. Keep
++        // the padding's visible style on the final destination row, but never
++        // let it wrap into another row. A completely styled blank row still
++        // occupies one row. Wrapped rows and retained history use the normal
++        // lossless policy. Cursor/pin extension above takes precedence.
+         // Defer processing of blank rows so that blank rows
+         // at the end of the page list are never written.
+-        if (cols_len == 0) {
++        if (cols_len == 0 and !styled_padding) {
+             // If this blank row was a wrap continuation somehow
+             // then we won't need to write it since it should be
+             // a part of the previously written row.
+@@ -1720,7 +1792,22 @@ const ReflowCursor = struct {
+         self.copyRowMetadata(src_row);
+
+         var x: usize = 0;
+-        while (x < cols_len) {
++        var paint_len: usize = cols_len;
++        var painting_padding = false;
++        while (true) {
++            if (x >= cols_len and !painting_padding) {
++                painting_padding = true;
++                // Wide glyphs can insert a spacer at the right margin. Only
++                // the actual post-text cursor knows how much room remains.
++                if (styled_padding) {
++                    if (!self.pending_wrap) {
++                        paint_len = x + self.page.size.cols - self.x;
++                    } else if (cols_len == 0) {
++                        paint_len = self.page.size.cols;
++                    }
++                }
++            }
++            if (x >= paint_len) break;
+             if (self.pending_wrap) {
+                 self.page_row.wrap = true;
+                 try self.cursorScrollOrNewPage(list, cap);
+@@ -1736,10 +1823,11 @@ const ReflowCursor = struct {
+             // per-cell state machine below for most of the work.
+             // Rows with tracked pins take the slow path so pin
+             // remapping behaves identically.
+-            if (!row_has_pins) {
++            if (!row_has_pins and x < cells.len) {
+                 const max_run = @min(
+-                    cols_len - x,
++                    paint_len - x,
+                     @as(usize, self.page.size.cols) - self.x,
++                    cells.len - x,
+                 );
+                 const window = cells[x..][0..max_run];
+                 const run = bulkRunLength(window);
+@@ -1765,7 +1853,7 @@ const ReflowCursor = struct {
+
+             if (self.writeCell(
+                 list,
+-                &cells[x],
++                &cells[@min(x, cells.len - 1)],
+                 src_page,
+             )) |result| switch (result) {
+                 // Wrote the cell, move to the next.
+@@ -2857,6 +2945,16 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
              // Making rows larger we adjust our row count, and then grow
              // to the row count.
              .gt => gt: {
@@ -183,58 +285,64 @@ index 2e300302..212694fb 100644
                  // we want to try to preserve the y value of the old cursor.
                  // In other words, we don't want to "pull down" scrollback.
 diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
-index e1aa45ae..4663ff02 100644
+index e1aa45ae..f03e55fd 100644
 --- a/vendor/libghostty-vt/src/terminal/Screen.zig
 +++ b/vendor/libghostty-vt/src/terminal/Screen.zig
-@@ -2012,6 +2012,9 @@ pub const Resize = struct {
+@@ -2012,6 +2012,10 @@ pub const Resize = struct {
      /// lost from the top of the scrollback.
      reflow: bool = true,
 
 +    /// Whether growth or column reflow may pull history into the active area.
 +    pull_scrollback: bool = true,
++    conpty_padding: bool = false,
 +
      /// Set this to enable prompt redraw on resize. This signals
      /// that the running program can redraw the prompt if the cursor is
      /// currently at a prompt. This detects OSC133 prompts lines and clears
-@@ -2108,6 +2111,7 @@ pub inline fn resize(
+@@ -2108,6 +2112,8 @@ pub inline fn resize(
          .rows = opts.rows,
          .cols = opts.cols,
          .reflow = opts.reflow,
 +        .pull_scrollback = opts.pull_scrollback,
++        .conpty_padding = opts.conpty_padding,
          .cursor = .{
              .x = self.cursor.x,
              .y = self.cursor.y,
 diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
-index c11fda0f..18ed7a9e 100644
+index c11fda0f..8787958f 100644
 --- a/vendor/libghostty-vt/src/terminal/Terminal.zig
 +++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
-@@ -3987,6 +3987,9 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
+@@ -3987,6 +3987,11 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
  pub const Resize = struct {
      cols: size.CellCountInt,
      rows: size.CellCountInt,
 +    /// Keep false for consoles whose growth and reflow retain the active origin.
 +    /// This is a per-resize policy, not terminal state or a scrollback limit.
 +    pull_scrollback: bool = true,
++    /// Match ConPTY's nonwrapped trailing-space measurement during reflow.
++    conpty_padding: bool = false,
      cell_size_px: ?struct {
          width: u32,
          height: u32,
-@@ -4092,6 +4095,7 @@ pub fn resize(
+@@ -4092,6 +4097,8 @@ pub fn resize(
          .rows = opts.rows,
          .reflow = self.modes.get(.wraparound),
          .prompt_redraw = self.flags.shell_redraws_prompt,
 +        .pull_scrollback = opts.pull_scrollback,
++        .conpty_padding = opts.conpty_padding,
      });
 
      // Alternate screen, if it exists, doesn't reflow. The primary resize
-@@ -4105,6 +4109,7 @@ pub fn resize(
+@@ -4105,6 +4112,8 @@ pub fn resize(
                  .cols = opts.cols,
                  .rows = opts.rows,
                  .reflow = false,
 +                .pull_scrollback = opts.pull_scrollback,
++                .conpty_padding = opts.conpty_padding,
              }) catch |err| break :resize err;
 
              // Resize succeeded.
-@@ -4332,6 +4337,138 @@ test "Terminal setScrollback only affects primary screen" {
+@@ -4332,6 +4341,138 @@ test "Terminal setScrollback only affects primary screen" {
      try testing.expectEqual(alternate, t.screens.active);
  }
 
@@ -373,7 +481,7 @@ index c11fda0f..18ed7a9e 100644
  test "Terminal: resize resets synchronized output" {
      const alloc = testing.allocator;
      const io_impl = testing.io;
-@@ -16507,3 +16644,143 @@ test "Terminal: eraseDisplay complete ignores stale prompt on recycled row" {
+@@ -16507,3 +16648,143 @@ test "Terminal: eraseDisplay complete ignores stale prompt on recycled row" {
 
      try testing.expectEqual(t.screens.active.pages.rows, t.screens.active.pages.total_rows);
  }
@@ -528,10 +636,10 @@ index b8c5b6bc..a1cfcdc5 100644
 +
 +pub const terminal_resize_preserve_active = terminal.resize_preserve_active;
 diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
-index bc8b2c0b..512c78f5 100644
+index bc8b2c0b..32ab2838 100644
 --- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
 +++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
-@@ -1781,10 +1781,33 @@ pub fn resize(
+@@ -1781,10 +1781,34 @@ pub fn resize(
      cell_width_px: u32,
      cell_height_px: u32,
  ) callconv(lib.calling_conv) Result {
@@ -562,10 +670,11 @@ index bc8b2c0b..512c78f5 100644
          .cols = cols,
          .rows = rows,
 +        .pull_scrollback = pull_scrollback,
++        .conpty_padding = !pull_scrollback,
          .cell_size_px = .{
              .width = cell_width_px,
              .height = cell_height_px,
-@@ -6249,6 +6272,20 @@ test "resize sends in-band size report" {
+@@ -6249,6 +6273,20 @@ test "resize sends in-band size report" {
      // height_px = 40*18 = 720, width_px = 100*9 = 900
      try testing.expect(S.last_data != null);
      try testing.expectEqualStrings("\x1B[48;40;100;720;900t", S.last_data.?);

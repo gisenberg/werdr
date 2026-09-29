@@ -1240,6 +1240,8 @@ pub const Resize = struct {
     /// Disable to keep history and active content in separate reflow domains
     /// and append blank rows when growth or unwrapping creates vacant space.
     pull_scrollback: bool = true,
+    /// Measure active nonwrapped rows like ConPTY, independently of styling.
+    conpty_padding: bool = false,
 
     /// Set this to the current cursor position in the active area. Some
     /// resize/reflow behavior depends on the cursor position.
@@ -1306,7 +1308,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
         .gt => {
             // We grow rows after cols so that we can do our unwrapping/reflow
             // before we do a no-reflow grow.
-            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
             try self.resizeWithoutReflow(opts);
         },
 
@@ -1318,7 +1320,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
                 copy.cols = self.cols;
                 break :opts copy;
             });
-            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
         },
     }
 
@@ -1344,6 +1346,7 @@ fn resizeCols(
     cols: size.CellCountInt,
     cursor: ?Resize.Cursor,
     pull_scrollback: bool,
+    conpty_padding: bool,
 ) Allocator.Error!void {
     assert(cols != self.cols);
 
@@ -1494,6 +1497,7 @@ fn resizeCols(
                 self,
                 row,
                 if (preserved_cursor) |c| c.tracked_pin else null,
+                conpty_padding and reached_active_top,
             );
 
             // Once we're done reflowing a page, we're done with it, so
@@ -1679,6 +1683,7 @@ const ReflowCursor = struct {
         list: *PageList,
         row: Pin,
         cursor_pin: ?*Pin,
+        conpty_padding: bool,
     ) Allocator.Error!void {
         const src_page: *Page = row.node.page();
         const src_row = row.rowAndCell().row;
@@ -1688,9 +1693,19 @@ const ReflowCursor = struct {
         // Calculate the columns in this row. First up we trim non-semantic
         // rightmost blanks.
         var cols_len = src_page.size.cols;
+        var styled_padding = false;
         if (!src_row.wrap) {
             while (cols_len > 0) {
-                if (!cells[cols_len - 1].isEmpty()) break;
+                const cell = cells[cols_len - 1];
+                const padding = conpty_padding and
+                    cell.wide == .narrow and !cell.hasGrapheme() and
+                    !cell.protected and !cell.hyperlink and
+                    cell.semantic_content == .output and
+                    (cell.codepoint() == 0 or cell.codepoint() == ' ');
+                if (!cell.isEmpty() and !padding) break;
+                if (padding and (cell.hasStyling() or
+                    cell.content_tag == .bg_color_palette or
+                    cell.content_tag == .bg_color_rgb)) styled_padding = true;
                 cols_len -= 1;
             }
 
@@ -1740,9 +1755,14 @@ const ReflowCursor = struct {
             }
         }
 
+        // ConPTY copies row attributes separately from measured text. Keep
+        // the padding's visible style on the final destination row, but never
+        // let it wrap into another row. A completely styled blank row still
+        // occupies one row. Wrapped rows and retained history use the normal
+        // lossless policy. Cursor/pin extension above takes precedence.
         // Defer processing of blank rows so that blank rows
         // at the end of the page list are never written.
-        if (cols_len == 0) {
+        if (cols_len == 0 and !styled_padding) {
             // If this blank row was a wrap continuation somehow
             // then we won't need to write it since it should be
             // a part of the previously written row.
@@ -1772,7 +1792,22 @@ const ReflowCursor = struct {
         self.copyRowMetadata(src_row);
 
         var x: usize = 0;
-        while (x < cols_len) {
+        var paint_len: usize = cols_len;
+        var painting_padding = false;
+        while (true) {
+            if (x >= cols_len and !painting_padding) {
+                painting_padding = true;
+                // Wide glyphs can insert a spacer at the right margin. Only
+                // the actual post-text cursor knows how much room remains.
+                if (styled_padding) {
+                    if (!self.pending_wrap) {
+                        paint_len = x + self.page.size.cols - self.x;
+                    } else if (cols_len == 0) {
+                        paint_len = self.page.size.cols;
+                    }
+                }
+            }
+            if (x >= paint_len) break;
             if (self.pending_wrap) {
                 self.page_row.wrap = true;
                 try self.cursorScrollOrNewPage(list, cap);
@@ -1788,10 +1823,11 @@ const ReflowCursor = struct {
             // per-cell state machine below for most of the work.
             // Rows with tracked pins take the slow path so pin
             // remapping behaves identically.
-            if (!row_has_pins) {
+            if (!row_has_pins and x < cells.len) {
                 const max_run = @min(
-                    cols_len - x,
+                    paint_len - x,
                     @as(usize, self.page.size.cols) - self.x,
+                    cells.len - x,
                 );
                 const window = cells[x..][0..max_run];
                 const run = bulkRunLength(window);
@@ -1817,7 +1853,7 @@ const ReflowCursor = struct {
 
             if (self.writeCell(
                 list,
-                &cells[x],
+                &cells[@min(x, cells.len - 1)],
                 src_page,
             )) |result| switch (result) {
                 // Wrote the cell, move to the next.

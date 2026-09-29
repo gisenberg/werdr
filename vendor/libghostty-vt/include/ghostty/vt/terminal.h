@@ -2093,6 +2093,8 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
  * Column reflow keeps history and active content in separate domains, splitting
  * soft wraps at their boundary while retaining historical cell content.
  * Vacant rows after unwrapping are filled with blanks, not retained history.
+ * Nonwrapped active rows measure trailing spaces like ConPTY. Padding styles
+ * remain visible within the final row without manufacturing additional rows.
  * This per-call policy is intended for fixed-origin consoles such as ConPTY.
  * NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.
  *
