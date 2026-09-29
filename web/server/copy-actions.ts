@@ -11,9 +11,9 @@ function point(value: unknown): { row: number; col: number } {
   const p = value as Record<string, unknown>;
   return { row: integer(p.row, 0xffffffff, 'terminal row'), col: integer(p.col, 0xffff, 'terminal column') };
 }
-export function revision(value: unknown): number {
+export function revision(value: unknown, unstableStatus: 400 | 409 = 400): number {
   const result = integer(value, Number.MAX_SAFE_INTEGER, 'content revision');
-  if (result % 2) throw new ManagementError('Terminal content is changing. Retry with a stable revision.');
+  if (result % 2) throw new ManagementError('Terminal content is changing. Retry with a stable revision.', unstableStatus);
   return result;
 }
 
@@ -24,7 +24,7 @@ export const copyReadActions = new Set(['pane.copy_motion', 'pane.copy_search', 
 export async function copyContext(value: Record<string, unknown>, request: (method: string, params: object, invalidate?: boolean) => Promise<any>) {
   const pane_id = publicId(value.id), cursor = { row: 0, col: 0 }, motion = 'line_end';
   const initial = await request('pane.copy_motion', { pane_id, cursor, motion }, false);
-  const content_revision = revision(initial.content_revision);
+  const content_revision = revision(initial.content_revision, 409);
   const result = await request('pane.get', { pane_id }, false);
   const scroll = result.pane?.scroll;
   if (!scroll) throw new ManagementError('Native scrollback geometry is unavailable.', 409);

@@ -46,7 +46,13 @@ test('copy context fails when content changes during geometry acquisition', asyn
     if (++reads === 2) throw new Error('stale_content');
     return { content_revision: 42 };
   }), /stale_content/);
-  await assert.rejects(copyContext({ id: 'pane-1' }, async () => ({ content_revision: 43 })), /changing/);
+  let calls = 0;
+  await assert.rejects(copyContext({ id: 'pane-1' }, async () => {
+    calls++;
+    return { content_revision: 43 };
+  }), { message: 'Terminal content is changing. Retry with a stable revision.', status: 409 });
+  assert.equal(calls, 1);
+  assert.throws(() => browserAction({ ...selection, content_revision: 43 }), { status: 400 });
 });
 
 test('copy context rejects viewport movement during the native text read', async () => {
