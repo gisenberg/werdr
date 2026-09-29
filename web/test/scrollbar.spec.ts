@@ -28,6 +28,9 @@ test('native scrollbars preserve history, row geometry, keyboard and drag behavi
     await pane.locator('textarea').focus();
     await page.keyboard.type("for i in $(seq 1 300); do printf 'SCROLL_ROW_%03d\\n' \"$i\"; done"); await page.keyboard.press('Enter');
     await expect.poll(async () => (await geometry()).max_offset_from_bottom).toBeGreaterThan(200);
+    // Do not compute Home's absolute target while the producer is still
+    // extending history beyond the first 200 rows.
+    await expect.poll(() => runtime.cli('pane', 'read', id, '--source', 'recent')).toContain('SCROLL_ROW_300');
     await expect(bar).toBeVisible();
     await expect(bar).toHaveAttribute('aria-valuetext', '0 lines above bottom');
     await bar.focus(); await page.keyboard.press('Home');

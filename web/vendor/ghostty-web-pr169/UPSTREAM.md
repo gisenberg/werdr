@@ -67,3 +67,19 @@ The browser regression in `web/test/terminal-theme.spec.ts` checks actual canvas
 Build and package from source as above with the new version and include `LICENSE`; do not edit generated bundles or rebuild WASM.
 Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
 Remove this patch when the adopted upstream package reliably repaints idle theme changes and the painted-color regression passes.
+
+## Werdr glyph bounds
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr4.tgz`, version `0.4.1-pr169.faf6fbd.werdr4`.
+Its SHA-256 is `41fcedaa10d5de264367cee473ee1b77ee3ac294442f8cea1e5afe54e53cdb0c`.
+Apply `werdr-glyph-metrics.patch` after the seven patches above.
+Browser font bounding boxes can under-report actual glyph ink, causing underscores to paint below their allocated row and disappear when the following row is cleared.
+Font measurement now includes printable ASCII ink bounds in regular, bold, italic and bold-italic styles.
+The row height also includes independently rounded baseline and descent space at fractional device-pixel ratios.
+The additional measurement happens only when font metrics change, not while painting cells.
+The browser regression in `web/test/terminal-glyphs.spec.ts` compares painted underscore pixels with an independent canvas reference across all four configured font families, six font sizes, four styles and four device scales.
+It fails against werdr3 and passes against werdr4.
+The werdr4 library was built with Node 22.22.2, TypeScript 5.9.3 and Vite 4.5.14, then packed with npm 11.18.0.
+Build and package from source as above with the new version and include `LICENSE`; do not edit generated bundles or rebuild WASM.
+Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove this patch when the adopted upstream package preserves glyph ink within its cell metrics and the painted-glyph regression passes.
