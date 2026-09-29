@@ -59,13 +59,27 @@ pub(crate) fn load_plugin_manifest(
 }
 
 /// Full application: AppState + runtime concerns (event channels, async I/O).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct OverlayPaneState {
     ws_idx: usize,
     tab_idx: usize,
     previous_focus: crate::layout::PaneId,
     previous_zoomed: bool,
     temp_files: Vec<std::path::PathBuf>,
+}
+
+impl Drop for OverlayPaneState {
+    fn drop(&mut self) {
+        // Exported files belong to the overlay registration, not its eventual
+        // process-exit event. Explicit close may retire that runtime first.
+        for path in &self.temp_files {
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path = %path.display(), %error, "failed to remove overlay export");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

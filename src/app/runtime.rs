@@ -38,6 +38,15 @@ impl App {
         for terminal_id in terminal_ids {
             self.shutdown_terminal_runtime(terminal_id);
         }
+        // Structural owner actions also remove overlays without a runtime or
+        // any later accepted exit event. Disposing their registration only
+        // releases artifacts; never restore focus through removed indices.
+        let workspaces = &self.state.workspaces;
+        self.overlay_panes.retain(|pane_id, _| {
+            workspaces
+                .iter()
+                .any(|ws| ws.tabs.iter().any(|tab| tab.panes.contains_key(pane_id)))
+        });
     }
 
     pub(crate) fn sync_agent_metadata_deadline(&mut self) {

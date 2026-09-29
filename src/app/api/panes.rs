@@ -1974,6 +1974,7 @@ impl App {
         }
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);
+        let overlay = self.take_overlay_for_close(pane_id);
         let should_close_workspace = {
             let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
                 return Err(pane_not_found(id, &target.pane_id));
@@ -2001,6 +2002,9 @@ impl App {
             });
         } else {
             self.state.remove_unattached_terminal_ids(terminal_id);
+            if let Some(overlay) = &overlay {
+                self.restore_overlay_after_exit(overlay);
+            }
             self.shutdown_detached_terminal_runtimes();
             self.schedule_session_save();
             self.emit_event(EventEnvelope {
@@ -2015,6 +2019,7 @@ impl App {
             }
         }
 
+        drop(overlay);
         Ok(())
     }
 

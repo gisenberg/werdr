@@ -26,6 +26,15 @@ enum RuntimeExitAction {
     ClosePane,
 }
 
+struct OverlayCloseState {
+    overlay: OverlayPaneState,
+    workspace_id: String,
+    tab_number: usize,
+    was_active: bool,
+    was_focused: bool,
+    zoomed: bool,
+}
+
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
@@ -327,25 +336,7 @@ impl App {
         }
 
         let overlay_state = if let AppEvent::PaneDied { pane_id, .. } = &ev {
-            self.overlay_panes.remove(pane_id).map(|overlay| {
-                let was_overlay_active =
-                    self.state
-                        .is_active_pane(overlay.ws_idx, overlay.tab_idx, *pane_id);
-                let tab_before_exit = self
-                    .state
-                    .workspaces
-                    .get(overlay.ws_idx)
-                    .and_then(|ws| ws.tabs.get(overlay.tab_idx));
-                let was_overlay_focused_in_tab =
-                    tab_before_exit.is_some_and(|tab| tab.layout.focused() == *pane_id);
-                let tab_zoomed_before_exit = tab_before_exit.map(|tab| tab.zoomed);
-                (
-                    overlay,
-                    was_overlay_active,
-                    was_overlay_focused_in_tab,
-                    tab_zoomed_before_exit,
-                )
-            })
+            self.take_overlay_for_close(*pane_id)
         } else {
             None
         };
@@ -433,19 +424,8 @@ impl App {
             self.emit_pane_state_update(update);
         }
         self.sync_agent_metadata_deadline();
-        if let Some((
-            overlay,
-            was_overlay_active,
-            was_overlay_focused_in_tab,
-            tab_zoomed_before_exit,
-        )) = overlay_state
-        {
-            self.restore_overlay_after_exit(
-                overlay,
-                was_overlay_active,
-                was_overlay_focused_in_tab,
-                tab_zoomed_before_exit,
-            );
+        if let Some(overlay) = &overlay_state {
+            self.restore_overlay_after_exit(overlay);
         }
         if let Some((ws_idx, tab_idx)) = pane_exit_layout_target {
             self.emit_layout_updated_event(ws_idx, tab_idx);
@@ -453,6 +433,9 @@ impl App {
 
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
+        // Editors may hold Windows handles without delete sharing. Keep the
+        // export owner alive until the detached runtime has released them.
+        drop(overlay_state);
         pane_updates.extend(worktree_restore_updates);
         pane_updates
     }
@@ -544,41 +527,68 @@ impl App {
         }
     }
 
-    fn restore_overlay_after_exit(
+    fn take_overlay_for_close(
         &mut self,
-        overlay: OverlayPaneState,
-        was_overlay_active: bool,
-        was_overlay_focused_in_tab: bool,
-        tab_zoomed_before_exit: Option<bool>,
-    ) {
-        for temp_file in &overlay.temp_files {
-            let _ = std::fs::remove_file(temp_file);
-        }
+        pane_id: crate::layout::PaneId,
+    ) -> Option<OverlayCloseState> {
+        let mut overlay = self.overlay_panes.remove(&pane_id)?;
+        // Resolve the current location: workspace/tab removal or pane moves may
+        // have invalidated the positional hints recorded when it was spawned.
+        let (ws_idx, _) = self.find_pane(pane_id)?;
+        let ws = &self.state.workspaces[ws_idx];
+        let tab_idx = ws
+            .tabs
+            .iter()
+            .position(|tab| tab.panes.contains_key(&pane_id))?;
+        overlay.ws_idx = ws_idx;
+        overlay.tab_idx = tab_idx;
+        let tab = &ws.tabs[tab_idx];
+        Some(OverlayCloseState {
+            was_active: self
+                .state
+                .is_active_pane(overlay.ws_idx, overlay.tab_idx, pane_id),
+            was_focused: tab.layout.focused() == pane_id,
+            zoomed: tab.zoomed,
+            workspace_id: ws.id.clone(),
+            tab_number: tab.number,
+            overlay,
+        })
+    }
 
-        let Some(ws) = self.state.workspaces.get_mut(overlay.ws_idx) else {
+    fn restore_overlay_after_exit(&mut self, close: &OverlayCloseState) {
+        let Some(ws_idx) = self
+            .state
+            .workspaces
+            .iter()
+            .position(|ws| ws.id == close.workspace_id)
+        else {
             return;
         };
-        if overlay.tab_idx >= ws.tabs.len() {
+        let ws = &mut self.state.workspaces[ws_idx];
+        let Some(tab_idx) = ws
+            .tabs
+            .iter()
+            .position(|tab| tab.number == close.tab_number)
+        else {
+            return;
+        };
+        let overlay = &close.overlay;
+
+        if !close.was_focused {
+            ws.tabs[tab_idx].zoomed = close.zoomed;
             return;
         }
 
-        if !was_overlay_focused_in_tab {
-            if let Some(tab_zoomed_before_exit) = tab_zoomed_before_exit {
-                ws.tabs[overlay.tab_idx].zoomed = tab_zoomed_before_exit;
-            }
-            return;
+        if close.was_active {
+            ws.active_tab = tab_idx;
         }
-
-        if was_overlay_active {
-            ws.active_tab = overlay.tab_idx;
-        }
-        let tab = &mut ws.tabs[overlay.tab_idx];
+        let tab = &mut ws.tabs[tab_idx];
         if tab.panes.contains_key(&overlay.previous_focus) {
             tab.layout.focus_pane(overlay.previous_focus);
         }
         tab.zoomed = overlay.previous_zoomed;
 
-        if was_overlay_active && self.state.active == Some(overlay.ws_idx) {
+        if close.was_active && self.state.active == Some(ws_idx) {
             self.state.mode = Mode::Terminal;
         }
     }
@@ -2113,6 +2123,181 @@ mod tests {
             runtime.shutdown();
         }
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn explicit_overlay_close_disposes_export_without_exit_notification() {
+        for background in [false, true] {
+            let mut workspace = crate::workspace::Workspace::test_new("overlay-close");
+            let previous = workspace.tabs[0].root_pane;
+            let overlay = workspace.test_split(ratatui::layout::Direction::Horizontal);
+            workspace.tabs[0].zoomed = true;
+            if background {
+                workspace.tabs[0].layout.focus_pane(previous);
+            }
+            let mut app = app_with_overlay(workspace, overlay, previous, false);
+            let path = overlay_test_export(&mut app, overlay);
+            let target = crate::api::schema::PaneTarget {
+                pane_id: app.public_pane_id(0, overlay).unwrap(),
+            };
+            app.close_pane("close-overlay".into(), &target).unwrap();
+            let remains = path.exists();
+            let _ = std::fs::remove_file(&path);
+            assert!(!remains, "explicit close leaked the exported history");
+            assert!(app.overlay_panes.is_empty());
+            let tab = &app.state.workspaces[0].tabs[0];
+            assert_eq!(tab.layout.focused(), previous);
+            assert_eq!(tab.zoomed, background);
+            app.state.assert_invariants_for_test();
+        }
+    }
+
+    fn overlay_test_export(app: &mut App, pane: crate::layout::PaneId) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "herdr-overlay-cleanup-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::File::create_new(&path).unwrap();
+        app.overlay_panes
+            .get_mut(&pane)
+            .unwrap()
+            .temp_files
+            .push(path.clone());
+        path
+    }
+
+    #[test]
+    fn removed_overlay_containers_and_app_drop_dispose_exports_without_runtimes() {
+        for removal in ["pane", "tab", "workspace", "layout", "app"] {
+            let mut workspace = crate::workspace::Workspace::test_new("overlay-dispose");
+            let previous = workspace.tabs[0].root_pane;
+            let overlay = workspace.test_split(ratatui::layout::Direction::Horizontal);
+            let mut app = app_with_overlay(workspace, overlay, previous, false);
+            let path = overlay_test_export(&mut app, overlay);
+            match removal {
+                "pane" => {
+                    app.state.close_pane();
+                }
+                "tab" => {
+                    app.state.close_tab();
+                }
+                "workspace" => app.state.close_selected_workspace(),
+                "layout" => app.state.workspaces.clear(),
+                "app" => {}
+                _ => unreachable!(),
+            }
+            if removal != "app" {
+                app.shutdown_detached_terminal_runtimes();
+                let remains = path.exists();
+                let _ = std::fs::remove_file(&path);
+                assert!(!remains, "{removal} leaked the exported history");
+                assert!(app.overlay_panes.is_empty());
+            }
+            drop(app);
+            let remains = path.exists();
+            let _ = std::fs::remove_file(&path);
+            assert!(!remains, "app drop leaked the exported history");
+        }
+    }
+
+    #[test]
+    fn overlay_close_context_survives_index_changes_without_restoring_another_workspace() {
+        let mut workspace = crate::workspace::Workspace::test_new("overlay-identity");
+        let previous = workspace.tabs[0].root_pane;
+        let overlay = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        workspace.tabs[0].zoomed = true;
+        let mut app = app_with_overlay(workspace, overlay, previous, false);
+        app.state
+            .workspaces
+            .insert(0, crate::workspace::Workspace::test_new("unrelated"));
+        app.state.active = Some(1);
+        let unrelated_focus = app.state.workspaces[0].tabs[0].layout.focused();
+        let close = app.take_overlay_for_close(overlay).unwrap();
+        assert_eq!(close.workspace_id, app.state.workspaces[1].id);
+        assert!(close.was_active);
+        // The target workspace vanishes while the captured close is retained.
+        // Its former positional slot must not authorize presentation mutations.
+        app.state.workspaces.remove(1);
+        let mut replacement = crate::workspace::Workspace::test_new("replacement");
+        replacement.tabs[0].zoomed = true;
+        let replacement_focus = replacement.tabs[0].layout.focused();
+        app.state.workspaces.push(replacement);
+        app.restore_overlay_after_exit(&close);
+        assert_eq!(
+            app.state.workspaces[0].tabs[0].layout.focused(),
+            unrelated_focus
+        );
+        assert_eq!(
+            app.state.workspaces[1].tabs[0].layout.focused(),
+            replacement_focus
+        );
+        assert!(app.state.workspaces[1].tabs[0].zoomed);
+    }
+
+    #[tokio::test]
+    async fn explicit_overlay_cleanup_does_not_authorize_late_runtime_exit() {
+        let mut workspace = crate::workspace::Workspace::test_new("overlay-late-exit");
+        let previous = workspace.tabs[0].root_pane;
+        let overlay = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let mut app = app_with_overlay(workspace, overlay, previous, false);
+        let terminal_id = app
+            .find_pane(overlay)
+            .unwrap()
+            .1
+            .attached_terminal_id
+            .clone();
+        let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+        let record = runtime.exit_record();
+        app.terminal_runtimes.insert(terminal_id, runtime);
+        let target = crate::api::schema::PaneTarget {
+            pane_id: app.public_pane_id(0, overlay).unwrap(),
+        };
+        app.close_pane("close-overlay".into(), &target).unwrap();
+        record.test_record(crate::platform::ChildExitReason::Exited);
+        assert!(app
+            .validate_runtime_exit(AppEvent::RuntimeExited {
+                pane_id: overlay,
+                record: record.clone()
+            })
+            .is_none());
+        assert!(!record.is_claimed());
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), previous);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn overlay_restoration_retains_export_until_shutdown_and_tracks_shifted_tab() {
+        let mut workspace = crate::workspace::Workspace::test_new("overlay-order");
+        let preceding = workspace.tabs[0].number;
+        let target_tab = workspace.test_add_tab(Some("editor"));
+        workspace.switch_tab(target_tab);
+        let previous = workspace.tabs[target_tab].root_pane;
+        let overlay = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let mut app = app_with_overlay(workspace, overlay, previous, true);
+        let path = overlay_test_export(&mut app, overlay);
+        let close = app.take_overlay_for_close(overlay).unwrap();
+        let ws = &mut app.state.workspaces[0];
+        ws.close_pane(overlay);
+        ws.tabs.retain(|tab| tab.number != preceding);
+        ws.active_tab = 0;
+        app.restore_overlay_after_exit(&close);
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), previous);
+        assert!(app.state.workspaces[0].tabs[0].zoomed);
+        assert!(
+            path.exists(),
+            "presentation restoration disposed a live editor export"
+        );
+        app.shutdown_detached_terminal_runtimes();
+        assert!(
+            path.exists(),
+            "captured close must own cleanup through shutdown"
+        );
+        drop(close);
+        assert!(!path.exists());
     }
 
     #[test]
