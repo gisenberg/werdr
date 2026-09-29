@@ -7,6 +7,49 @@ use std::sync::{Arc, OnceLock};
 
 static SOURCES: OnceLock<FileStore> = OnceLock::new();
 
+/// Retain a borrowed backing produced by this wrapper.
+///
+/// SAFETY: the native handle is private and every admitted file producer owns
+/// an Arc<OwnedExport>. Callback checks are defensive, not validation of an
+/// arbitrary foreign context pointer. The borrow must protect its live Arc.
+pub(super) unsafe fn retain_backing(
+    backing: &ffi::GhosttyKittyImageFileBacking,
+) -> Result<Arc<OwnedExport>, Error> {
+    let known_read = backing.read.is_some_and(|callback| {
+        std::ptr::fn_addr_eq(
+            callback,
+            read as unsafe extern "C" fn(*mut c_void, *mut u8, usize) -> bool,
+        )
+    });
+    let known_release = backing.release.is_some_and(|callback| {
+        std::ptr::fn_addr_eq(callback, release as unsafe extern "C" fn(*mut c_void))
+    });
+    if backing.context.is_null() || !known_read || !known_release {
+        return Err(Error(ffi::GhosttyResult_GHOSTTY_INVALID_VALUE));
+    }
+    let ptr = backing.context.cast::<OwnedExport>();
+    // SAFETY: caller supplies a protected live reference of this exact type.
+    let source = unsafe {
+        Arc::increment_strong_count(ptr);
+        Arc::from_raw(ptr)
+    };
+    if source.fingerprint() != backing.identity || source.len() != backing.len {
+        return Err(Error(ffi::GhosttyResult_GHOSTTY_INVALID_VALUE));
+    }
+    Ok(source)
+}
+
+/// Transfer exactly one host-owned reference. Nothing fallible follows into_raw.
+pub(super) fn export_backing(source: Arc<OwnedExport>) -> ffi::GhosttyKittyImageFileBacking {
+    ffi::GhosttyKittyImageFileBacking {
+        identity: source.fingerprint(),
+        len: source.len(),
+        context: Arc::into_raw(source).cast_mut().cast(),
+        read: Some(read),
+        release: Some(release),
+    }
+}
+
 // These getters never materialize native pixels. The image borrow protects the
 // host's strong reference until we have acquired our own.
 pub(super) fn image_source(
@@ -90,14 +133,7 @@ unsafe extern "C" fn snapshot(
         else {
             return false;
         };
-        let source = Arc::new(source);
-        let backing = ffi::GhosttyKittyImageFileBacking {
-            identity: source.fingerprint(),
-            len: source.len(),
-            context: Arc::into_raw(source).cast_mut().cast(),
-            read: Some(read),
-            release: Some(release),
-        };
+        let backing = export_backing(Arc::new(source));
         unsafe {
             out.write(backing);
         }

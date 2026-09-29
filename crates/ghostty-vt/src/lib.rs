@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 use crate::pane_graphics_files::OwnedExport;
 mod callback_snapshot;
 mod graphics_policy_snapshot;
+mod graphics_snapshot;
 #[cfg(target_os = "linux")]
 mod native_image_sources;
 mod native_source;
@@ -36,6 +37,7 @@ mod snapshot;
 mod tracked_row_snapshot;
 pub use callback_snapshot::TerminalCallbackSnapshot;
 pub use graphics_policy_snapshot::GraphicsPolicySnapshot;
+pub use graphics_snapshot::{GraphicsSnapshot, GraphicsSnapshotLimits};
 #[cfg(any(windows, test))]
 pub use tracked_row_snapshot::TrackedRowSnapshot;
 
