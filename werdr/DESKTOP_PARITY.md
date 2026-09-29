@@ -68,6 +68,11 @@ The alternate-screen fixture also does not establish full-screen application red
 
 ## Verification
 
+Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
+Only the verified-compatible result registers a new host.
+Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
+These fixtures never install a runtime and do not replace the remaining live onboarding compatibility matrix.
+
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
 A newly created shell adopted a directory containing spaces and Unicode, while the existing shell retained its PID.

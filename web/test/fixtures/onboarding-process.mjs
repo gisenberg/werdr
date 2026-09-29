@@ -16,8 +16,22 @@ if (kind === 'herdr' && args.join(' ') === 'machine list --json') {
     const remote = args.at(-1);
     if (!remote.startsWith('pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ')) throw new Error('Unexpected remote command');
     const decoded = Buffer.from(remote.split(' ').at(-1), 'base64').toString('utf16le');
-    if (!decoded.includes("'status' '--json'")) throw new Error('Fixture refuses remote installation');
     const scenario = JSON.parse(await readFile(join(root, 'scenario.json'), 'utf8'));
+    if (!decoded.includes("'status' '--json'")) {
+      if (!scenario.install) throw new Error('Fixture refuses remote installation');
+      if (decoded.includes('[IO.FileMode]::CreateNew')) {
+        let source = '';
+        for await (const chunk of process.stdin) source += chunk;
+        if (!source.includes('HERDR_INSTALL_OK')) throw new Error('Expected the managed installer');
+        await writeFile(join(root, 'installer-staged'), 'fixture-only');
+      } else if (decoded.includes('& $path -Session')) {
+        await access(join(root, 'installer-staged'));
+        if (scenario.install === 'failed') { console.error('FIXTURE_INSTALL_FAILED'); process.exit(1); }
+        await writeFile(join(root, 'installer-finished'), 'fixture-only');
+        console.log('HERDR_INSTALL_OK');
+      } else throw new Error('Unexpected installation command');
+      process.exit(0);
+    }
     await writeFile(join(root, 'status-started'), 'ready');
     if (scenario.hold) {
       const deadline = Date.now() + 10000;
@@ -27,6 +41,8 @@ if (kind === 'herdr' && args.join(' ') === 'machine list --json') {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     }
-    console.log(JSON.stringify({ server: scenario.server }));
+    let installed = false;
+    try { await access(join(root, 'installer-finished')); installed = true; } catch {}
+    console.log(JSON.stringify({ server: installed ? scenario.afterInstall : scenario.server }));
   }
 } else throw new Error('Unexpected onboarding fixture invocation');
