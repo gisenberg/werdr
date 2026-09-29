@@ -50,6 +50,14 @@ impl TerminalRuntime {
     }
 
     #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_manual_actor(
+    ) -> (Self, impl FnMut(), std::os::unix::net::UnixStream) {
+        let (runtime, pump, peer) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_manual_actor();
+        (Self(runtime), pump, peer)
+    }
+
+    #[cfg(all(test, unix))]
     pub(crate) fn test_for_draft_capture_with_actor() -> (
         Self,
         crate::pty::actor::PtyIoActorHandle,

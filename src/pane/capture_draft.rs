@@ -3,6 +3,7 @@
 //! This is not a runtime handoff or an event ownership cut. Queued application
 //! effects, child-exit state and detector state are not captured here. Detector
 //! suspension preserves its live task state, not a transferable representation.
+//! Observed exit evidence invalidates capture, but child watchers are not frozen.
 //! Keep this disconnected from the production handoff protocol.
 
 use super::{
@@ -13,11 +14,37 @@ use std::time::Duration;
 
 /// Retains the allocation, not process authority, so runtime replacement cannot
 /// pass an identity check even if its terminal id (or allocator address) is reused.
-pub(crate) struct CaptureIdentity(std::sync::Arc<super::PaneTerminal>);
+pub(crate) struct CaptureIdentity {
+    terminal: std::sync::Arc<super::PaneTerminal>,
+    exit: super::ExitRecord,
+}
+
+impl CaptureIdentity {
+    /// Non-consuming observation, not proof of liveness or a watcher fence.
+    pub(crate) fn reject_observed_exit(&self) -> Result<(), String> {
+        if let Some(evidence) = self.exit.evidence() {
+            Err(format!(
+                "observed runtime exit prevents terminal draft capture: {evidence:?}"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 // Deliberately opt-in until the complete runtime/effect ownership cut exists.
 #[allow(dead_code)]
 impl PaneRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_for_draft_capture_with_manual_actor(
+    ) -> (Self, impl FnMut(), std::os::unix::net::UnixStream) {
+        let mut runtime = Self::test_for_draft_capture(b"retained");
+        let (actor, pump, peer) =
+            crate::pty::actor::PtyIoActorHandle::test_manually_driven_capture();
+        runtime.io = super::PaneRuntimeIo::Actor(actor);
+        (runtime, pump, peer)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_for_draft_capture_with_actor() -> (
         Self,
@@ -34,11 +61,15 @@ impl PaneRuntime {
     }
 
     pub(crate) fn capture_identity(&self) -> CaptureIdentity {
-        CaptureIdentity(self.terminal.clone())
+        CaptureIdentity {
+            terminal: self.terminal.clone(),
+            exit: self.exit_record.clone(),
+        }
     }
 
     pub(crate) fn matches_capture_identity(&self, identity: &CaptureIdentity) -> bool {
-        std::sync::Arc::ptr_eq(&self.terminal, &identity.0)
+        std::sync::Arc::ptr_eq(&self.terminal, &identity.terminal)
+            && self.exit_record.same_runtime(&identity.exit)
     }
 
     /// Excludes owner-side mutations with an exclusive borrow, then drains the
@@ -116,14 +147,22 @@ pub(crate) struct TerminalDraftPause<'a> {
 
 impl<'a> TerminalDraftPause<'a> {
     pub(crate) fn snapshot(&self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
-        self.runtime.terminal.ghostty.capture_state_draft(limits)
+        let identity = self.runtime.capture_identity();
+        identity.reject_observed_exit()?;
+        let draft = self.runtime.terminal.ghostty.capture_state_draft(limits)?;
+        identity.reject_observed_exit()?;
+        Ok(draft)
     }
 
     async fn capture(self, limits: DraftLimits) -> Result<PaneStateDraft, String> {
+        let identity = self.runtime.capture_identity();
         let draft = self.snapshot(limits);
         let resumed = self.resume().await;
         match (draft, resumed) {
-            (Ok(draft), Ok(())) => Ok(draft),
+            (Ok(draft), Ok(())) => {
+                identity.reject_observed_exit()?;
+                Ok(draft)
+            }
             (Err(err), Ok(())) => Err(err),
             (Ok(_), Err(err)) => Err(format!(
                 "terminal draft captured, but PTY resume failed: {err}"
@@ -138,6 +177,7 @@ impl<'a> TerminalDraftPause<'a> {
         runtime: &'a mut PaneRuntime,
         timeout: Duration,
     ) -> Result<Self, String> {
+        runtime.capture_identity().reject_observed_exit()?;
         let detector = if runtime.detect_handle.is_some() {
             let controller = runtime
                 .detection_pause
@@ -193,6 +233,100 @@ mod tests {
     use tokio::sync::mpsc;
 
     const TIMEOUT: Duration = Duration::from_secs(2);
+
+    #[tokio::test]
+    async fn exit_during_resume_acknowledgement_invalidates_completed_snapshot() {
+        use std::{future::Future, task::Poll};
+        let (mut runtime, mut pump, _peer) =
+            PaneRuntime::test_for_draft_capture_with_manual_actor();
+        let record = runtime.exit_record();
+        let mut capture = Box::pin(runtime.capture_terminal_state_draft(test_limits(), TIMEOUT));
+        std::future::poll_fn(|cx| {
+            assert!(capture.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        pump(); // Acknowledge the pause.
+        std::future::poll_fn(|cx| {
+            assert!(capture.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await; // Serialization succeeded; resume is waiting on the manual actor.
+        record.test_record(crate::platform::ChildExitReason::Exited);
+        pump();
+        let error = capture.await.err().unwrap();
+        assert!(error.contains("observed runtime exit"), "{error}");
+        assert!(!record.is_claimed());
+        assert!(runtime
+            .try_send_bytes(Bytes::from_static(b"resumed"))
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_every_exit_outcome_without_claiming_it() {
+        use super::super::exit_record::ExitEvidence;
+        use crate::platform::ChildExitReason;
+        for evidence in [
+            ExitEvidence::ChildWait(ChildExitReason::Exited),
+            ExitEvidence::ChildWait(ChildExitReason::Interrupted),
+            ExitEvidence::ChildWait(ChildExitReason::WaitFailed),
+            ExitEvidence::ImportedReaderEnded,
+        ] {
+            for claimed in [false, true] {
+                let (mut runtime, mut peer, _) = fixture();
+                let record = runtime.exit_record();
+                assert!(record.record(evidence, &std::sync::atomic::AtomicBool::new(false)));
+                if claimed {
+                    assert!(record.claim().is_some());
+                }
+                let error = runtime
+                    .capture_terminal_state_draft(test_limits(), TIMEOUT)
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(error.contains("observed runtime exit"), "{error}");
+                assert_eq!(record.evidence(), Some(evidence));
+                assert_eq!(record.is_claimed(), claimed);
+                assert_input_resumed(&runtime, &mut peer);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_identity_includes_exit_authority_even_with_same_terminal() {
+        let (mut runtime, _, _) = fixture();
+        let identity = runtime.capture_identity();
+        assert!(runtime.matches_capture_identity(&identity));
+        runtime.exit_record = super::super::ExitRecord::default();
+        assert!(!runtime.matches_capture_identity(&identity));
+        identity
+            .exit
+            .test_record(crate::platform::ChildExitReason::Exited);
+        assert!(runtime.capture_identity().reject_observed_exit().is_ok());
+        assert!(identity.reject_observed_exit().is_err());
+    }
+
+    #[tokio::test]
+    async fn exit_after_pause_rejects_snapshot_and_preserves_resume_failure() {
+        for fail_resume in [false, true] {
+            let (mut runtime, mut peer, _) = fixture();
+            let record = runtime.exit_record();
+            let pause = TerminalDraftPause::begin(&mut runtime, TIMEOUT)
+                .await
+                .unwrap();
+            record.test_record(crate::platform::ChildExitReason::Exited);
+            if fail_resume {
+                pause.runtime.io.shutdown();
+            }
+            let error = pause.capture(test_limits()).await.err().unwrap();
+            assert!(error.contains("observed runtime exit"), "{error}");
+            assert_eq!(error.contains("PTY resume failed"), fail_resume, "{error}");
+            assert!(!record.is_claimed());
+            if !fail_resume {
+                assert_input_resumed(&runtime, &mut peer);
+            }
+        }
+    }
 
     pub(super) fn fixture() -> (PaneRuntime, UnixStream, channel::Receiver<Vec<u8>>) {
         let (mut runtime, _) = PaneRuntime::test_with_channel(40, 5);

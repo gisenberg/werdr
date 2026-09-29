@@ -19,12 +19,13 @@ impl HeadlessServer {
         if self.app.terminal_runtimes.len() > max_terminals {
             return Err("terminal capture count exceeds batch limit".into());
         }
-        let identities: Vec<_> = self
+        let mut identities: Vec<_> = self
             .app
             .terminal_runtimes
             .iter()
             .map(|(id, runtime)| (id.clone(), runtime.capture_identity()))
             .collect();
+        identities.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
         let attachments = self.capture_attachments();
         self.apply_capture_prefix(self.app.event_rx.admission_cut()?)?;
         self.validate_capture_runtime_set(&identities)?;
@@ -155,6 +156,7 @@ impl HeadlessServer {
         };
         self.check_capture_shutdown()?;
         let drafts = result?;
+        self.validate_capture_runtime_set(&identities)?;
         self.app.event_rx.validate_work_checkpoint(&work)?;
         if !self.app.event_rx.is_empty() {
             return Err(

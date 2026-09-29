@@ -53,6 +53,34 @@ async fn assert_resumed(actor: &crate::pty::actor::PtyIoActorHandle) {
 }
 
 #[tokio::test]
+async fn detached_exit_rejects_batch_and_resumes_other_actors() {
+    let (mut server, first_id, _) = fixture();
+    let (first, actor, _peer, _reads) = TerminalRuntime::test_for_draft_capture_with_actor();
+    server.app.terminal_runtimes.insert(first_id.clone(), first);
+    let (second, release) =
+        TerminalRuntime::test_for_draft_capture_with_delayed_detector(b"detached");
+    let record = second.exit_record();
+    let second_id = detached(&mut server, second);
+    let mut capture = Box::pin(server.capture_terminal_batch(
+        crate::pane::draft_test_limits(),
+        BUDGET,
+        2,
+        TIMEOUT,
+    ));
+    paused(capture.as_mut(), &actor).await;
+    record.test_record(crate::platform::ChildExitReason::WaitFailed);
+    release.send(()).unwrap();
+    let error = capture.await.err().unwrap();
+    assert!(error.contains("observed runtime exit"), "{error}");
+    assert_resumed(&actor).await;
+    assert!(!record.is_claimed());
+    assert!(server.app.event_rx.is_empty());
+    assert!(server.app.terminal_runtimes.get(&first_id).is_some());
+    assert!(server.app.terminal_runtimes.get(&second_id).is_some());
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
 async fn batch_holds_first_actor_until_delayed_detached_runtime_is_captured() {
     let (mut server, first_id, _) = fixture();
     let (first, actor, mut peer, reads) = TerminalRuntime::test_for_draft_capture_with_actor();

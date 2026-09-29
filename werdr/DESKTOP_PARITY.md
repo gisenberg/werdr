@@ -315,6 +315,9 @@ Private capture rejects active workers, detects registrations that begin and fin
 An unstarted registration can be safely cancelled, while sequence-exhaustion publication failure prevents capture even if a wrapper reports normal return.
 The ledger covers Git refresh, plugin commands, worktree add/remove/read, status commands, update checks, manifest updates and restore timers.
 This tracks worker lifetimes, not persistent subprocess descendants, direct API ingress or ownership of external effects; uncertain workers require a future explicit reconciliation path before capture can proceed.
+Private terminal capture also retains each runtime's exact exit-record identity and rejects observed child-wait outcomes or imported-reader termination, including outcomes whose owner notification has not yet been published.
+Checks before capture, around serialization and after acknowledged cleanup are non-consuming and cover detached runtimes in a batch; rejection retains the original runtime and normal exit handling authority.
+An exit may occur immediately after the last observation, so successful capture is not proof of child liveness or frozen/transferred wait authority.
 The deployed runtimes limit exported history to 8 KiB per pane and omit it for panes with persisted agent sessions.
 The candidate now preserves all retained primary-screen history for both ordinary and resumable-agent panes.
 It rejects a manifest above the existing 16 MiB encoded transport limit before spawning the importer, rolls back the paused readers, and never truncates history to fit.

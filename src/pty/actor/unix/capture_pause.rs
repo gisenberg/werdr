@@ -26,6 +26,21 @@ pub(crate) struct CapturePause {
 }
 
 impl PtyIoActorHandle {
+    /// Test-only actor whose acknowledgements advance only when explicitly pumped.
+    #[cfg(test)]
+    pub(crate) fn test_manually_driven_capture(
+    ) -> (Self, impl FnMut(), std::os::unix::net::UnixStream) {
+        let (handle, mut runner, peer) = tests::manual_actor();
+        (
+            handle,
+            move || {
+                runner.drain_control_commands();
+                runner.advance_capture();
+            },
+            peer,
+        )
+    }
+
     pub(crate) async fn pause_for_capture(
         &self,
         timeout: Duration,
@@ -237,7 +252,7 @@ mod tests {
     use super::*;
     use std::{future::Future, os::unix::net::UnixStream, pin::Pin, task::Poll};
 
-    fn manual_actor() -> (PtyIoActorHandle, PtyIoActorRunner, UnixStream) {
+    pub(super) fn manual_actor() -> (PtyIoActorHandle, PtyIoActorRunner, UnixStream) {
         let (mut runner, peer) = super::super::tests::actor_runner_for_unit_test();
         let (data_tx, data_rx) = mpsc::channel(4);
         let (control_tx, control_rx) = std_mpsc::channel();

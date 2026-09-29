@@ -23,6 +23,128 @@ fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
 }
 
 #[tokio::test]
+async fn owner_capture_rejects_exit_during_resume_acknowledgement() {
+    for batch in [false, true] {
+        let (mut server, terminal_id, _) = fixture();
+        let (runtime, mut pump, _peer) =
+            TerminalRuntime::test_for_draft_capture_with_manual_actor();
+        let record = runtime.exit_record();
+        server
+            .app
+            .terminal_runtimes
+            .insert(terminal_id.clone(), runtime);
+        let operation = async {
+            if batch {
+                server
+                    .capture_terminal_batch(
+                        crate::pane::draft_test_limits(),
+                        64 << 20,
+                        1,
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    .map(|_| ())
+            } else {
+                server
+                    .capture_terminal_after_queued_prefix(
+                        &terminal_id,
+                        crate::pane::draft_test_limits(),
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    .map(|_| ())
+            }
+        };
+        let mut capture = Box::pin(operation);
+        std::future::poll_fn(|cx| {
+            assert!(capture.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        pump();
+        std::future::poll_fn(|cx| {
+            assert!(capture.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        record.test_record(crate::platform::ChildExitReason::Exited);
+        pump();
+        let error = capture.await.err().unwrap();
+        assert!(error.contains("observed runtime exit"), "{error}");
+        assert!(!record.is_claimed());
+        assert!(server.app.event_rx.is_empty());
+        let runtime = server.app.terminal_runtimes.get(&terminal_id).unwrap();
+        assert!(runtime
+            .try_send_bytes(bytes::Bytes::from_static(b"resumed"))
+            .is_ok());
+        server.app.state.assert_invariants_for_test();
+    }
+}
+
+#[tokio::test]
+async fn capture_rejects_exit_evidence_without_an_owner_notification() {
+    for batch in [false, true] {
+        for during_pause in [false, true] {
+            let (mut server, terminal_id, _) = fixture();
+            let (runtime, release) =
+                TerminalRuntime::test_for_draft_capture_with_delayed_detector(b"retained");
+            let record = runtime.exit_record();
+            server
+                .app
+                .terminal_runtimes
+                .insert(terminal_id.clone(), runtime);
+            let checkpoint = server.app.event_rx.work_checkpoint().unwrap();
+            if !during_pause {
+                record.test_record(crate::platform::ChildExitReason::Exited);
+            }
+            let operation = async {
+                if batch {
+                    server
+                        .capture_terminal_batch(
+                            crate::pane::draft_test_limits(),
+                            64 << 20,
+                            1,
+                            Duration::from_secs(2),
+                        )
+                        .await
+                        .map(|_| ())
+                } else {
+                    server
+                        .capture_terminal_after_queued_prefix(
+                            &terminal_id,
+                            crate::pane::draft_test_limits(),
+                            Duration::from_secs(2),
+                        )
+                        .await
+                        .map(|_| ())
+                }
+            };
+            let mut capture = Box::pin(operation);
+            if during_pause {
+                std::future::poll_fn(|cx| {
+                    assert!(capture.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                record.test_record(crate::platform::ChildExitReason::Exited);
+                release.send(()).unwrap();
+            }
+            let error = capture.await.err().unwrap();
+            assert!(error.contains("observed runtime exit"), "{error}");
+            assert!(server.app.event_rx.is_empty());
+            server
+                .app
+                .event_rx
+                .validate_work_checkpoint(&checkpoint)
+                .unwrap();
+            assert!(!record.is_claimed());
+            assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+            server.app.state.assert_invariants_for_test();
+        }
+    }
+}
+
+#[tokio::test]
 async fn capture_rejects_unpublished_background_work_and_accepts_explicit_completion() {
     let (mut server, terminal_id, _) = fixture();
     let work = server

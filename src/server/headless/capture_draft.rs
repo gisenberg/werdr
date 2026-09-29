@@ -64,6 +64,7 @@ impl HeadlessServer {
         // scoped runtime operation has already resumed its producers here.
         self.check_capture_shutdown()?;
         let draft = result?;
+        self.capture_runtime_if_unchanged(terminal_id, &identity)?;
         self.app.event_rx.validate_work_checkpoint(&work)?;
         if !self.app.event_rx.is_empty() {
             return Err(
@@ -87,6 +88,7 @@ impl HeadlessServer {
         if !runtime.matches_capture_identity(identity) {
             return Err("terminal runtime replaced while applying queued prefix".into());
         }
+        identity.reject_observed_exit()?;
         Ok(runtime)
     }
 
