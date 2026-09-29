@@ -1685,6 +1685,8 @@ impl GhosttyPaneTerminal {
         cell_height_px: u32,
     ) -> Vec<Bytes> {
         if let Ok(mut core) = self.core.lock() {
+            let geometry_changed =
+                core.terminal.cols().ok() != Some(cols) || core.terminal.rows().ok() != Some(rows);
             let synchronized_output_before = core
                 .terminal
                 .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
@@ -1734,13 +1736,20 @@ impl GhosttyPaneTerminal {
             // ConPTY keeps its active origin when adding rows. Pulling history
             // into those rows would desynchronize its absolute cursor writes.
             #[cfg(windows)]
-            let _ = core
-                .terminal
-                .resize_preserve_active(cols, rows, cell_width_px, cell_height_px);
+            let resized =
+                core.terminal
+                    .resize_preserve_active(cols, rows, cell_width_px, cell_height_px);
             #[cfg(not(windows))]
-            let _ = core
+            let resized = core
                 .terminal
                 .resize(cols, rows, cell_width_px, cell_height_px);
+            if geometry_changed && resized.is_ok() {
+                // Settled/candidate coordinates belong to the old geometry.
+                // A quiet PTY may never send another byte to replace them.
+                // Do not sample an intermediate synchronized frame or refresh
+                // the render state here merely to seed a new cursor baseline.
+                core.cursor_settle_state = CursorPositionSettleState::default();
+            }
             let synchronized_output_after = core
                 .terminal
                 .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
@@ -4470,6 +4479,150 @@ mod tests {
         assert_eq!(
             core.cursor_settle_state
                 .reported_cursor(current, Instant::now() + result.render_delay.unwrap()),
+            current
+        );
+    }
+
+    #[test]
+    fn resize_invalidates_pending_cursor_without_waiting_for_more_pty_output() {
+        for hidden in [false, true] {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::ghostty::Terminal::new(130, 42, 100).unwrap();
+            let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+            let pane_id = PaneId::from_raw(1);
+            pane.process_pty_bytes(pane_id, 0, b"PS C:\\Users\\test> Write-Output ('DEPLOY_' + 'a-long-marker-for-resize')\r\nDEPLOY_a-long-marker-for-resize\r\nPS C:\\Users\\test> ", &tx);
+            if hidden {
+                pane.process_pty_bytes(pane_id, 0, b"\x1b[?25l", &tx);
+            }
+            let before = {
+                let mut core = pane.core.lock().unwrap();
+                let current = current_cursor_state(&mut core).unwrap();
+                core.cursor_settle_state = CursorPositionSettleState::default();
+                core.cursor_settle_state.observe(
+                    Some(TerminalCursorState {
+                        x: 0,
+                        y: 0,
+                        visible: true,
+                        ..current
+                    }),
+                    Instant::now(),
+                );
+                core.cursor_settle_state
+                    .observe(Some(current), Instant::now());
+                current
+            };
+            for cols in [41, 40, 130] {
+                pane.resize(38, cols, 0, 0);
+                let mut core = pane.core.lock().unwrap();
+                let current = current_cursor_state(&mut core);
+                if cols < 130 {
+                    assert_ne!(
+                        current.unwrap().y,
+                        before.y,
+                        "fixture must reflow the prompt"
+                    );
+                }
+                for delay in [Duration::ZERO, Duration::from_secs(1)] {
+                    assert_eq!(
+                        core.cursor_settle_state
+                            .reported_cursor(current, Instant::now() + delay),
+                        current,
+                        "resize retained old cursor coordinates at {cols} columns"
+                    );
+                }
+                assert!(!core.cursor_settle_state.pending());
+                assert_eq!(current.unwrap().visible, !hidden);
+                assert!(core
+                    .terminal
+                    .screen_vt(crate::ghostty::ActiveScreen::Primary)
+                    .unwrap()
+                    .contains("DEPLOY_a-long-marker-for-resize"));
+            }
+        }
+    }
+
+    #[test]
+    fn resize_keeps_cursor_settling_for_unchanged_cell_geometry() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let now = Instant::now();
+        let current = {
+            let mut core = pane.core.lock().unwrap();
+            let current = current_cursor_state(&mut core).unwrap();
+            core.cursor_settle_state.observe(Some(current), now);
+            core.cursor_settle_state.observe(
+                Some(TerminalCursorState {
+                    x: 20,
+                    y: 5,
+                    ..current
+                }),
+                now,
+            );
+            current
+        };
+        for pixels in [(0, 0), (9, 18)] {
+            pane.resize(24, 80, pixels.0, pixels.1);
+            let core = pane.core.lock().unwrap();
+            assert!(core.cursor_settle_state.pending());
+            assert_eq!(
+                core.cursor_settle_state.reported_cursor(Some(current), now),
+                Some(current)
+            );
+        }
+    }
+
+    #[test]
+    fn resize_discards_old_cursor_during_synchronized_alternate_output() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"primary\x1b[?1049h\x1b[20;60H\x1b[?2026h", &tx);
+        {
+            let mut core = pane.core.lock().unwrap();
+            assert!(core
+                .terminal
+                .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                .unwrap());
+            let current = current_cursor_state(&mut core).unwrap();
+            core.cursor_settle_state.observe(
+                Some(TerminalCursorState {
+                    x: 0,
+                    y: 0,
+                    ..current
+                }),
+                Instant::now(),
+            );
+            core.cursor_settle_state
+                .observe(Some(current), Instant::now());
+        }
+        pane.resize(10, 40, 0, 0);
+        {
+            let mut core = pane.core.lock().unwrap();
+            let current = current_cursor_state(&mut core);
+            assert_eq!(
+                core.cursor_settle_state
+                    .reported_cursor(current, Instant::now()),
+                current
+            );
+            assert!(!core.cursor_settle_state.pending());
+            // The terminal flushes synchronized output on resize. It must not
+            // retain the old pending caret when that newly sized frame paints.
+            assert!(!core
+                .terminal
+                .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                .unwrap());
+        }
+        // A subsequent redraw and restoration must never resurrect coordinates
+        // from the pre-resize geometry, including after synchronized output ends.
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[1;1Hpark\x1b[3;8H\x1b[?2026l", &tx);
+        let mut core = pane.core.lock().unwrap();
+        let current = current_cursor_state(&mut core);
+        assert_eq!(current.map(|cursor| (cursor.x, cursor.y)), Some((7, 2)));
+        assert_eq!(
+            core.cursor_settle_state
+                .reported_cursor(current, Instant::now() + Duration::from_secs(1)),
             current
         );
     }
