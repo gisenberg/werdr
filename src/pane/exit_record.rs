@@ -14,7 +14,7 @@ pub(crate) enum ExitEvidence {
 }
 
 impl ExitEvidence {
-    fn reason(self) -> ChildExitReason {
+    pub(crate) fn reason(self) -> ChildExitReason {
         match self {
             Self::ChildWait(reason) => reason,
             #[cfg(unix)]
@@ -24,23 +24,49 @@ impl ExitEvidence {
 }
 
 /// The retained allocation identifies one runtime incarnation, independently of
-/// reusable pane IDs and PIDs. Readers cannot clear or acknowledge its evidence.
+/// reusable pane IDs and PIDs. Evidence inspection is non-consuming; the owner
+/// claims application separately after validating the destination.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ExitRecord(Arc<OnceLock<ExitEvidence>>);
+pub struct ExitRecord(Arc<ExitRecordState>);
+
+#[derive(Debug, Default)]
+struct ExitRecordState {
+    evidence: OnceLock<ExitEvidence>,
+    claimed: AtomicBool,
+}
 
 impl ExitRecord {
     pub(crate) fn evidence(&self) -> Option<ExitEvidence> {
-        self.0.get().copied()
+        self.0.evidence.get().copied()
     }
 
-    // Identity validation will be integrated with retired-runtime bookkeeping.
-    #[allow(dead_code)]
     pub(crate) fn same_runtime(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    pub(crate) fn claim(&self) -> Option<ChildExitReason> {
+        let reason = self.evidence()?.reason();
+        (!self.0.claimed.swap(true, Ordering::AcqRel)).then_some(reason)
+    }
+
+    pub(crate) fn is_claimed(&self) -> bool {
+        self.0.claimed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_recorded(reason: ChildExitReason) -> Self {
+        let record = Self::default();
+        record.test_record(reason);
+        record
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_record(&self, reason: ChildExitReason) {
+        assert!(self.record(ExitEvidence::ChildWait(reason), &AtomicBool::new(false)));
+    }
+
     pub(super) fn record(&self, evidence: ExitEvidence, completed: &AtomicBool) -> bool {
-        if self.0.set(evidence).is_err() {
+        if self.0.evidence.set(evidence).is_err() {
             tracing::error!("runtime exit evidence already recorded");
             return false;
         }
@@ -55,23 +81,23 @@ impl ExitRecord {
         pane_id: PaneId,
         events: &tokio::sync::mpsc::Sender<AppEvent>,
     ) {
-        let Some(evidence) = self.evidence() else {
+        if self.evidence().is_none() {
             tracing::error!(
                 pane = pane_id.raw(),
                 "runtime exit notification has no evidence"
             );
             return;
-        };
+        }
         // Still reliable blocking publication at the caller. Best-effort wakeups
         // would require owner reconciliation, which is not implemented yet.
         if let Err(err) = events
-            .send(AppEvent::PaneDied {
+            .send(AppEvent::RuntimeExited {
                 pane_id,
-                exit_reason: evidence.reason(),
+                record: self.clone(),
             })
             .await
         {
-            tracing::error!(pane = pane_id.raw(), %err, "failed to send PaneDied event");
+            tracing::error!(pane = pane_id.raw(), %err, "failed to send runtime exit notification");
         }
     }
 }
@@ -139,7 +165,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert!(
-                    matches!(event, Some(AppEvent::PaneDied { pane_id: id, exit_reason: ChildExitReason::Exited }) if id == pane_id)
+                    matches!(event, Some(AppEvent::RuntimeExited { pane_id: id, record: ref delivered }) if id == pane_id && record.same_runtime(delivered))
                 );
             }
             drop(runtime);
@@ -208,10 +234,7 @@ mod tests {
         assert_eq!(record.evidence(), Some(ExitEvidence::ImportedReaderEnded));
         assert!(matches!(
             rx.recv().await,
-            Some(AppEvent::PaneDied {
-                exit_reason: ChildExitReason::Handoff,
-                ..
-            })
+            Some(AppEvent::RuntimeExited { record: ref delivered, .. }) if delivered.same_runtime(&record)
         ));
         assert_eq!(record.evidence(), Some(ExitEvidence::ImportedReaderEnded));
     }

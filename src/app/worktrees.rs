@@ -45,18 +45,19 @@ impl App {
             let Some(terminal_id) = self.state.terminal_id_for_pane(ws_idx, pane_id) else {
                 continue;
             };
-            if self.terminal_runtimes.get(&terminal_id).is_none() {
+            let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
                 continue;
-            }
+            };
+            let record = runtime.exit_record();
             tracing::debug!(
                 workspace_index = ws_idx,
                 terminal_id = %terminal_id,
                 "shutting down terminal runtime before worktree removal"
             );
-            *self
-                .pending_worktree_remove_runtime_exits
+            self.pending_worktree_remove_runtime_exits
                 .entry(pane_id)
-                .or_default() += 1;
+                .or_default()
+                .push((terminal_id.clone(), record));
             shutdown_panes.push(pane_id);
             self.shutdown_terminal_runtime(terminal_id);
         }

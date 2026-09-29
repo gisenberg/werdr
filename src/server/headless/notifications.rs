@@ -346,10 +346,14 @@ impl HeadlessServer {
     /// in the headless server — use this method instead.
     ///
     /// Returns true if the event changed visual state (requiring a re-render).
-    pub(super) fn handle_internal_event_with_forwarding(&mut self, mut ev: AppEvent) -> bool {
+    pub(super) fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
         if self.host_shutdown_requested.load(Ordering::Acquire) {
             return false;
         }
+        let Some(validated) = self.app.validate_runtime_exit(ev) else {
+            return false;
+        };
+        let (mut ev, exit_claim) = validated.into_parts();
         let focus_response = match &mut ev {
             AppEvent::WorktreeAddFinished(result) => result
                 .api_request
@@ -705,10 +709,15 @@ impl HeadlessServer {
                     })
                 });
                 if matches!(&ev, AppEvent::PaneDied { .. })
-                    && !self
-                        .app
-                        .pending_worktree_remove_runtime_exits
-                        .contains_key(&pane_id_val)
+                    && exit_claim.as_ref().map_or_else(
+                        || {
+                            !self
+                                .app
+                                .pending_worktree_remove_runtime_exits
+                                .contains_key(&pane_id_val)
+                        },
+                        |claim| !claim.is_retired(),
+                    )
                 {
                     if let Some(update) = self
                         .app
@@ -721,7 +730,7 @@ impl HeadlessServer {
                     }
                 }
 
-                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                let pane_updates = self.app.handle_validated_internal_event(ev, exit_claim);
                 for update in &pane_updates {
                     self.forward_semantic_agent_notification(update);
                     self.forward_pane_state_update_notifications_to_clients(update);

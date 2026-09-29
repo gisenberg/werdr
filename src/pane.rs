@@ -2102,8 +2102,7 @@ fn publish_reported_cwd(
 }
 
 impl PaneRuntime {
-    // Retained for future runtime capture and identity-aware exit consumption.
-    #[allow(dead_code)]
+    // Cloning preserves incarnation identity without consuming exit evidence.
     pub(crate) fn exit_record(&self) -> ExitRecord {
         self.exit_record.clone()
     }

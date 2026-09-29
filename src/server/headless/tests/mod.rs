@@ -9,6 +9,7 @@ mod native_graphics;
 mod pane_move_tests;
 #[path = "pane_graphics.rs"]
 mod retained_graphics_tests;
+mod runtime_exit;
 #[path = "surface_delta.rs"]
 mod surface_delta_tests;
 #[path = "surface_interest.rs"]
@@ -4955,14 +4956,26 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
         })
     );
     assert_eq!(server.terminal_attach_owners.get(&terminal_id), Some(&7));
-    server
-        .app
-        .pending_worktree_remove_runtime_exits
-        .insert(pane_id, 1);
-    server
-        .app
-        .pending_worktree_remove_runtime_restores
-        .insert(pane_id, 7);
+    server.app.pending_worktree_remove_runtime_exits.insert(
+        pane_id,
+        vec![(
+            crate::terminal::TerminalId::alloc(),
+            crate::pane::ExitRecord::default(),
+        )],
+    );
+    server.app.pending_worktree_remove_runtime_restores.insert(
+        pane_id,
+        (
+            7,
+            server
+                .app
+                .find_pane(pane_id)
+                .unwrap()
+                .1
+                .attached_terminal_id
+                .clone(),
+        ),
+    );
 
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::WorktreeRuntimeRestoreFailed {
@@ -5006,10 +5019,10 @@ fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
         .app
         .pending_api_worktree_remove_paths
         .insert(checkout_key.clone(), 7);
-    server
-        .app
-        .pending_worktree_remove_runtime_exits
-        .insert(pane_id, 1);
+    server.app.pending_worktree_remove_runtime_exits.insert(
+        pane_id,
+        vec![(terminal_id.clone(), crate::pane::ExitRecord::default())],
+    );
     let terminal_id = terminal_id.to_string();
     let (writer, control_rx, _render_rx) = test_client_writer();
 
@@ -5075,10 +5088,10 @@ fn expected_worktree_runtime_exit_does_not_release_agent() {
             Some(crate::detect::Agent::Codex),
             crate::detect::AgentState::Working,
         );
-    server
-        .app
-        .pending_worktree_remove_runtime_exits
-        .insert(pane_id, 1);
+    server.app.pending_worktree_remove_runtime_exits.insert(
+        pane_id,
+        vec![(terminal_id.clone(), crate::pane::ExitRecord::default())],
+    );
 
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::PaneDied {

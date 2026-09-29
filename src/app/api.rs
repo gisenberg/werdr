@@ -29,6 +29,14 @@ enum RuntimeExitAction {
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
+            ev @ AppEvent::RuntimeExited { .. } => {
+                let Some(validated) = self.validate_runtime_exit(ev) else {
+                    return false;
+                };
+                let (event, claim) = validated.into_parts();
+                self.handle_validated_internal_event(event, claim);
+                true
+            }
             AppEvent::GitStatusRefreshed {
                 results,
                 cache_updates,
@@ -115,6 +123,18 @@ impl App {
     pub(crate) fn handle_internal_event_with_pane_updates(
         &mut self,
         ev: AppEvent,
+    ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let Some(validated) = self.validate_runtime_exit(ev) else {
+            return Vec::new();
+        };
+        let (ev, exit_claim) = validated.into_parts();
+        self.handle_validated_internal_event(ev, exit_claim)
+    }
+
+    pub(crate) fn handle_validated_internal_event(
+        &mut self,
+        ev: AppEvent,
+        exit_claim: Option<super::runtime_exit::RuntimeExitClaim>,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
         let mut worktree_restore_failed = false;
         let ev = match ev {
@@ -211,6 +231,7 @@ impl App {
                 .popup_pane
                 .as_ref()
                 .is_some_and(|popup| popup.pane_id == *pane_id)
+                && !exit_claim.as_ref().is_some_and(|claim| claim.is_retired())
             {
                 self.close_popup_pane();
                 return Vec::new();
@@ -219,25 +240,49 @@ impl App {
                 worktree_restore_updates
                     .extend(self.publish_worktree_runtime_agent_release(*pane_id));
             } else {
-                let expected_exit = self
-                    .pending_worktree_remove_runtime_exits
-                    .get_mut(pane_id)
-                    .map(|remaining| {
-                        *remaining -= 1;
-                        *remaining == 0
-                    });
+                let expected_exit = if exit_claim.as_ref().is_some_and(|claim| !claim.is_retired())
+                {
+                    None
+                } else {
+                    self.pending_worktree_remove_runtime_exits
+                        .get_mut(pane_id)
+                        .map(|remaining| {
+                            if exit_claim.is_some() {
+                                remaining.retain(|(_, record)| !record.is_claimed());
+                            } else {
+                                // Trusted synthetic owner actions and test fixtures.
+                                remaining.pop();
+                            }
+                            remaining.is_empty()
+                        })
+                };
                 if let Some(remove_entry) = expected_exit {
                     let restore_failed = if remove_entry {
                         self.pending_worktree_remove_runtime_exits.remove(pane_id);
                         let restore_requested = self
                             .pending_worktree_remove_runtime_restores
                             .remove(pane_id)
-                            .is_some();
-                        if restore_requested {
+                            .is_some_and(|(_, target)| {
+                                self.find_pane(*pane_id)
+                                    .is_some_and(|(_, pane)| pane.attached_terminal_id == target)
+                            })
+                            && exit_claim.as_ref().is_none_or(|claim| {
+                                self.find_pane(*pane_id).is_some_and(|(_, pane)| {
+                                    claim.permits_restore(&pane.attached_terminal_id)
+                                })
+                            });
+                        let runtime_present = self.find_pane(*pane_id).is_some_and(|(_, pane)| {
+                            self.terminal_runtimes
+                                .get(&pane.attached_terminal_id)
+                                .is_some()
+                        });
+                        if restore_requested && !runtime_present {
                             worktree_restore_updates
                                 .extend(self.publish_worktree_runtime_agent_release(*pane_id));
                         }
-                        restore_requested && !self.respawn_shell_for_launch_pane(*pane_id, false)
+                        restore_requested
+                            && !runtime_present
+                            && !self.respawn_shell_for_launch_pane(*pane_id, false)
                     } else {
                         false
                     };
@@ -638,13 +683,22 @@ impl App {
         pane_id: crate::layout::PaneId,
         operation_id: u64,
     ) -> bool {
-        if self.pending_worktree_remove_runtime_restores.get(&pane_id) != Some(&operation_id) {
+        let Some((expected_operation, terminal_id)) =
+            self.pending_worktree_remove_runtime_restores.get(&pane_id)
+        else {
+            return false;
+        };
+        if *expected_operation != operation_id {
             return false;
         }
+        let applies = self.find_pane(pane_id).is_some_and(|(_, pane)| {
+            &pane.attached_terminal_id == terminal_id
+                && self.terminal_runtimes.get(terminal_id).is_none()
+        });
         self.pending_worktree_remove_runtime_restores
             .remove(&pane_id);
         self.pending_worktree_remove_runtime_exits.remove(&pane_id);
-        true
+        applies
     }
 
     pub(crate) fn publish_worktree_runtime_agent_release(
@@ -2263,23 +2317,34 @@ mod tests {
         assert!(app.overlay_panes.is_empty());
     }
 
-    #[test]
-    fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
+    #[tokio::test]
+    async fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
         let mut workspace = crate::workspace::Workspace::test_new("overlay");
         let previous_focus = workspace.tabs[0].root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
         workspace.tabs[0].zoomed = true;
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
-        app.handle_internal_event(AppEvent::PaneDied {
+        let terminal_id = app
+            .find_pane(overlay_pane)
+            .unwrap()
+            .1
+            .attached_terminal_id
+            .clone();
+        let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+        let record = runtime.exit_record();
+        app.terminal_runtimes.insert(terminal_id, runtime);
+        record.test_record(crate::platform::ChildExitReason::Exited);
+        app.handle_internal_event(AppEvent::RuntimeExited {
             pane_id: overlay_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
+            record: record.clone(),
         });
 
         let tab = &app.state.workspaces[0].tabs[0];
         assert_eq!(app.state.workspaces[0].active_tab, 0);
         assert_eq!(tab.layout.focused(), previous_focus);
         assert!(!tab.zoomed);
+        assert!(record.is_claimed());
         assert!(app.overlay_panes.is_empty());
     }
 
@@ -2429,16 +2494,21 @@ mod tests {
                 RuntimeExitAction::RespawnShell
             );
         }
-        app.pending_worktree_remove_runtime_exits.insert(pane_id, 1);
+        app.pending_worktree_remove_runtime_exits.insert(
+            pane_id,
+            vec![(terminal_id.clone(), crate::pane::ExitRecord::default())],
+        );
         app.pending_worktree_remove_runtime_restores
-            .insert(pane_id, 8);
+            .insert(pane_id, (8, terminal_id.clone()));
 
         app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
             pane_id,
             operation_id: 7,
         });
         assert_eq!(
-            app.pending_worktree_remove_runtime_restores.get(&pane_id),
+            app.pending_worktree_remove_runtime_restores
+                .get(&pane_id)
+                .map(|(operation, _)| operation),
             Some(&8)
         );
         assert!(app.event_rx.try_recv().is_err());

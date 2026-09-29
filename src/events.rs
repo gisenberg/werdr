@@ -79,7 +79,12 @@ pub(crate) struct WorktreeReadData {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A pane's child process exited.
+    /// Runtime notification, requiring identity validation before owner effects.
+    RuntimeExited {
+        pane_id: PaneId,
+        record: crate::pane::ExitRecord,
+    },
+    /// Trusted owner-side exit action, after runtime identity validation.
     PaneDied {
         pane_id: PaneId,
         exit_reason: crate::platform::ChildExitReason,

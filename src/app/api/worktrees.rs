@@ -2499,10 +2499,12 @@ mod tests {
             .pending_worktree_remove_runtime_restores
             .contains_key(&pane_id));
 
-        let pane_updates = app.handle_internal_event_with_pane_updates(AppEvent::PaneDied {
-            pane_id,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        let record = app.pending_worktree_remove_runtime_exits[&pane_id][0]
+            .1
+            .clone();
+        record.test_record(crate::platform::ChildExitReason::Exited);
+        let pane_updates = app
+            .handle_internal_event_with_pane_updates(AppEvent::RuntimeExited { pane_id, record });
         assert!(matches!(
             pane_updates.as_slice(),
             [update] if update.agent_released && update.suppress_completion
@@ -2547,10 +2549,24 @@ mod tests {
         app.state.workspaces = vec![parent, child, foreground];
         app.state.active = Some(2);
         app.state.selected = 2;
-        app.pending_worktree_remove_runtime_exits
-            .insert(child_pane_id, 1);
-        app.pending_worktree_remove_runtime_restores
-            .insert(child_pane_id, 7);
+        app.pending_worktree_remove_runtime_exits.insert(
+            child_pane_id,
+            vec![(
+                crate::terminal::TerminalId::alloc(),
+                crate::pane::ExitRecord::default(),
+            )],
+        );
+        app.pending_worktree_remove_runtime_restores.insert(
+            child_pane_id,
+            (
+                7,
+                app.find_pane(child_pane_id)
+                    .unwrap()
+                    .1
+                    .attached_terminal_id
+                    .clone(),
+            ),
+        );
         let workspace_snapshot = app.workspace_info(1);
         let worktree_snapshot = app.worktree_info_for_membership(&membership, None);
         app.pending_api_worktree_removes.insert(child_id.clone(), 7);
@@ -2617,8 +2633,13 @@ mod tests {
         app.pending_api_worktree_removes.insert(child_id.clone(), 7);
         app.pending_api_worktree_remove_paths
             .insert(crate::worktree::canonical_or_original(&checkout), 7);
-        app.pending_worktree_remove_runtime_exits
-            .insert(child_pane_id, 1);
+        app.pending_worktree_remove_runtime_exits.insert(
+            child_pane_id,
+            vec![(
+                child_terminal_id.clone(),
+                crate::pane::ExitRecord::default(),
+            )],
+        );
         app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
             label: "herdr".into(),

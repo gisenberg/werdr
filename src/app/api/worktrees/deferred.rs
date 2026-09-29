@@ -640,7 +640,7 @@ impl App {
                 {
                     if self
                         .pending_worktree_remove_runtime_restores
-                        .insert(pane_id, operation_id)
+                        .insert(pane_id, (operation_id, terminal_id.clone()))
                         .is_none()
                     {
                         let event_tx = self.event_tx.clone();
@@ -658,7 +658,7 @@ impl App {
                     pane_updates.extend(self.publish_worktree_runtime_agent_release(pane_id));
                     if !self.respawn_shell_for_launch_pane(pane_id, false) {
                         self.pending_worktree_remove_runtime_restores
-                            .insert(pane_id, operation_id);
+                            .insert(pane_id, (operation_id, terminal_id.clone()));
                         self.queue_worktree_runtime_restore_failed(pane_id, operation_id);
                     }
                 }
