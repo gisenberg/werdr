@@ -8,7 +8,7 @@ Each capability below needs native-reference evidence, implemented browser inter
 ## Deployment status, 2026-09-29
 
 The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `fee8679b975352afc3af3a029feec1df5889fa5c`.
-The browser gateway is deployed from `57972df2ff729c2fb4554bad6f6134f6e70e7e7b`, including the upstream 0.9.3 merge, attachment-geometry corrections and compact popup controls.
+The browser gateway is deployed from `6362127106cce8fc4d57f127834ef549aba9112f`, including the upstream 0.9.3 merge, attachment-geometry corrections, compact popup controls and cancellation-safe host setup.
 Terminal companions remain pinned separately to `9a5ea9e47b748121d0e4766a812d136b92e2d556`.
 The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
 Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
@@ -104,6 +104,10 @@ Final publication is explicitly non-cancellable: the browser hides response/canc
 Publication is verified by the captured native host identity, including recovery when a catalog write succeeds but its acknowledgement fails.
 Regression tests cover cancellation, revocation and shutdown after native registration, cancellation during platform persistence and rename, failed publication, externally adopted entries and unrelated matching-label additions.
 These changes provide cancellation-safe ownership boundaries, not cross-process native catalog locking or crash-atomic updates across the catalog and platform files.
+This fix is deployed after immutable-archive verification passed 238 browser cases, older-runtime compatibility and both Windows companion checks.
+Real SSH/browser acceptance passed current and older-compatible POSIX registration and repair, both Windows registrations, and cancellation after native POSIX registration; cancellation removed only the temporary catalog entry and retained the remote runtime until explicit test cleanup.
+The gateway supervisor now allows two minutes for graceful shutdown so its former eight-second limit cannot interrupt bounded setup finalization.
+Post-deployment desktop/phone input, resize, reload and cursor checks passed on all three hosts; cleanup preserved original runtime, pane and shell identities and protected configuration records.
 
 Live onboarding through the management service passed against both compatible Windows endpoints with an isolated local catalog.
 Each endpoint registered without an installation prompt, and its owner boot and pane identities plus the production catalog remained unchanged.
