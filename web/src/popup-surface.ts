@@ -12,6 +12,8 @@ export class PopupSurface {
   private readonly toolbar = document.createElement('div');
   private readonly message = document.createElement('span');
   private readonly closeButton = document.createElement('button');
+  private readonly retryButton = document.createElement('button');
+  private readonly takeoverButton = document.createElement('button');
   private controller?: TerminalController;
   private popup?: PopupSession;
   private endpoint = '';
@@ -29,11 +31,17 @@ export class PopupSurface {
     this.dialog.id = 'native-popup'; this.dialog.setAttribute('aria-label', 'Native terminal popup');
     this.dialog.tabIndex = -1;
     this.content.className = 'popup-content'; this.toolbar.className = 'popup-toolbar';
-    const retry = document.createElement('button'); retry.textContent = '[R] RETRY'; retry.onclick = () => void this.controller?.connect();
-    const takeover = document.createElement('button'); takeover.textContent = 'TAKE CONTROL'; takeover.onclick = () => void this.controller?.connect(true);
-    this.closeButton.textContent = '[X] CLOSE'; this.closeButton.onclick = () => void this.closeExact();
+    const label = (button: HTMLButtonElement, key: string, text: string) => {
+      button.setAttribute('aria-label', `${key} ${text}`); button.title = text;
+      button.onfocus = () => button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      button.append(document.createTextNode(key));
+      const detail = document.createElement('span'); detail.className = 'popup-button-label'; detail.textContent = ` ${text}`; button.append(detail);
+    };
+    label(this.retryButton, '[R]', 'RETRY'); this.retryButton.onclick = () => void this.controller?.connect();
+    label(this.takeoverButton, '[T]', 'TAKE CONTROL'); this.takeoverButton.onclick = () => void this.controller?.connect(true);
+    label(this.closeButton, '[X]', 'CLOSE'); this.closeButton.onclick = () => void this.closeExact();
     this.message.className = 'popup-status'; this.message.setAttribute('role', 'status');
-    this.toolbar.append(retry, takeover, this.closeButton); this.dialog.append(this.toolbar, this.content, this.message); document.body.append(this.dialog);
+    this.toolbar.append(this.retryButton, this.takeoverButton, this.closeButton); this.dialog.append(this.toolbar, this.content, this.message); document.body.append(this.dialog);
     // Escape belongs to the terminal application, including shells and nested TUIs.
     this.dialog.addEventListener('cancel', event => event.preventDefault());
     document.addEventListener('close', () => queueMicrotask(() => this.present()), true);
@@ -87,6 +95,7 @@ export class PopupSurface {
     const metrics = this.controller?.cellMetrics, key = `${metrics?.width}:${metrics?.height}`;
     if (key !== this.terminalMetrics) { this.terminalMetrics = key; this.layout(); }
     const ready = !!this.controller?.ready;
+    this.retryButton.hidden = ready; this.takeoverButton.hidden = ready;
     const message = ready ? '' : this.controller?.status || '';
     if (this.message.textContent !== message) this.message.textContent = message;
     if (ready && !this.wasReady && this.dialog.open && document.activeElement === this.dialog) this.controller?.focus();
@@ -107,6 +116,7 @@ export class PopupSurface {
     const resolve = (size: PopupSize | undefined, available: number, minimum: number) => Math.min(available, Math.max(minimum, size === undefined ? Math.floor(available / 2) : typeof size === 'number' ? size : Math.floor(available * parseInt(size, 10) / 100)));
     const outerCols = resolve(this.popup.width, cols, 6), outerRows = resolve(this.popup.height, rows, 4);
     const width = outerCols * cellWidth, height = outerRows * cellHeight;
+    this.toolbar.classList.toggle('popup-toolbar-compact', width < 300);
     Object.assign(this.dialog.style, { width: `${width}px`, height: `${height}px`, left: `${area.left + (area.width - width) / 2}px`, top: `${area.top + (area.height - height) / 2}px` });
     this.dialog.style.setProperty('--popup-cell-width', `${cellWidth}px`); this.dialog.style.setProperty('--popup-cell-height', `${cellHeight}px`);
     this.dialog.style.setProperty('--popup-right-inset', `${(outerCols - 2 <= 4 ? 1 : 2) * cellWidth}px`);

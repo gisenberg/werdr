@@ -373,6 +373,7 @@ dialog#plugins-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(
 #native-popup::backdrop { background: #0005; }
 #native-popup .popup-content { position: absolute; left: var(--popup-cell-width); right: var(--popup-right-inset); top: var(--popup-cell-height); bottom: var(--popup-cell-height); }
 #native-popup .terminal-pane { inset: 0; }
-#native-popup .popup-toolbar { position: absolute; top: 0; right: 0; left: 0; height: var(--popup-cell-height); display: flex; justify-content: flex-end; overflow: hidden; }
-#native-popup .popup-toolbar button { width: auto; min-width: 0; margin: 0; padding: 0 4px; line-height: 1; border: 0; font-size: 11px; }
+#native-popup .popup-toolbar { position: absolute; top: 0; right: 0; left: 0; height: var(--popup-cell-height); display: flex; justify-content: safe flex-end; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+#native-popup .popup-toolbar button { width: auto; min-width: 0; flex-shrink: 0; white-space: nowrap; margin: 0; padding: 0 4px; line-height: 1; border: 0; font-size: 11px; }
+#native-popup .popup-toolbar-compact .popup-button-label { display: none; }
 #native-popup .popup-status { position: absolute; left: 4px; bottom: 0; right: 4px; height: var(--popup-cell-height); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }

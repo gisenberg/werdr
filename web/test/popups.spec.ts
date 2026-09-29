@@ -10,6 +10,11 @@ test('native popups attach on desktop and mobile with application keys, retained
   if (!binary) throw new Error('Popup tests require the candidate native runtime.');
   const runtime = await fixture(false, false, false, undefined, binary);
   try {
+    let disconnectPopup: (() => void) | undefined;
+    await page.routeWebSocket('**/ws/terminal?*', socket => {
+      socket.connectToServer();
+      if (new URL(socket.url()).searchParams.get('target') === 'popup') disconnectPopup = () => socket.close();
+    });
     let frame: { width: number; height: number } | undefined;
     page.on('websocket', socket => { if (socket.url().includes('target=popup')) socket.on('framereceived', event => { try { const value = JSON.parse(String(event.payload)); if (value.type === 'terminal.frame') frame = value; } catch {} }); });
     const status = JSON.parse(await runtime.cli('status', '--json'));
@@ -27,6 +32,8 @@ test('native popups attach on desktop and mobile with application keys, retained
     await runtime.cli('plugin', 'pane', 'open', '--plugin', 'example.popup-test', '--entrypoint', 'popup', '--width', '80%', '--height', '70%');
     const popup = page.locator('#native-popup');
     await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('textarea')).toBeFocused();
+    await expect(popup.getByRole('button', { name: '[R] RETRY', exact: true })).toBeHidden();
+    await expect(popup.getByRole('button', { name: '[T] TAKE CONTROL', exact: true })).toBeHidden();
     await expect.poll(() => [frame?.width, frame?.height]).toEqual([Number(await popup.getAttribute('data-cols')), Number(await popup.getAttribute('data-rows'))]);
     await page.keyboard.press('Escape'); await page.keyboard.press('Control+b'); await page.keyboard.press('PageUp');
     await expect.poll(async () => (await readFile(capture)).toString('hex')).toContain('1b021b5b357e');
@@ -49,6 +56,29 @@ test('native popups attach on desktop and mobile with application keys, retained
     await runtime.cli('plugin', 'pane', 'open', '--plugin', 'example.popup-test', '--entrypoint', 'popup', '--width', '6', '--height', '4');
     await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('textarea')).toBeFocused();
     await expect.poll(() => frame && { width: frame.width, height: frame.height }).toEqual({ width: 4, height: 2 });
+    const close = popup.getByRole('button', { name: '[X] CLOSE', exact: true });
+    await expect(close).toBeVisible();
+    await expect(close.locator('.popup-button-label')).toBeHidden();
+    expect(await popup.locator('.popup-toolbar').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(disconnectPopup).toBeDefined(); disconnectPopup!();
+    const retry = popup.getByRole('button', { name: '[R] RETRY', exact: true });
+    await expect(retry).toBeVisible();
+    const takeover = popup.getByRole('button', { name: '[T] TAKE CONTROL', exact: true });
+    await expect(takeover).toBeVisible();
+    for (const button of [retry, takeover, close]) {
+      await button.focus();
+      const geometry = await button.evaluate(element => {
+        const bounds = element.getBoundingClientRect(), toolbar = element.parentElement!.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right, height: bounds.height, toolbarLeft: toolbar.left, toolbarRight: toolbar.right, toolbarHeight: toolbar.height };
+      });
+      expect(geometry.left, JSON.stringify(geometry)).toBeGreaterThanOrEqual(geometry.toolbarLeft - 1);
+      expect(geometry.right, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.toolbarRight + 1);
+      expect(geometry.height).toBeLessThanOrEqual(geometry.toolbarHeight);
+    }
+    await retry.click();
+    await expect(popup.locator('.pane-shield')).toBeHidden();
+    await expect(retry).toBeHidden();
+    await popup.locator('textarea').focus();
     await page.keyboard.type('q'); await expect(popup).not.toBeVisible();
     await expect(page.locator('#terminal textarea')).toBeFocused();
   } finally { await runtime.close(); }
