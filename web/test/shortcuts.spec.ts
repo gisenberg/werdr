@@ -395,7 +395,13 @@ for (const identity of ['same-boot', 'legacy', 'replacement'] as const) test(`la
     const event = JSON.parse(String(frame.payload)); if (event.type === 'fleet.snapshot') observedGeneration = event.state.generation;
   }); });
   const selected = () => new URL(page.url()).searchParams.get('pane');
-  const last = async () => { await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'F2'); };
+  const last = async () => {
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page); await prefix(page, 'F2');
+    // Selection updates the URL before a previously hidden terminal attaches.
+    // Attachment changes intentionally cancel prefix mode, so settle the new
+    // target before the next independent shortcut sequence.
+    await expect(page.locator('#shield')).toBeHidden(); await focus(page);
+  };
   try {
     const boot = JSON.parse(await runtime.cli('api', 'snapshot')).result.snapshot.runtime_boot_id;
     test.skip(identity !== 'legacy' && !boot, 'Requires a runtime advertising boot identity.');
