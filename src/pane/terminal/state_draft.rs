@@ -1,6 +1,7 @@
 //! Coordinated in-memory capture primitive, NOT a handoff-ready format.
 //!
-//! Retained graphics/glyph state is rejected; empty graphics policy is preserved.
+//! Retained graphics and owned file attachments are preserved in-process.
+//! Glyph state and unsupported external producer authority remain rejected.
 //! This still is not a complete handoff format. The caller
 //! must fence readers and control producers: replies/notifications already
 //! returned from process_pty_bytes or queued in PTY actors are outside this lock.
@@ -13,6 +14,22 @@ use crate::pane::cursor::CursorSettleSnapshot;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
+fn check_graphics_domains(exclusions: u64) -> Result<(), String> {
+    // Dedicated records preserve exactly these domains, not unknown future bits.
+    let preserved = crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_APC
+        | crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_IMAGES
+        | crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_PLACEMENTS
+        | crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_LOADING
+        | crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_AUTO_IDS
+        | crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_BYTES;
+    if exclusions & !u64::from(preserved) != 0 {
+        return Err(format!(
+            "unsupported graphics/glyph snapshot state: {exclusions:#x}"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct DraftLimits {
     pub native_bytes: usize,
@@ -22,6 +39,7 @@ pub(super) struct DraftLimits {
     pub native_allocation_bytes: usize,
     pub continuation_bytes: usize,
     pub graphics_policy_bytes: usize,
+    pub graphics: crate::ghostty::GraphicsSnapshotLimits,
     pub clipboard_write_bytes: usize,
     pub dnd_bytes: usize,
     pub handler_bytes: usize,
@@ -34,6 +52,7 @@ pub(super) struct PaneStateDraft {
     caller: Vec<u8>,
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
     graphics_policy: crate::ghostty::GraphicsPolicySnapshot,
+    graphics: crate::ghostty::GraphicsSnapshot,
     clipboard_write: Vec<u8>,
     dnd: Vec<u8>,
     handler: Vec<u8>,
@@ -135,7 +154,7 @@ fn check_replies(replies: &[Bytes], limit: usize) -> Result<(), String> {
 // exist. Keep them opt-in and disconnected from the legacy handoff.
 #[allow(dead_code)]
 impl GhosttyPaneTerminal {
-    /// Capture a private partial draft. Graphics/glyph preservation and external
+    /// Capture a private partial draft. Glyph preservation and external
     /// reader/event/writer fencing are NOT established by this method.
     pub(super) fn capture_state_draft(
         &self,
@@ -146,12 +165,7 @@ impl GhosttyPaneTerminal {
             .terminal
             .snapshot_graphics_exclusions()
             .map_err(|e| e.to_string())?;
-        // APC continuation is preserved separately; retained graphics are not.
-        if exclusions & !u64::from(crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_APC) != 0 {
-            return Err(format!(
-                "unsupported graphics/glyph snapshot state: {exclusions:#x}"
-            ));
-        }
+        check_graphics_domains(exclusions)?;
         // This order is the existing core -> callback-reply order. Never reverse it.
         // Native encode_alloc copies continuation and calls the pure core encoder
         // with an allocating writer; it does not invoke terminal callbacks.
@@ -221,6 +235,10 @@ impl GhosttyPaneTerminal {
                 .terminal
                 .graphics_policy_snapshot(limits.graphics_policy_bytes)
                 .map_err(|e| e.to_string())?,
+            graphics: core
+                .terminal
+                .graphics_snapshot(limits.graphics)
+                .map_err(|e| e.to_string())?,
             native,
             caller: writer.bytes,
             callbacks,
@@ -234,7 +252,7 @@ impl GhosttyPaneTerminal {
     }
 
     /// Build an unpublished partial draft terminal, never a handoff-ready owner.
-    /// External effect queues and unsupported graphics remain caller obligations.
+    /// External effect queues, glyphs and producer authority remain unresolved.
     pub(super) fn restore_state_draft(
         draft: PaneStateDraft,
         limits: DraftLimits,
@@ -259,6 +277,9 @@ impl GhosttyPaneTerminal {
             .restore_graphics_policy_snapshot(&draft.graphics_policy, limits.graphics_policy_bytes)
             .map_err(|e| e.to_string())?;
         terminal
+            .restore_graphics_snapshot(&draft.graphics, limits.graphics)
+            .map_err(|e| e.to_string())?;
+        terminal
             .restore_clipboard_write_snapshot(&draft.clipboard_write, limits.clipboard_write_bytes)
             .map_err(|e| e.to_string())?;
         terminal
@@ -273,6 +294,15 @@ impl GhosttyPaneTerminal {
         terminal
             .restore_apc_snapshot(&draft.apc, limits.apc_bytes)
             .map_err(|e| e.to_string())?;
+        // Both GSTOR1 and the authoritative APC record duplicate policy.
+        // Check after both are installed, before exposing the destination.
+        if terminal
+            .graphics_policy_snapshot(limits.graphics_policy_bytes)
+            .map_err(|e| e.to_string())?
+            != draft.graphics_policy
+        {
+            return Err("inconsistent graphics snapshot policy".into());
+        }
         terminal
             .restore_callback_snapshot(draft.callbacks, limits.callback_bytes)
             .map_err(|e| e.to_string())?;
@@ -322,6 +352,13 @@ mod tests {
             native_allocation_bytes: 64 << 20,
             continuation_bytes: 4096,
             graphics_policy_bytes: 16384,
+            graphics: crate::ghostty::GraphicsSnapshotLimits {
+                encoded_bytes: 16 << 20,
+                backing_bytes: 64 << 20,
+                images: 1000,
+                placements: 1000,
+                policy_bytes: 16384,
+            },
             clipboard_write_bytes: 1 << 20,
             dnd_bytes: 1 << 20,
             handler_bytes: 1 << 20,
@@ -558,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_state_draft_apc_snapshot_budget_and_retained_graphics_gate() {
+    fn pane_state_draft_apc_snapshot_budget_and_retained_graphics() {
         let (tx, _rx) = mpsc::channel(16);
         let source = pane(&tx);
         source
@@ -584,11 +621,24 @@ mod tests {
             feed(&restored, &tx, b"AA==\x1b\\"),
         );
         for pane in [&source, &restored] {
-            assert!(pane
-                .capture_state_draft(limits())
-                .err()
-                .unwrap()
-                .contains("unsupported graphics/glyph"));
+            let draft = pane.capture_state_draft(limits()).unwrap();
+            let again =
+                GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+            assert_eq!(
+                again
+                    .core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .kitty_image_placements()
+                    .unwrap(),
+                pane.core
+                    .lock()
+                    .unwrap()
+                    .terminal
+                    .kitty_image_placements()
+                    .unwrap()
+            );
         }
         assert_eq!(
             source
@@ -606,6 +656,206 @@ mod tests {
                 .kitty_image_placements()
                 .unwrap()
         );
+    }
+
+    fn graphics(pane: &GhosttyPaneTerminal) -> Vec<crate::ghostty::KittyImagePlacement> {
+        let mut values = pane
+            .core
+            .lock()
+            .unwrap()
+            .terminal
+            .kitty_image_placements()
+            .unwrap();
+        values.sort_by_key(|p| (p.image_id, p.placement_id));
+        values
+    }
+
+    fn graphics_pane(tx: &mpsc::Sender<Bytes>) -> GhosttyPaneTerminal {
+        let pane = pane(tx);
+        let mut core = pane.core.lock().unwrap();
+        core.terminal.enable_kitty_graphics().unwrap();
+        core.terminal.resize(40, 5, 8, 16).unwrap();
+        drop(core);
+        pane
+    }
+
+    #[test]
+    fn pane_state_draft_graphics_frame_continuation_at_every_cut() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let sequence = b"\x1b_Ga=f,f=32,s=1,v=1,i=1,m=1,q=2;AQI=\x1b\\\x1b_Gm=0;AwQ=\x1b\\\x1b_Ga=a,i=1,c=2,q=2\x1b\\";
+        for alternate in [false, true] {
+            for split in 0..=sequence.len() {
+                let source = graphics_pane(&tx);
+                if alternate {
+                    feed(&source, &tx, b"\x1b[?1049h");
+                }
+                feed(
+                    &source,
+                    &tx,
+                    b"\x1b_Ga=T,f=32,s=1,v=1,i=1,q=2;BAUGBw==\x1b\\",
+                );
+                feed(&source, &tx, &sequence[..split]);
+                let draft = source.capture_state_draft(limits()).unwrap();
+                let restored =
+                    GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+                assert!(rx.try_recv().is_err(), "restore emitted output at {split}");
+                assert_effects(
+                    feed(&source, &tx, &sequence[split..]),
+                    feed(&restored, &tx, &sequence[split..]),
+                );
+                assert_eq!(
+                    graphics(&source),
+                    graphics(&restored),
+                    "alternate={alternate} split={split}"
+                );
+                assert_eq!(graphics(&restored)[0].data, [1, 2, 3, 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn pane_state_draft_graphics_both_screens_and_relative_placements_survive_source() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let source = graphics_pane(&tx);
+        feed(&source, &tx, b"primary\r\n\x1b_Ga=T,f=32,s=1,v=1,i=1,p=1,q=2;AQIDBA==\x1b\\\x1b_Ga=p,i=1,p=2,P=1,Q=1,H=1,q=2\x1b\\");
+        let primary = graphics(&source);
+        assert_eq!(primary.len(), 2);
+        feed(
+            &source,
+            &tx,
+            b"\x1b[?1049halternate\r\n\x1b_Ga=T,f=32,s=1,v=1,i=2,q=2;BAUGBw==\x1b\\",
+        );
+        let alternate = graphics(&source);
+        let draft = source.capture_state_draft(limits()).unwrap();
+        drop(source);
+        let restored =
+            GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
+        assert_eq!(graphics(&restored), alternate);
+        feed(&restored, &tx, b"\x1b[?1049l");
+        assert_eq!(graphics(&restored), primary);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn pane_state_draft_graphics_limits_leave_source_unchanged() {
+        let (tx, _rx) = mpsc::channel(16);
+        let source = graphics_pane(&tx);
+        feed(
+            &source,
+            &tx,
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=1,q=2;AQIDBA==\x1b\\",
+        );
+        let before = graphics(&source);
+        for restricted_graphics in [
+            crate::ghostty::GraphicsSnapshotLimits {
+                encoded_bytes: 0,
+                ..limits().graphics
+            },
+            crate::ghostty::GraphicsSnapshotLimits {
+                backing_bytes: 0,
+                ..limits().graphics
+            },
+            crate::ghostty::GraphicsSnapshotLimits {
+                images: 0,
+                ..limits().graphics
+            },
+            crate::ghostty::GraphicsSnapshotLimits {
+                placements: 0,
+                ..limits().graphics
+            },
+            crate::ghostty::GraphicsSnapshotLimits {
+                policy_bytes: 0,
+                ..limits().graphics
+            },
+        ] {
+            let restricted = DraftLimits {
+                graphics: restricted_graphics,
+                ..limits()
+            };
+            assert!(source.capture_state_draft(restricted).is_err());
+            let draft = source.capture_state_draft(limits()).unwrap();
+            assert!(
+                GhosttyPaneTerminal::restore_state_draft(draft, restricted, tx.clone()).is_err()
+            );
+            assert_eq!(graphics(&source), before);
+        }
+    }
+
+    #[test]
+    fn pane_state_draft_graphics_rejects_mixed_policy_and_apc_records() {
+        let (tx, _rx) = mpsc::channel(16);
+        let plain = pane(&tx);
+        let configured = pane(&tx);
+        {
+            let mut core = configured.core.lock().unwrap();
+            core.terminal.enable_kitty_graphics().unwrap();
+            core.terminal.set_kitty_source_forwarding(false).unwrap();
+        }
+        let mut draft = plain.capture_state_draft(limits()).unwrap();
+        let donor = configured.capture_state_draft(limits()).unwrap();
+        draft.graphics = donor.graphics;
+        let error = GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone())
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("inconsistent graphics snapshot policy"),
+            "{error}"
+        );
+        let mut draft = plain.capture_state_draft(limits()).unwrap();
+        let donor = configured.capture_state_draft(limits()).unwrap();
+        assert_ne!(draft.apc, donor.apc);
+        draft.apc = donor.apc;
+        let error = GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx)
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("inconsistent graphics snapshot policy"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn pane_state_draft_graphics_domain_allowlist_rejects_glyphs_and_future_bits() {
+        for supported in [0, 1, 2, 4, 8, 16, 64, 95] {
+            check_graphics_domains(supported).unwrap();
+            assert!(check_graphics_domains(
+                supported | u64::from(crate::ghostty::ffi::GHOSTTY_SNAPSHOT_GRAPHICS_GLYPHS)
+            )
+            .is_err());
+            assert!(check_graphics_domains(supported | (1 << 63)).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_state_draft_graphics_file_upload_survives_original_and_source() {
+        use base64::Engine;
+        let (tx, mut rx) = mpsc::channel(16);
+        let source = graphics_pane(&tx);
+        let store = crate::ghostty::pane_graphics_files::FileStore::default();
+        let original = store.export(&[1, 2, 3, 4]).unwrap();
+        let path = base64::engine::general_purpose::STANDARD
+            .encode(original.path().as_os_str().as_encoded_bytes());
+        feed(
+            &source,
+            &tx,
+            format!("\x1b_Ga=T,t=f,f=32,s=1,v=1,i=7,q=2;{path}\x1b\\").as_bytes(),
+        );
+        let native_backed = graphics(&source)[0].source_file.is_some();
+        let draft = source.capture_state_draft(limits()).unwrap();
+        drop(original);
+        drop(source);
+        let restored = GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx).unwrap();
+        let placements = graphics(&restored);
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].source_file.is_some(), native_backed);
+        if let Some(file) = &placements[0].source_file {
+            assert_eq!(file.copy_rgba().unwrap(), [1, 2, 3, 4]);
+        } else {
+            // Unsupported CoW filesystems use the ordinary decoded fallback.
+            assert_eq!(placements[0].data, [1, 2, 3, 4]);
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
