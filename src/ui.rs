@@ -12,8 +12,8 @@ mod widgets;
 
 pub(crate) use self::onboarding::{
     onboarding_welcome_continue_rect, ONBOARDING_DESCRIPTION, ONBOARDING_HELP_LABEL,
-    ONBOARDING_HELP_SUFFIX, ONBOARDING_NEXT, ONBOARDING_PREFIX_LABEL, ONBOARDING_PREFIX_SUFFIX,
-    ONBOARDING_SUBTITLE, ONBOARDING_TITLE,
+    ONBOARDING_HELP_SUFFIX, ONBOARDING_NEXT, ONBOARDING_PREFIX_SUFFIX, ONBOARDING_SUBTITLE,
+    ONBOARDING_TITLE,
 };
 #[cfg(all(test, unix))]
 pub(crate) use self::panes::popup_pane_rects;
@@ -32,9 +32,9 @@ pub(crate) use self::scrollbar::{
     scrollbar_thumb_grab_offset,
 };
 pub(crate) use self::sidebar::{
-    agent_panel_entries_from, expanded_sidebar_sections, resolved_token_spans, sidebar_agent_rows,
-    sidebar_section_divider_rect, sidebar_space_rows, AgentPanelEntry, AgentTokenContext,
-    ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
+    expanded_sidebar_sections, resolved_token_spans, sidebar_agent_rows,
+    sidebar_section_divider_rect, sidebar_space_rows, AgentTokenContext, ResolvedToken,
+    ResolvedTokenKind, SpaceTokenContext,
 };
 use self::status::copy_feedback_rect;
 pub(crate) use self::status::{render_config_diagnostic_buffer, render_copy_feedback_buffer};

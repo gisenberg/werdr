@@ -420,7 +420,7 @@ impl StatusCommandControl {
 }
 
 fn spawn_status_command(
-    event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    event_tx: crate::events::AppEventSender,
     generation: u64,
     segment_index: usize,
     command: String,
@@ -434,7 +434,10 @@ fn spawn_status_command(
     });
     let task_control = Arc::clone(&control);
     let deadline = tokio::time::Instant::now() + timeout;
+    let work = event_tx.register_work(crate::events::BackgroundWork::StatusCommand);
     let task = tokio::spawn(async move {
+        let work = work.start();
+        let mut operation_finished = true;
         let result = run_status_command(
             task_control.as_ref(),
             command,
@@ -442,6 +445,7 @@ fn spawn_status_command(
             deadline,
             environment,
             cwd,
+            &mut operation_finished,
         )
         .await;
         task_control.terminate();
@@ -452,6 +456,9 @@ fn spawn_status_command(
                 result,
             })
             .await;
+        if operation_finished {
+            work.complete();
+        }
     });
     StatusCommandTask {
         abort_handle: task.abort_handle(),
@@ -466,6 +473,7 @@ async fn run_status_command(
     deadline: tokio::time::Instant,
     environment: Vec<(String, String)>,
     cwd: Option<std::path::PathBuf>,
+    operation_finished: &mut bool,
 ) -> Result<Option<String>, String> {
     if control.is_terminated() || tokio::time::Instant::now() >= deadline {
         return Err(format!("timed out after {}s", timeout.as_secs()));
@@ -485,6 +493,7 @@ async fn run_status_command(
     let mut process = tokio::process::Command::from(process);
     process.kill_on_drop(true);
     let mut child = process.spawn().map_err(|error| error.to_string())?;
+    *operation_finished = false;
     let process_group =
         crate::platform::StatusCommandGuard::new(&child).map_err(|error| error.to_string())?;
     control.register(process_group);
@@ -502,6 +511,7 @@ async fn run_status_command(
         };
         let (status, output) = tokio::join!(child.wait(), read_output);
         let status = status.map_err(|error| error.to_string())?;
+        *operation_finished = true;
         let output = output.map_err(|error| error.to_string())?;
         if status.success() {
             Ok(command_output_text(&output))
@@ -553,7 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_command_reports_its_sanitized_last_line() {
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,
@@ -578,12 +588,41 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn status_worker_registration_finishes_for_success_and_reaped_nonzero_exit() {
+        for command in ["exit 0", "exit 7"] {
+            let (events, mut inbox) = crate::events::channel(1);
+            let task = spawn_status_command(
+                events,
+                1,
+                0,
+                command.into(),
+                Duration::from_secs(2),
+                Vec::new(),
+                None,
+            );
+            assert!(inbox.work_checkpoint().is_err());
+            tokio::time::timeout(Duration::from_secs(3), inbox.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !task.abort_handle.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(inbox.work_checkpoint().is_ok());
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "current_thread")]
     async fn status_command_timeout_starts_before_task_is_polled() {
         let ran = unique_temp_path("ran-after-timeout");
         let command = format!("printf ran > {}", ran.display());
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,
@@ -614,7 +653,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn status_command_drains_large_output_and_keeps_the_last_line() {
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,

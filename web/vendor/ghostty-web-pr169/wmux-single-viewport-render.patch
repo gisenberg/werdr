@@ -1,0 +1,136 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index 9a68789..4f6218e 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -19,6 +19,12 @@ import { CellFlags, KittyImageFormat } from './types';
+ // Interface for objects that can be rendered
+ export interface IRenderable {
+   getLine(y: number): GhosttyCell[] | null;
++  /**
++   * Return a snapshot of the active viewport in row-major order. Renderers
++   * use this optional bulk path to avoid repeating an expensive viewport
++   * extraction for every dirty row.
++   */
++  getViewport?(): GhosttyCell[];
+   getCursor(): { x: number; y: number; visible: boolean; style?: 'block' | 'underline' | 'bar' };
+   getDimensions(): { cols: number; rows: number };
+   isRowDirty(y: number): boolean;
+@@ -440,6 +446,14 @@ export class CanvasRenderer {
+     // Multiple update() calls are safe - dirty state persists until clearDirty().
+     const cursor = buffer.getCursor();
+     const dims = buffer.getDimensions();
++    let activeViewport: GhosttyCell[] | undefined;
++    const getActiveLine = (y: number): GhosttyCell[] | null => {
++      if (y < 0 || y >= dims.rows) return null;
++      if (!buffer.getViewport) return buffer.getLine(y);
++      activeViewport ??= buffer.getViewport();
++      const start = y * dims.cols;
++      return activeViewport.slice(start, start + dims.cols);
++    };
+ 
+     // Pre-frame: build the virtual-placement index so unicode-placeholder
+     // cells can look up their target image's grid layout in O(1) during
+@@ -478,7 +492,7 @@ export class CanvasRenderer {
+       // Mark cursor lines as needing redraw
+       if (!forceAll && !buffer.isRowDirty(cursor.y)) {
+         // Need to redraw cursor line
+-        const line = buffer.getLine(cursor.y);
++        const line = getActiveLine(cursor.y);
+         if (line) {
+           this.renderLine(line, cursor.y, dims.cols);
+         }
+@@ -494,7 +508,7 @@ export class CanvasRenderer {
+         // when the cursor moved across unchanged cells. A double redraw
+         // when the row is both dirty AND cursor-moved is a trivial perf
+         // cost compared to the visual correctness gain.).
+-        const line = buffer.getLine(this.lastCursorPosition.y);
++        const line = getActiveLine(this.lastCursorPosition.y);
+         if (line) {
+           this.renderLine(line, this.lastCursorPosition.y, dims.cols);
+         }
+@@ -551,11 +565,11 @@ export class CanvasRenderer {
+           } else {
+             // This row is from visible screen
+             const screenRow = y - Math.floor(viewportY);
+-            line = buffer.getLine(screenRow);
++            line = getActiveLine(screenRow);
+           }
+         } else {
+           // At bottom - fetch from visible screen
+-          line = buffer.getLine(y);
++          line = getActiveLine(y);
+         }
+ 
+         if (line) {
+@@ -647,11 +661,11 @@ export class CanvasRenderer {
+         } else {
+           // This row is from visible screen (lower part of viewport)
+           const screenRow = viewportY > 0 ? y - Math.floor(viewportY) : y;
+-          line = buffer.getLine(screenRow);
++          line = getActiveLine(screenRow);
+         }
+       } else {
+         // At bottom - fetch from visible screen
+-        line = buffer.getLine(y);
++        line = getActiveLine(y);
+       }
+ 
+       if (line) {
+@@ -684,7 +698,7 @@ export class CanvasRenderer {
+     if (viewportY === 0 && cursor.visible && this.cursorVisible) {
+       // Use cursor style from buffer if provided, otherwise use renderer default
+       const cursorStyle = cursor.style ?? this.cursorStyle;
+-      this.renderCursor(cursor.x, cursor.y, cursorStyle);
++      this.renderCursor(cursor.x, cursor.y, cursorStyle, getActiveLine(cursor.y));
+     }
+ 
+     // Render scrollbar if scrolled or scrollback exists (with opacity for fade effect)
+@@ -1560,7 +1574,12 @@ export class CanvasRenderer {
+   /**
+    * Render cursor
+    */
+-  private renderCursor(x: number, y: number, style?: 'block' | 'underline' | 'bar'): void {
++  private renderCursor(
++    x: number,
++    y: number,
++    style?: 'block' | 'underline' | 'bar',
++    line?: GhosttyCell[] | null
++  ): void {
+     const cursorX = x * this.metrics.width;
+     const cursorY = y * this.metrics.height;
+     const cursorStyle = style ?? this.cursorStyle;
+@@ -1573,7 +1592,6 @@ export class CanvasRenderer {
+         this.ctx.fillRect(cursorX, cursorY, this.metrics.width, this.metrics.height);
+         // Re-draw character under cursor with cursorAccent color
+         {
+-          const line = this.currentBuffer?.getLine(y);
+           if (line?.[x]) {
+             this.ctx.save();
+             this.ctx.beginPath();
+diff --git a/lib/terminal.ts b/lib/terminal.ts
+index a0c9779..3a476a1 100644
+--- a/lib/terminal.ts
++++ b/lib/terminal.ts
+@@ -195,6 +195,10 @@ export class Terminal extends TerminalCore {
+         }
+         return this.wasmTerm?.getLine(y) ?? null;
+       },
++      getViewport: () => {
++        if (this.bootstrapCells) return this.bootstrapCells.flat();
++        return this.wasmTerm?.getViewport() ?? [];
++      },
+       getCursor: () => {
+         if (this.bootstrapCells) return { x: 0, y: 0, visible: true };
+         return this.wasmTerm?.getCursor() ?? { x: 0, y: 0, visible: true };
+diff --git a/package.json b/package.json
+index 838c0e2..91af5cc 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "ghostty-web",
+-  "version": "0.4.1",
++  "version": "0.4.1-pr169.faf6fbd.wmux1",
+   "description": "Web-based terminal emulator using Ghostty's VT100 parser via WebAssembly",
+   "type": "module",
+   "main": "./dist/ghostty-web.cjs.js",

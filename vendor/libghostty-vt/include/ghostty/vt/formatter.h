@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <ghostty/vt/allocator.h>
+#include <ghostty/vt/io.h>
 #include <ghostty/vt/selection.h>
 #include <ghostty/vt/types.h>
 #include <ghostty/vt/terminal.h>
@@ -118,6 +119,28 @@ typedef struct {
 } GhosttyFormatterTerminalOptions;
 
 /**
+ * Format all retained content of an explicitly selected screen as VT sequences.
+ *
+ * Includes current cursor, SGR, hyperlink, protection, charset and Kitty keyboard
+ * state. Does not include terminal-global modes, palette, saved cursor or parser
+ * state. This is a screen export, not a complete terminal checkpoint.
+ *
+ * Never switches screens, initializes an unused alternate screen, or writes to
+ * the terminal. Serialize this call with terminal mutation as with other reads.
+ * An uninitialized or invalid screen returns GHOSTTY_INVALID_VALUE.
+ * On failure, out_ptr is NULL and out_len is zero.
+ * Free successful output with ghostty_free() using the same allocator.
+ *
+ * @ingroup formatter
+ */
+GHOSTTY_API GhosttyResult ghostty_formatter_screen_vt_alloc(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    const GhosttyAllocator* allocator,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
+/**
  * Create a formatter for a terminal's active screen.
  *
  * The terminal must outlive the formatter. The formatter stores a borrowed
@@ -136,6 +159,30 @@ GHOSTTY_API GhosttyResult ghostty_formatter_terminal_new(
     GhosttyFormatter* formatter,
     GhosttyTerminal terminal,
     GhosttyFormatterTerminalOptions options);
+
+/**
+ * Run the formatter and stream output to a writer.
+ *
+ * Each call formats the current terminal state and invokes the writer
+ * synchronously as output becomes available. The callback may be called more
+ * than once and must not call formatter or terminal APIs using the same
+ * formatter or its terminal.
+ *
+ * If an error occurs, the writer may already contain a partial formatted
+ * output. The operation cannot be resumed from that partial output. This
+ * function does not flush or make the caller's destination durable.
+ *
+ * @param formatter The formatter handle (must not be NULL)
+ * @param writer Destination writer whose write callback must not be NULL
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_IO_ERROR if the writer rejects
+ *         output, GHOSTTY_LIMIT_EXCEEDED if output accounting overflows, or
+ *         GHOSTTY_INVALID_VALUE if an argument is invalid
+ *
+ * @ingroup formatter
+ */
+GHOSTTY_API GhosttyResult ghostty_formatter_format(
+    GhosttyFormatter formatter,
+    GhosttyWriter writer);
 
 /**
  * Run the formatter and produce output into the caller-provided buffer.
@@ -171,6 +218,8 @@ GHOSTTY_API GhosttyResult ghostty_formatter_format_buf(GhosttyFormatter formatte
  * The caller is responsible for freeing the returned buffer with
  * ghostty_free(), passing the same allocator (or NULL for the default)
  * that was used for the allocation.
+ * Empty output returns GHOSTTY_SUCCESS with *out_ptr set to NULL and
+ * *out_len set to zero. This result can be passed to ghostty_free().
  *
  * @param formatter The formatter handle (must not be NULL)
  * @param allocator Pointer to allocator, or NULL to use the default allocator

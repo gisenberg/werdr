@@ -1,0 +1,645 @@
+//! Owned image-domain records, not a complete graphics-storage snapshot.
+//! Generations and animation timestamps remain in the source domain. The
+//! coordinator must remap them and all dependent references before installation.
+//! Native-file records require separately retained/exported host attachments;
+//! pending records require their producer and completion token to be rebound.
+const std = @import("std");
+const image = @import("graphics_image.zig");
+const Animation = @import("graphics_animation.zig").Animation;
+const Allocator = std.mem.Allocator;
+pub const Error = error{ InvalidSnapshot, LimitExceeded, OutOfMemory, BackingUnavailable };
+pub const Limits = struct { encoded_bytes: usize, backing_bytes: usize };
+const magic = "IMGST1";
+const header_len = 96;
+
+/// Resolver borrows bytes from the separately owned attachment table. Success
+/// transfers exactly one destination backing reference to the decoded image.
+/// It must return the host's expected context type, not a copied source pointer.
+/// A successful backing must have the requested length and non-null read/release.
+/// Failure retains no reference. Identity may be freshly mapped by the host.
+pub const FileResolver = struct {
+    context: ?*anyopaque,
+    resolve: *const fn (?*anyopaque, u64, usize) Error!image.FileBacking,
+};
+
+const Layout = struct {
+    kind: u8,
+    format: u8,
+    expected: usize,
+    payload: []const u8,
+    file_identity: u64 = 0,
+    frame_bytes: usize,
+    frame_count: usize,
+    encoded: usize,
+};
+
+fn add(a: usize, b: usize) Error!usize {
+    return std.math.add(usize, a, b) catch error.LimitExceeded;
+}
+fn mul(a: usize, b: usize) Error!usize {
+    return std.math.mul(usize, a, b) catch error.LimitExceeded;
+}
+
+fn budget(expected: usize, payload_len: usize, frame_bytes: usize, frame_count: usize, animated: bool, kind: u8, limits: Limits) Error!usize {
+    if (frame_count >= std.math.maxInt(u32)) return error.InvalidSnapshot;
+    const encoded = try add(try add(header_len, payload_len), try mul(frame_count, try add(4, frame_bytes)));
+    var backing = expected;
+    // Retained PNG counts both encoded bytes and its decoded reservation.
+    if (kind == 2) backing = try add(backing, payload_len);
+    if (animated) {
+        backing = try add(backing, @sizeOf(Animation));
+        backing = try add(backing, try mul(frame_count, try add(@sizeOf(Animation.Frame), frame_bytes)));
+    }
+    if (encoded > limits.encoded_bytes or backing > limits.backing_bytes) return error.LimitExceeded;
+    return encoded;
+}
+
+fn layout(img: *const image.Image, limits: Limits) Error!Layout {
+    if (img.compression != .none) return error.InvalidSnapshot;
+    const format: u8 = switch (img.format) {
+        .rgb => 0,
+        .rgba => 1,
+        .gray_alpha => 2,
+        .gray => 3,
+        else => return error.InvalidSnapshot,
+    };
+    const pixels = try mul(img.width, img.height);
+    const expected = try mul(pixels, formatBpp(format));
+    var result: Layout = .{
+        .kind = 0,
+        .format = format,
+        .expected = expected,
+        .payload = "",
+        .frame_bytes = try mul(pixels, 4),
+        .frame_count = if (img.animation) |a| a.frames.items.len else 0,
+        .encoded = 0,
+    };
+    switch (img.data) {
+        .complete => |bytes| {
+            if (bytes.len != expected) return error.InvalidSnapshot;
+            result.payload = bytes;
+        },
+        .pending => |len| {
+            if (len != expected) return error.InvalidSnapshot;
+            result.kind = 1;
+        },
+        .encoded_png => |png| {
+            if (format != 1 or png.decoded_len != expected) return error.InvalidSnapshot;
+            result.kind = 2;
+            result.payload = png.bytes;
+        },
+        .native_file => |file| {
+            if (format != 1 or file.len != expected) return error.InvalidSnapshot;
+            if (file.read == null or file.release == null) return error.BackingUnavailable;
+            result.kind = 3;
+            result.file_identity = file.identity;
+        },
+    }
+    if (img.animation) |a| {
+        if (a.current_index > result.frame_count or (result.frame_count > 0 and format != 1)) return error.InvalidSnapshot;
+        for (a.frames.items) |frame| if (frame.data.len != result.frame_bytes) return error.InvalidSnapshot;
+    }
+    result.encoded = try budget(expected, result.payload.len, result.frame_bytes, result.frame_count, img.animation != null, result.kind, limits);
+    return result;
+}
+
+fn put(comptime T: type, bytes: []u8, offset: usize, value: T) void {
+    std.mem.writeInt(T, bytes[offset..][0..@sizeOf(T)], value, .little);
+}
+
+fn formatBpp(format: u8) usize {
+    return switch (format) {
+        0 => 3,
+        1 => 4,
+        2 => 2,
+        3 => 1,
+        else => unreachable, // Explicit format tags are validated first.
+    };
+}
+fn get(comptime T: type, bytes: []const u8, offset: usize) T {
+    return std.mem.readInt(T, bytes[offset..][0..@sizeOf(T)], .little);
+}
+
+/// Captures initialized data without decoding PNG, reading files, executing
+/// protocol commands or changing source ownership. Limits bound encoded bytes
+/// and logical reservations/frame storage, not allocator overhead or total RSS.
+pub fn encode(alloc: Allocator, img: *const image.Image, limits: Limits) Error![]u8 {
+    const v = try layout(img, limits);
+    const bytes = try alloc.alloc(u8, v.encoded);
+    @memset(bytes[0..header_len], 0);
+    @memcpy(bytes[0..6], magic);
+    bytes[6] = v.kind;
+    bytes[7] = v.format;
+    put(u32, bytes, 8, img.id);
+    put(u32, bytes, 12, img.number);
+    put(u32, bytes, 16, img.width);
+    put(u32, bytes, 20, img.height);
+    put(u32, bytes, 24, @as(u32, @intFromBool(img.metadata.transient)) |
+        (@as(u32, @intFromBool(img.metadata.implicit_id)) << 1) |
+        (@as(u32, img.metadata.placement_count) << 2));
+    put(u64, bytes, 28, img.generation);
+    put(u64, bytes, 36, v.file_identity);
+    put(u64, bytes, 44, v.expected);
+    put(u64, bytes, 52, v.payload.len);
+    @memcpy(bytes[header_len..][0..v.payload.len], v.payload);
+    var offset = header_len + v.payload.len;
+    if (img.animation) |a| {
+        bytes[60] = 1;
+        bytes[61] = switch (a.state) {
+            .stopped => 0,
+            .loading => 1,
+            .running => 2,
+        };
+        put(u32, bytes, 64, @intCast(v.frame_count));
+        put(u32, bytes, 68, a.root_gap_ms);
+        put(u32, bytes, 72, a.current_index);
+        put(u32, bytes, 76, a.max_loops);
+        put(u32, bytes, 80, a.current_loop);
+        if (a.frame_shown_at_ms) |shown| {
+            bytes[84] = 1;
+            put(u64, bytes, 88, shown);
+        }
+        for (a.frames.items) |frame| {
+            put(u32, bytes, offset, frame.gap_ms);
+            offset += 4;
+            @memcpy(bytes[offset..][0..v.frame_bytes], frame.data);
+            offset += v.frame_bytes;
+        }
+    }
+    std.debug.assert(offset == bytes.len);
+    return bytes;
+}
+
+fn preflight(bytes: []const u8, limits: Limits) Error!Layout {
+    if (bytes.len > limits.encoded_bytes) return error.LimitExceeded;
+    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..6], magic)) return error.InvalidSnapshot;
+    if (bytes[6] > 3 or bytes[7] > 3 or bytes[60] > 1 or bytes[61] > 2 or bytes[84] > 1 or
+        !std.mem.allEqual(u8, bytes[62..64], 0) or !std.mem.allEqual(u8, bytes[85..88], 0)) return error.InvalidSnapshot;
+    if (bytes[60] == 0 and (!std.mem.allEqual(u8, bytes[61..84], 0) or !std.mem.allEqual(u8, bytes[84..96], 0))) return error.InvalidSnapshot;
+    if (bytes[84] == 0 and get(u64, bytes, 88) != 0) return error.InvalidSnapshot;
+    const expected = std.math.cast(usize, get(u64, bytes, 44)) orelse return error.InvalidSnapshot;
+    const payload_len = std.math.cast(usize, get(u64, bytes, 52)) orelse return error.InvalidSnapshot;
+    const pixels = try mul(get(u32, bytes, 16), get(u32, bytes, 20));
+    if (expected != try mul(pixels, formatBpp(bytes[7]))) return error.InvalidSnapshot;
+    const frame_bytes = try mul(pixels, 4);
+    const frames: usize = get(u32, bytes, 64);
+    if (get(u32, bytes, 72) > frames or (frames > 0 and bytes[7] != 1)) return error.InvalidSnapshot;
+    switch (bytes[6]) {
+        0 => if (payload_len != expected) return error.InvalidSnapshot,
+        1, 3 => if (payload_len != 0) return error.InvalidSnapshot,
+        2 => {},
+        else => unreachable,
+    }
+    if ((bytes[6] == 2 or bytes[6] == 3) and bytes[7] != 1) return error.InvalidSnapshot;
+    if (bytes[6] != 3 and get(u64, bytes, 36) != 0) return error.InvalidSnapshot;
+    const encoded = try budget(expected, payload_len, frame_bytes, frames, bytes[60] != 0, bytes[6], limits);
+    if (encoded != bytes.len) return error.InvalidSnapshot;
+    return .{
+        .kind = bytes[6],
+        .format = bytes[7],
+        .expected = expected,
+        .payload = bytes[header_len..][0..payload_len],
+        .file_identity = get(u64, bytes, 36),
+        .frame_bytes = frame_bytes,
+        .frame_count = frames,
+        .encoded = encoded,
+    };
+}
+
+/// Returns an owned image. A missing file resolver rejects before allocation.
+/// The result is not installable storage until generation/clock/reference mapping
+/// and backing/producer ownership have been coordinated by the caller.
+pub fn decode(alloc: Allocator, bytes: []const u8, limits: Limits, resolver: ?FileResolver) Error!image.Image {
+    const v = try preflight(bytes, limits);
+    if (v.kind == 3 and resolver == null) return error.BackingUnavailable;
+    const metadata = get(u32, bytes, 24);
+    var img: image.Image = .{
+        .id = get(u32, bytes, 8),
+        .number = get(u32, bytes, 12),
+        .width = get(u32, bytes, 16),
+        .height = get(u32, bytes, 20),
+        .format = switch (v.format) {
+            0 => .rgb,
+            1 => .rgba,
+            2 => .gray_alpha,
+            3 => .gray,
+            else => unreachable,
+        },
+        .generation = get(u64, bytes, 28),
+        .metadata = .{ .transient = metadata & 1 != 0, .implicit_id = metadata & 2 != 0, .placement_count = @intCast(metadata >> 2) },
+    };
+    errdefer img.deinit(alloc);
+    switch (v.kind) {
+        0 => img.data = .{ .complete = try alloc.dupe(u8, v.payload) },
+        1 => img.data = .{ .pending = v.expected },
+        2 => img.data = .{ .encoded_png = .{ .bytes = try alloc.dupe(u8, v.payload), .decoded_len = v.expected } },
+        3 => {}, // Resolve only after local allocations finish.
+        else => unreachable,
+    }
+    if (bytes[60] != 0) {
+        const a = try alloc.create(Animation);
+        a.* = .{
+            .state = switch (bytes[61]) {
+                0 => .stopped,
+                1 => .loading,
+                2 => .running,
+                else => unreachable,
+            },
+            .root_gap_ms = get(u32, bytes, 68),
+            .current_index = get(u32, bytes, 72),
+            .max_loops = get(u32, bytes, 76),
+            .current_loop = get(u32, bytes, 80),
+            .frame_shown_at_ms = if (bytes[84] != 0) get(u64, bytes, 88) else null,
+        };
+        img.animation = a;
+        try a.frames.ensureTotalCapacityPrecise(alloc, v.frame_count);
+        var offset = header_len + v.payload.len;
+        for (0..v.frame_count) |_| {
+            const gap = get(u32, bytes, offset);
+            offset += 4;
+            const data = try alloc.dupe(u8, bytes[offset..][0..v.frame_bytes]);
+            a.frames.appendAssumeCapacity(.{ .gap_ms = gap, .data = data });
+            offset += v.frame_bytes;
+        }
+    }
+    if (v.kind == 3) {
+        const r = resolver.?;
+        const file = try r.resolve(r.context, v.file_identity, v.expected);
+        if (file.len != v.expected or file.read == null or file.release == null) {
+            if (file.release) |release| release(file.context);
+            return error.BackingUnavailable;
+        }
+        img.data = .{ .native_file = file };
+    }
+    return img;
+}
+
+const test_limits: Limits = .{ .encoded_bytes = 1 << 20, .backing_bytes = 1 << 20 };
+
+fn copyImage(source: *const image.Image) !image.Image {
+    const alloc = std.testing.allocator;
+    const bytes = try encode(alloc, source, test_limits);
+    defer alloc.free(bytes);
+    var result = try decode(alloc, bytes, test_limits, null);
+    errdefer result.deinit(alloc);
+    const after = try encode(alloc, &result, test_limits);
+    defer alloc.free(after);
+    try std.testing.expectEqualSlices(u8, bytes, after);
+    return result;
+}
+
+test "image snapshot preserves data variants and exact animation state" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    for (0..3) |kind| {
+        var source: image.Image = .{
+            .id = 42,
+            .number = 5,
+            .width = 1,
+            .height = 1,
+            .format = .rgba,
+            .generation = 999,
+            .metadata = .{ .transient = true, .implicit_id = true, .placement_count = 7 },
+        };
+        defer source.deinit(alloc);
+        source.data = switch (kind) {
+            0 => .{ .complete = try alloc.dupe(u8, &.{ 0, 1, 255, 3 }) },
+            1 => .{ .pending = 4 },
+            else => .{ .encoded_png = .{ .bytes = try alloc.dupe(u8, "retained invalid PNG\x00"), .decoded_len = 4 } },
+        };
+        const a = try alloc.create(Animation);
+        a.* = .{ .state = .loading, .root_gap_ms = 0, .current_index = 1, .max_loops = 5, .current_loop = 3, .frame_shown_at_ms = 100 };
+        source.animation = a;
+        try a.frames.append(alloc, .{ .gap_ms = 0, .data = try alloc.dupe(u8, &.{ 4, 3, 2, 1 }) });
+        try a.frames.append(alloc, .{ .gap_ms = 45, .data = try alloc.dupe(u8, &.{ 8, 7, 6, 5 }) });
+        for ([_]Animation.State{ .stopped, .loading, .running }) |state| {
+            a.state = state;
+            for ([_]?u64{ null, 0, 100, std.math.maxInt(u64) }) |shown| {
+                a.frame_shown_at_ms = shown;
+                var result = try copyImage(&source);
+                defer result.deinit(alloc);
+                var expected_image = source;
+                var actual_image = result;
+                expected_image.animation = null;
+                actual_image.animation = null;
+                try testing.expectEqualDeep(expected_image, actual_image);
+                var expected_animation = a.*;
+                // Allocation capacity is not authoritative image state.
+                expected_animation.frames.capacity = result.animation.?.frames.capacity;
+                try testing.expectEqualDeep(expected_animation, result.animation.?.*);
+            }
+        }
+    }
+}
+
+test "image snapshot RGB and absent versus empty animation" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var source: image.Image = .{ .id = 1, .width = 2, .height = 1, .format = .rgb, .data = .{ .complete = try alloc.dupe(u8, "RGBRGB") } };
+    defer source.deinit(alloc);
+    var absent = try copyImage(&source);
+    defer absent.deinit(alloc);
+    try testing.expect(absent.animation == null);
+    try testing.expectEqualDeep(source, absent);
+    const a = try alloc.create(Animation);
+    a.* = .{ .state = .running, .root_gap_ms = 12, .max_loops = 9 };
+    source.animation = a;
+    var empty = try copyImage(&source);
+    defer empty.deinit(alloc);
+    try testing.expect(empty.animation != null);
+    try testing.expectEqualDeep(source, empty);
+    source.width = 3;
+    try testing.expectError(error.InvalidSnapshot, encode(testing.failing_allocator, &source, test_limits));
+}
+
+test "image snapshot native grayscale loading and storage" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const command = @import("graphics_command.zig");
+    const terminal = @import("../main.zig");
+    const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+    var t = try terminal.Terminal.init(testing.io, alloc, .{ .cols = 10, .rows = 10 });
+    defer t.deinit(alloc);
+    inline for (.{ command.Transmission.Format.gray, command.Transmission.Format.gray_alpha }) |format| {
+        const pixels: []const u8 = if (format == .gray) &.{ 0, 255 } else &.{ 0, 255, 128, 0 };
+        const cmd: command.Command = .{
+            .control = .{ .transmit = .{ .image_id = 9, .width = 2, .height = 1, .format = format } },
+            .data = @constCast(pixels),
+        };
+        var loading = try image.LoadingImage.init(testing.io, alloc, &cmd, .direct);
+        defer loading.deinit(alloc);
+        var img = try loading.complete(alloc);
+        var storage: ImageStorage = .{};
+        defer storage.deinit(alloc, t.screens.active);
+        storage.addImage(testing.io, alloc, t.screens.active, img) catch |err| {
+            img.deinit(alloc);
+            return err;
+        };
+        const source = storage.images.getPtr(9).?;
+        var restored = try copyImage(source);
+        defer restored.deinit(alloc);
+        try testing.expectEqualDeep(source.*, restored);
+        try testing.expectEqual(format, restored.format);
+        try testing.expectEqualSlices(u8, pixels, restored.data.complete);
+
+        const bytes = try encode(alloc, source, test_limits);
+        defer alloc.free(bytes);
+        try testing.checkAllAllocationFailures(alloc, decodeFailing, .{bytes});
+        try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, .{
+            .encoded_bytes = bytes.len,
+            .backing_bytes = pixels.len - 1,
+        }, null));
+        // A valid tag cannot disguise an incompatible pixel byte count.
+        bytes[7] = if (format == .gray) 2 else 3;
+        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, test_limits, null));
+        bytes[7] = 4;
+        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, test_limits, null));
+
+        var pending: image.Image = .{ .width = 2, .height = 1, .format = format, .data = .{ .pending = pixels.len } };
+        var restored_pending = try copyImage(&pending);
+        defer restored_pending.deinit(alloc);
+        try testing.expectEqualDeep(pending, restored_pending);
+    }
+}
+
+fn decodeFailing(alloc: Allocator, bytes: []const u8) !void {
+    var img = try decode(alloc, bytes, test_limits, null);
+    defer img.deinit(alloc);
+}
+
+test "image snapshot preflight bounds and allocation cleanup" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var source: image.Image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .complete = try alloc.dupe(u8, "1234") } };
+    defer source.deinit(alloc);
+    const a = try alloc.create(Animation);
+    a.* = .{};
+    source.animation = a;
+    try a.frames.append(alloc, .{ .gap_ms = 40, .data = try alloc.dupe(u8, "5678") });
+    const bytes = try encode(alloc, &source, test_limits);
+    defer alloc.free(bytes);
+    try testing.checkAllAllocationFailures(alloc, decodeFailing, .{bytes});
+    for (0..bytes.len) |len| try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes[0..len], test_limits, null));
+    for ([_]usize{ 0, 6, 7, 36, 44, 52, 60, 61, 62, 64, 72, 84, 85, 88 }) |offset| {
+        const old = bytes[offset];
+        bytes[offset] = 255;
+        const result = decode(testing.failing_allocator, bytes, test_limits, null);
+        if (result) |value| {
+            var invalid = value;
+            invalid.deinit(alloc);
+            return error.TestUnexpectedResult;
+        } else |err| try testing.expect(err == error.InvalidSnapshot or err == error.LimitExceeded);
+        bytes[offset] = old;
+    }
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, .{ .encoded_bytes = bytes.len - 1, .backing_bytes = 1 << 20 }, null));
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, .{ .encoded_bytes = bytes.len, .backing_bytes = 1 }, null));
+    const source_after = try encode(alloc, &source, test_limits);
+    defer alloc.free(source_after);
+    try testing.expectEqualSlices(u8, bytes, source_after);
+}
+
+const TestFile = struct {
+    alloc: Allocator,
+    data: []u8,
+    releases: *usize,
+    reads: *usize,
+
+    fn make(alloc: Allocator, data: []const u8, reads: *usize, releases: *usize) Error!image.FileBacking {
+        const self = try alloc.create(TestFile);
+        errdefer alloc.destroy(self);
+        self.* = .{ .alloc = alloc, .data = try alloc.dupe(u8, data), .releases = releases, .reads = reads };
+        return .{ .context = self, .identity = 123, .len = data.len, .read = &read, .release = &release };
+    }
+    fn read(context: ?*anyopaque, out: [*]u8, len: usize) callconv(.c) bool {
+        const self: *TestFile = @ptrCast(@alignCast(context.?));
+        self.reads.* += 1;
+        if (len != self.data.len) return false;
+        @memcpy(out[0..len], self.data);
+        return true;
+    }
+    fn release(context: ?*anyopaque) callconv(.c) void {
+        const self: *TestFile = @ptrCast(@alignCast(context.?));
+        self.releases.* += 1;
+        const alloc = self.alloc;
+        alloc.free(self.data);
+        alloc.destroy(self);
+    }
+};
+
+const TestResolver = struct {
+    alloc: Allocator,
+    calls: usize = 0,
+    reads: usize = 0,
+    releases: usize = 0,
+    invalid_length: bool = false,
+    missing_read: bool = false,
+    fail: bool = false,
+
+    fn resolver(self: *TestResolver) FileResolver {
+        return .{ .context = self, .resolve = &resolve };
+    }
+    fn resolve(context: ?*anyopaque, identity: u64, len: usize) Error!image.FileBacking {
+        const self: *TestResolver = @ptrCast(@alignCast(context.?));
+        self.calls += 1;
+        if (identity != 123 or len != 4 or self.fail) return error.BackingUnavailable;
+        var file = try TestFile.make(self.alloc, "RGBA", &self.reads, &self.releases);
+        file.identity = 456; // Destination mapping, never source context reuse.
+        if (self.invalid_length) file.len += 1;
+        if (self.missing_read) file.read = null;
+        return file;
+    }
+};
+
+test "image snapshot file resolver ownership survives source destruction" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var reads: usize = 0;
+    var releases: usize = 0;
+    var source: image.Image = .{ .id = 7, .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = try TestFile.make(alloc, "RGBA", &reads, &releases) } };
+    const bytes = try encode(alloc, &source, test_limits);
+    defer alloc.free(bytes);
+    try testing.expectEqual(@as(usize, 0), reads);
+    try testing.expectEqual(@as(usize, 0), releases);
+    try testing.expect(source.data == .native_file);
+    source.deinit(alloc);
+    try testing.expectEqual(@as(usize, 1), releases);
+    // The fake destination attachment is retained independently of source.
+    var host: TestResolver = .{ .alloc = alloc };
+    var result = try decode(alloc, bytes, test_limits, host.resolver());
+    try testing.expect(result.data == .native_file);
+    try testing.expectEqual(@as(u64, 456), result.data.native_file.identity);
+    try testing.expectEqual(@as(usize, 1), host.calls);
+    try testing.expectEqual(@as(usize, 0), host.reads);
+    try result.materializeFile(alloc);
+    try testing.expectEqualStrings("RGBA", result.data.complete);
+    try testing.expectEqual(@as(usize, 1), host.reads);
+    try testing.expectEqual(@as(usize, 1), host.releases);
+    result.deinit(alloc);
+    try testing.expectEqual(@as(usize, 1), host.releases);
+    try testing.expectError(error.BackingUnavailable, decode(testing.failing_allocator, bytes, test_limits, null));
+    for (0..3) |mode| {
+        host.invalid_length = mode == 0;
+        host.missing_read = mode == 1;
+        host.fail = mode == 2;
+        const before = host.releases;
+        try testing.expectError(error.BackingUnavailable, decode(alloc, bytes, test_limits, host.resolver()));
+        try testing.expectEqual(before + @as(usize, if (mode == 2) 0 else 1), host.releases);
+    }
+    const calls = host.calls;
+    try testing.expectError(error.LimitExceeded, decode(alloc, bytes, .{ .encoded_bytes = bytes.len, .backing_bytes = 3 }, host.resolver()));
+    try testing.expectEqual(calls, host.calls);
+}
+
+fn decodeFileFailing(alloc: Allocator, bytes: []const u8) !void {
+    var host: TestResolver = .{ .alloc = alloc };
+    var result = try decode(alloc, bytes, test_limits, host.resolver());
+    result.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 1), host.releases);
+}
+
+test "image snapshot resolver and animation allocations roll back" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var reads: usize = 0;
+    var releases: usize = 0;
+    var source: image.Image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = try TestFile.make(alloc, "RGBA", &reads, &releases) } };
+    defer source.deinit(alloc);
+    const a = try alloc.create(Animation);
+    a.* = .{};
+    source.animation = a;
+    try a.frames.append(alloc, .{ .gap_ms = 100, .data = try alloc.dupe(u8, "1234") });
+    const bytes = try encode(alloc, &source, test_limits);
+    defer alloc.free(bytes);
+    try testing.checkAllAllocationFailures(alloc, decodeFileFailing, .{bytes});
+    var host: TestResolver = .{ .alloc = alloc, .fail = true };
+    try testing.expectError(error.BackingUnavailable, decode(alloc, bytes, test_limits, host.resolver()));
+    try testing.expectEqual(@as(usize, 1), host.calls);
+    try testing.expectEqual(@as(usize, 0), reads);
+    try testing.expectEqual(@as(usize, 0), releases);
+}
+
+test "image snapshot pending reservations cannot bypass backing budget" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var source: image.Image = .{ .width = 1000, .height = 1000, .format = .rgba, .data = .{ .pending = 4_000_000 } };
+    defer source.deinit(alloc);
+    const bytes = try encode(alloc, &source, .{ .encoded_bytes = header_len, .backing_bytes = 4_000_000 });
+    defer alloc.free(bytes);
+    try testing.expectEqual(@as(usize, header_len), bytes.len);
+    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, test_limits, null));
+    var result = try decode(testing.failing_allocator, bytes, .{ .encoded_bytes = header_len, .backing_bytes = 4_000_000 }, null);
+    defer result.deinit(alloc);
+    try testing.expect(result.data == .pending);
+    try testing.expectEqual(@as(usize, 4_000_000), result.data.pending);
+}
+
+test "image snapshot animation future ticks match within the same clock domain" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const Storage = @import("graphics_storage.zig").ImageStorage;
+    var terminal = try @import("../Terminal.zig").init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+    defer terminal.deinit(alloc);
+    const ticks = [_]u64{ 0, 1, 19, 20, 60, 100, 140, 1000 };
+    for ([_]Animation.State{ .stopped, .loading, .running }) |state| {
+        for ([_]u32{ 0, 2 }) |loops| {
+            for (0..ticks.len) |cut| {
+                var left: Storage = .{};
+                defer left.deinit(alloc, terminal.screens.active);
+                var right: Storage = .{};
+                defer right.deinit(alloc, terminal.screens.active);
+                try left.addImage(testing.io, alloc, terminal.screens.active, .{
+                    .id = 1,
+                    .width = 1,
+                    .height = 1,
+                    .format = .rgba,
+                    .data = .{ .complete = try alloc.dupe(u8, "ROOT") },
+                });
+                try left.addPlacement(testing.io, alloc, terminal.screens.active, 1, 1, .{ .location = .virtual });
+                const original = left.images.getPtr(1).?;
+                const a = try alloc.create(Animation);
+                a.* = .{ .state = state, .root_gap_ms = 20, .max_loops = loops };
+                original.animation = a;
+                try a.frames.append(alloc, .{ .gap_ms = 0, .data = try alloc.dupe(u8, "SKIP") });
+                try a.frames.append(alloc, .{ .gap_ms = 40, .data = try alloc.dupe(u8, "LAST") });
+                for (ticks[0..cut]) |now| _ = left.animationTick(testing.io, now);
+                // This characterizes image state only: the placement graph is
+                // not installed, but its retained count drives the tick gate.
+                try right.images.put(alloc, 1, try copyImage(original));
+                const copied = right.images.getPtr(1).?;
+                for (ticks[cut..]) |now| {
+                    try testing.expectEqual(left.animationTick(testing.io, now), right.animationTick(testing.io, now));
+                    try testing.expectEqual(a.current_index, copied.animation.?.current_index);
+                    try testing.expectEqual(a.current_loop, copied.animation.?.current_loop);
+                    try testing.expectEqual(a.frame_shown_at_ms, copied.animation.?.frame_shown_at_ms);
+                    try testing.expectEqualSlices(u8, original.renderData().complete, copied.renderData().complete);
+                }
+            }
+        }
+    }
+}
+
+test "image snapshot saturated infinite loop count keeps animating" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const Storage = @import("graphics_storage.zig").ImageStorage;
+    var terminal = try @import("../Terminal.zig").init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+    defer terminal.deinit(alloc);
+    var source: image.Image = .{ .id = 1, .width = 1, .height = 1, .format = .rgba, .data = .{ .complete = try alloc.dupe(u8, "ROOT") }, .metadata = .{ .placement_count = 1 } };
+    defer source.deinit(alloc);
+    const a = try alloc.create(Animation);
+    a.* = .{ .state = .running, .root_gap_ms = 20, .current_index = 1, .current_loop = std.math.maxInt(u32), .frame_shown_at_ms = 0 };
+    source.animation = a;
+    try a.frames.append(alloc, .{ .gap_ms = 40, .data = try alloc.dupe(u8, "LAST") });
+    var storage: Storage = .{};
+    defer storage.deinit(alloc, terminal.screens.active);
+    try storage.images.put(alloc, 1, try copyImage(&source));
+    try testing.expectEqual(@as(?u64, 20), storage.animationTick(testing.io, 40));
+    const restored = storage.images.getPtr(1).?.animation.?;
+    try testing.expectEqual(@as(u32, 0), restored.current_index);
+    try testing.expectEqual(std.math.maxInt(u32), restored.current_loop);
+    try testing.expectEqual(@as(?u64, 40), storage.animationTick(testing.io, 60));
+    try testing.expectEqual(@as(u32, 1), restored.current_index);
+    // Switching to any finite budget remains exhausted, never wraps to zero.
+    restored.max_loops = std.math.maxInt(u32);
+    try testing.expect(storage.animationTick(testing.io, 100) == null);
+}

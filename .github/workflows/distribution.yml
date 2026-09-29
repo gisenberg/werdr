@@ -57,6 +57,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Imported upstream documentation is checked against its original tags.
+      # Fetch only into the ephemeral checkout, never publish fork release tags.
+      - name: Fetch upstream documentation tags for the fork
+        if: github.repository == 'gisenberg/werdr'
+        run: git fetch --no-tags https://github.com/herdrdev/herdr.git 'refs/tags/*:refs/tags/*'
+
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:

@@ -1,6 +1,58 @@
 use super::*;
 
 impl HeadlessServer {
+    pub(super) fn send_semantic_notification(
+        &mut self,
+        event: protocol::SemanticNotification,
+    ) -> bool {
+        if !self.app.event_hub.has_semantic_notification_subscribers() {
+            return self.send_to_client_shells(ServerMessage::SemanticNotification(event));
+        }
+        let terminal_id = event.pane_id.as_deref().and_then(|public_id| {
+            let (ws_idx, pane_id) = self.app.parse_current_public_pane_id(public_id)?;
+            self.app
+                .state
+                .workspaces
+                .get(ws_idx)?
+                .terminal_id(pane_id)
+                .map(|id| id.to_string())
+        });
+        let public = api::schema::SemanticNotificationEvent {
+            kind: match event.kind {
+                protocol::SemanticNotificationKind::NeedsAttention => {
+                    api::schema::SemanticNotificationKind::NeedsAttention
+                }
+                protocol::SemanticNotificationKind::Finished => {
+                    api::schema::SemanticNotificationKind::Finished
+                }
+                protocol::SemanticNotificationKind::UpdateInstalled => {
+                    api::schema::SemanticNotificationKind::UpdateInstalled
+                }
+                protocol::SemanticNotificationKind::Custom => {
+                    api::schema::SemanticNotificationKind::Custom
+                }
+            },
+            title: event.title.clone(),
+            body: event.body.clone(),
+            sound: event.sound.map(|sound| match sound {
+                protocol::SemanticNotificationSound::Done => {
+                    api::schema::SemanticNotificationSound::Done
+                }
+                protocol::SemanticNotificationSound::Request => {
+                    api::schema::SemanticNotificationSound::Request
+                }
+            }),
+            agent: event.agent.clone(),
+            workspace_id: event.workspace_id.clone(),
+            tab_id: event.tab_id.clone(),
+            pane_id: event.pane_id.clone(),
+            terminal_id,
+            position: event.position,
+        };
+        let public_delivered = self.app.event_hub.publish_semantic_notification(public);
+        self.send_to_client_shells(ServerMessage::SemanticNotification(event)) || public_delivered
+    }
+
     fn pane_effective_state(&self, pane_id: crate::layout::PaneId) -> crate::detect::AgentState {
         self.app
             .state
@@ -17,20 +69,6 @@ impl HeadlessServer {
                 })
             })
             .unwrap_or(crate::detect::AgentState::Unknown)
-    }
-
-    fn pane_effective_agent_label(&self, pane_id: crate::layout::PaneId) -> Option<String> {
-        self.app.state.workspaces.iter().find_map(|ws| {
-            ws.tabs.iter().find_map(|tab| {
-                let pane = tab.panes.get(&pane_id)?;
-                self.app
-                    .state
-                    .terminals
-                    .get(&pane.attached_terminal_id)
-                    .and_then(|terminal| terminal.effective_agent_label())
-                    .map(str::to_string)
-            })
-        })
     }
 
     fn forward_semantic_agent_notification(
@@ -61,13 +99,9 @@ impl HeadlessServer {
         agent_label: Option<&str>,
         known_agent: Option<crate::detect::Agent>,
     ) -> bool {
-        let Some(kind) = crate::app::actions::notification_toast_for_state_change_with_agent_labels(
-            false,
-            previous_state,
-            state,
-            previous_agent_label,
-            agent_label,
-        ) else {
+        let Some(kind) =
+            crate::app::actions::notification_toast_for_state_change(false, previous_state, state)
+        else {
             return false;
         };
         let Some(workspace) = self.app.state.workspaces.get(ws_idx) else {
@@ -111,19 +145,17 @@ impl HeadlessServer {
         let agent = known_agent
             .map(crate::detect::agent_label)
             .map(str::to_owned);
-        self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
-                kind: semantic_kind,
-                title: format!("{agent_label} {event_text}"),
-                body: non_empty_body(&context),
-                sound,
-                agent,
-                workspace_id: Some(workspace_id),
-                tab_id: Some(tab_id),
-                pane_id: Some(public_pane_id),
-                position: None,
-            },
-        ))
+        self.send_semantic_notification(protocol::SemanticNotification {
+            kind: semantic_kind,
+            title: format!("{agent_label} {event_text}"),
+            body: non_empty_body(&context),
+            sound,
+            agent,
+            workspace_id: Some(workspace_id),
+            tab_id: Some(tab_id),
+            pane_id: Some(public_pane_id),
+            position: None,
+        })
     }
 
     fn forward_pane_state_update_notifications_to_clients(
@@ -142,15 +174,11 @@ impl HeadlessServer {
             self.active_tab_suppresses_notifications(is_active_tab);
 
         if !update.suppress_completion && self.app.state.sound.allows(update.known_agent) {
-            if let Some(sound) =
-                crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                    suppress_active_tab_notifications,
-                    update.previous_state,
-                    update.state,
-                    update.previous_agent_label.as_deref(),
-                    update.agent_label.as_deref(),
-                )
-            {
+            if let Some(sound) = crate::app::actions::notification_sound_for_state_change(
+                suppress_active_tab_notifications,
+                update.previous_state,
+                update.state,
+            ) {
                 self.send_notify_to_foreground_client(
                     protocol::NotifyKind::Sound,
                     sound_notify_message(sound),
@@ -264,7 +292,7 @@ impl HeadlessServer {
             .as_deref()
             .and_then(|body| sanitize_notification_text(body, 240));
         let has_client_shell = self.clients.values().any(ClientConnection::is_shell_client);
-        if !has_client_shell {
+        if !has_client_shell && !self.app.event_hub.has_semantic_notification_subscribers() {
             let reason = if self.app.state.toast_config.delivery == config::ToastDelivery::Off {
                 NotificationShowReason::Disabled
             } else {
@@ -284,19 +312,17 @@ impl HeadlessServer {
                 Some(protocol::SemanticNotificationSound::Request)
             }
         };
-        let shown = self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
-                kind: protocol::SemanticNotificationKind::Custom,
-                title,
-                body,
-                sound,
-                agent: None,
-                workspace_id: None,
-                tab_id: None,
-                pane_id: None,
-                position: params.position,
-            },
-        ));
+        let shown = self.send_semantic_notification(protocol::SemanticNotification {
+            kind: protocol::SemanticNotificationKind::Custom,
+            title,
+            body,
+            sound,
+            agent: None,
+            workspace_id: None,
+            tab_id: None,
+            pane_id: None,
+            position: params.position,
+        });
         if shown {
             self.app.mark_api_notification_shown(Instant::now());
         }
@@ -320,20 +346,46 @@ impl HeadlessServer {
     /// in the headless server — use this method instead.
     ///
     /// Returns true if the event changed visual state (requiring a re-render).
-    pub(super) fn handle_internal_event_with_forwarding(&mut self, mut ev: AppEvent) -> bool {
-        let mut focused_worktree_response = if let AppEvent::WorktreeAddFinished(result) = &mut ev {
-            result
+    pub(super) fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
+        if self.host_shutdown_requested.load(Ordering::Acquire) {
+            return false;
+        }
+        let Some(validated) = self.app.validate_runtime_exit(ev) else {
+            return false;
+        };
+        let (mut ev, exit_claim) = validated.into_parts();
+        let exit_claim = match exit_claim {
+            Some(claim) if claim.is_detached() => {
+                let Some(terminal_id) = self.app.finish_detached_runtime_exit(claim) else {
+                    return false;
+                };
+                self.shutdown_terminal_stream_clients(
+                    terminal_id.as_str(),
+                    format!("terminal {terminal_id} exited"),
+                );
+                return true;
+            }
+            claim => claim,
+        };
+        let focus_response = match &mut ev {
+            AppEvent::WorktreeAddFinished(result) => result
                 .api_request
                 .as_mut()
                 .filter(|request| request.focus)
-                .map(|request| {
-                    let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
-                    let original = std::mem::replace(&mut request.respond_to, proxy_tx);
-                    (original, proxy_rx)
-                })
-        } else {
-            None
+                .map(|request| &mut request.respond_to),
+            AppEvent::WorktreeReadFinished(result)
+                if matches!(&result.request.method,
+                api::schema::Method::WorktreeOpen(params) if params.focus) =>
+            {
+                Some(&mut result.respond_to)
+            }
+            _ => None,
         };
+        let mut focused_worktree_response = focus_response.map(|respond_to| {
+            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
+            let original = std::mem::replace(respond_to, proxy_tx);
+            (original, proxy_rx)
+        });
         match &ev {
             AppEvent::TerminalBell { pane_id, count } => {
                 if !self.send_to_foreground_client(ServerMessage::TerminalBell { count: *count }) {
@@ -357,11 +409,8 @@ impl HeadlessServer {
                 let pane_id_val = *pane_id;
                 let agent_val = *agent;
 
-                // Find the previous effective state of this pane before the event
-                // is processed. Notifications must follow effective state changes,
-                // not raw fallback reports that may be masked by hook authority.
+                // Notifications follow effective changes, not fallback reports masked by hooks.
                 let prev_state = self.pane_effective_state(pane_id_val);
-                let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 // Handle the state change (updates pane state, sets toast on AppState).
                 // Headless mode disables local sound playback separately from the
@@ -393,21 +442,16 @@ impl HeadlessServer {
                     self.active_tab_suppresses_notifications(is_active_tab);
 
                 let next_state = self.pane_effective_state(pane_id_val);
-                let next_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 if !suppress_completion
                     && self.app.state.toast_config.delay_seconds == 0
                     && self.app.state.sound.allows(agent_val)
                 {
-                    if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                            next_agent_label.as_deref(),
-                        )
-                    {
+                    if let Some(sound) = crate::app::actions::notification_sound_for_state_change(
+                        suppress_active_tab_notifications,
+                        prev_state,
+                        next_state,
+                    ) {
                         self.send_notify_to_foreground_client(
                             protocol::NotifyKind::Sound,
                             sound_notify_message(sound),
@@ -434,7 +478,6 @@ impl HeadlessServer {
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,
-                            prev_agent_label.as_deref(),
                         )
                     }
                 } else {
@@ -462,11 +505,8 @@ impl HeadlessServer {
                 let pane_id_val = *pane_id;
                 let agent_val = crate::detect::parse_agent_label(agent_label);
 
-                // Capture the previous effective state for this pane. Hook reports
-                // are already folded into pane.state; raw hook transitions must not
-                // produce a second notification path.
+                // Hook reports are already folded into the effective state.
                 let prev_state = self.pane_effective_state(pane_id_val);
-                let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 self.sync_foreground_client_state();
                 let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
@@ -496,21 +536,16 @@ impl HeadlessServer {
                     self.active_tab_suppresses_notifications(is_active_tab);
 
                 let next_state = self.pane_effective_state(pane_id_val);
-                let next_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 if !suppress_completion
                     && self.app.state.toast_config.delay_seconds == 0
                     && self.app.state.sound.allows(agent_val)
                 {
-                    if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                            next_agent_label.as_deref(),
-                        )
-                    {
+                    if let Some(sound) = crate::app::actions::notification_sound_for_state_change(
+                        suppress_active_tab_notifications,
+                        prev_state,
+                        next_state,
+                    ) {
                         self.send_notify_to_foreground_client(
                             protocol::NotifyKind::Sound,
                             sound_notify_message(sound),
@@ -537,7 +572,6 @@ impl HeadlessServer {
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,
-                            prev_agent_label.as_deref(),
                         )
                     }
                 } else {
@@ -563,19 +597,17 @@ impl HeadlessServer {
                 let install_command = install_command.clone();
 
                 self.app.handle_internal_event(ev);
-                self.send_to_client_shells(ServerMessage::SemanticNotification(
-                    protocol::SemanticNotification {
-                        kind: protocol::SemanticNotificationKind::UpdateInstalled,
-                        title: format!("Herdr v{version} available"),
-                        body: Some(crate::update::update_install_instruction(&install_command)),
-                        sound: None,
-                        agent: None,
-                        workspace_id: None,
-                        tab_id: None,
-                        pane_id: None,
-                        position: None,
-                    },
-                ));
+                self.send_semantic_notification(protocol::SemanticNotification {
+                    kind: protocol::SemanticNotificationKind::UpdateInstalled,
+                    title: format!("Herdr v{version} available"),
+                    body: Some(crate::update::update_install_instruction(&install_command)),
+                    sound: None,
+                    agent: None,
+                    workspace_id: None,
+                    tab_id: None,
+                    pane_id: None,
+                    position: None,
+                });
 
                 let toast_msg =
                     if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
@@ -605,20 +637,34 @@ impl HeadlessServer {
 
                 true
             }
-            AppEvent::WorktreeAddFinished(result) => {
-                let deferred_request_id = result
-                    .api_request
-                    .as_ref()
-                    .map(|request| request.id.as_str());
-                let shell_navigation_pending = deferred_request_id.is_some_and(|request_id| {
-                    self.clients.values().any(|client| {
-                        client.shell_deferred_navigation_request_id.as_deref() == Some(request_id)
-                    })
-                });
+            AppEvent::WorktreeReadFinished(result)
+                if matches!(&result.request.method, api::schema::Method::WorktreeList(_)) =>
+            {
+                self.app.handle_internal_event_with_render_impact(ev)
+            }
+            AppEvent::WorktreeAddFinished(_) | AppEvent::WorktreeReadFinished(_) => {
+                let deferred_request_id = match &ev {
+                    AppEvent::WorktreeAddFinished(result) => result
+                        .api_request
+                        .as_ref()
+                        .map(|request| request.id.as_str()),
+                    AppEvent::WorktreeReadFinished(result) => Some(result.request.id.as_str()),
+                    _ => None,
+                };
+                let client_local =
+                    matches!(&ev, AppEvent::WorktreeReadFinished(result) if result.client_local);
+                let shell_navigation_pending = client_local
+                    || deferred_request_id.is_some_and(|request_id| {
+                        self.clients.values().any(|client| {
+                            client.shell_deferred_navigation_request_id.as_deref()
+                                == Some(request_id)
+                        })
+                    });
                 let changed = self.app.handle_internal_event_with_render_impact(ev);
                 let api_focus_succeeded = super::client_views::forward_proxied_api_response(
                     focused_worktree_response.take(),
-                );
+                )
+                .is_some();
                 self.reconcile_client_shell_locations();
                 if shell_navigation_pending {
                     self.app.accept_current_focus_without_events();
@@ -663,7 +709,7 @@ impl HeadlessServer {
                 }
                 true
             }
-            AppEvent::PaneDied { pane_id }
+            AppEvent::PaneDied { pane_id, .. }
             | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
@@ -676,10 +722,15 @@ impl HeadlessServer {
                     })
                 });
                 if matches!(&ev, AppEvent::PaneDied { .. })
-                    && !self
-                        .app
-                        .pending_worktree_remove_runtime_exits
-                        .contains_key(&pane_id_val)
+                    && exit_claim.as_ref().map_or_else(
+                        || {
+                            !self
+                                .app
+                                .pending_worktree_remove_runtime_exits
+                                .contains_key(&pane_id_val)
+                        },
+                        |claim| !claim.is_retired(),
+                    )
                 {
                     if let Some(update) = self
                         .app
@@ -692,7 +743,7 @@ impl HeadlessServer {
                     }
                 }
 
-                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                let pane_updates = self.app.handle_validated_internal_event(ev, exit_claim);
                 for update in &pane_updates {
                     self.forward_semantic_agent_notification(update);
                     self.forward_pane_state_update_notifications_to_clients(update);
@@ -751,6 +802,9 @@ impl HeadlessServer {
         let mut had_event = false;
         let mut changed = false;
         for _ in 0..limit {
+            if self.host_shutdown_requested.load(Ordering::Acquire) {
+                break;
+            }
             let Ok(ev) = self.app.event_rx.try_recv() else {
                 break;
             };

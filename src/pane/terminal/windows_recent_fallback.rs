@@ -1,22 +1,7 @@
 use super::{ghostty_line_from_cells, GhosttyPaneCore, TerminalReadSnapshot};
 
-const CACHE_LINES: usize = 2000;
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Cache {
-    rows: Vec<RenderedLine>,
-    last_snapshot: Vec<RenderedLine>,
-    pub(super) usable: bool,
-    last_scrollbar: Option<(usize, usize)>,
-    pub(super) needs_refresh: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RenderedLine {
-    text: String,
-    soft_wrapped: bool,
-    wrap_continuation: bool,
-}
+pub(super) use super::windows_recent_state::Cache;
+use super::windows_recent_state::{RenderedLine, CACHE_LINES};
 
 pub(super) fn update(core: &mut GhosttyPaneCore) {
     if !primary_screen_active(core) {
@@ -57,7 +42,10 @@ pub(super) fn update(core: &mut GhosttyPaneCore) {
     let mut moved_snapshot = Vec::new();
     if pending_refresh && history_changed {
         let viewport_rows = scrollbar.map_or(1, |metrics| metrics.len.max(1));
-        let recovery_rows = history_growth.max(viewport_rows).min(CACHE_LINES);
+        let recovery_rows = history_growth
+            .max(viewport_rows)
+            .min(CACHE_LINES)
+            .min(total.saturating_sub(len));
         for offset in (1..=recovery_rows).rev().step_by(viewport_rows) {
             super::ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset);
             let Ok(moved) = visible_render_lines(core) else {
@@ -285,6 +273,161 @@ mod tests {
         assert_eq!(text, vec!["one", "two", "three", "four", "five"]);
     }
 
+    // Deliberately restores only this subsystem plus native/callback state.
+    // Fixtures below use plain output, repaint and screen switching, not the
+    // other caller-owned protocols needed by the eventual complete envelope.
+    fn restore_fallback_fixture(
+        source: &GhosttyPaneTerminal,
+        tx: &mpsc::Sender<bytes::Bytes>,
+    ) -> GhosttyPaneTerminal {
+        let core = source.core.lock().unwrap();
+        let native = core.terminal.snapshot_bytes().unwrap();
+        let observer = core.terminal.tracked_row_snapshot().unwrap();
+        let callbacks = core.terminal.callback_snapshot(4096).unwrap();
+        let cache = serde_json::to_vec(&core.recent_fallback).unwrap();
+        let mut terminal = crate::ghostty::Terminal::from_snapshot(&native, 4096).unwrap();
+        terminal.restore_callback_snapshot(callbacks, 4096).unwrap();
+        terminal.restore_tracked_row_snapshot(observer).unwrap();
+        let restored = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        restored.core.lock().unwrap().recent_fallback = serde_json::from_slice(&cache).unwrap();
+        assert_eq!(core.terminal.snapshot_bytes().unwrap(), native);
+        assert_eq!(core.terminal.tracked_row_snapshot().unwrap(), observer);
+        assert_eq!(serde_json::to_vec(&core.recent_fallback).unwrap(), cache);
+        restored
+    }
+
+    fn assert_fallback_equivalent(source: &GhosttyPaneTerminal, restored: &GhosttyPaneTerminal) {
+        let mut source = source.core.lock().unwrap();
+        let mut restored = restored.core.lock().unwrap();
+        assert_eq!(source.recent_fallback, restored.recent_fallback);
+        assert_eq!(
+            source.terminal.tracked_row_snapshot().unwrap(),
+            restored.terminal.tracked_row_snapshot().unwrap()
+        );
+        refresh_if_needed(&mut source);
+        refresh_if_needed(&mut restored);
+        assert_eq!(source.recent_fallback, restored.recent_fallback);
+        assert_eq!(
+            source.terminal.tracked_row_snapshot().unwrap(),
+            restored.terminal.tracked_row_snapshot().unwrap()
+        );
+        for unwrap in [false, true] {
+            assert_eq!(
+                recent_text(&source, CACHE_LINES, unwrap),
+                recent_text(&restored, CACHE_LINES, unwrap)
+            );
+        }
+        assert_eq!(
+            source
+                .terminal
+                .screen_vt(crate::ghostty::ActiveScreen::Primary)
+                .unwrap(),
+            restored
+                .terminal
+                .screen_vt(crate::ghostty::ActiveScreen::Primary)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn windows_fallback_combined_snapshot_continues_pending_pruning_repaint_and_resize() {
+        for resize in [None, Some((2, 40)), Some((2, 20))] {
+            for alternate in [false, true] {
+                for cut_after_batch in [false, true] {
+                    let (tx, _rx) = mpsc::channel(4);
+                    let terminal =
+                        crate::ghostty::Terminal::new_with_snapshot_tracking(40, 1, 1, 4096)
+                            .unwrap();
+                    let source = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+                    let pane_id = PaneId::from_raw(1);
+                    let feed = |pane: &GhosttyPaneTerminal, bytes: &[u8]| {
+                        pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+                    };
+                    let total = || {
+                        source
+                            .core
+                            .lock()
+                            .unwrap()
+                            .terminal
+                            .scrollbar()
+                            .unwrap()
+                            .total
+                    };
+                    feed(&source, b"line-0000");
+                    let mut prune = None;
+                    for line in 1..=5000 {
+                        feed(&source, format!("\rrepaint-{line:04}").as_bytes());
+                        let before = total();
+                        feed(&source, format!("\r\nline-{line:04}").as_bytes());
+                        let after = total();
+                        if after < before {
+                            prune = Some((before, after));
+                            break;
+                        }
+                    }
+                    let (before, after) = prune.expect("real scrollback pruning");
+                    for line in 0..before - after {
+                        feed(&source, format!("\r\nrefill-{line:04}").as_bytes());
+                    }
+                    assert_eq!(total(), before);
+                    feed(&source, b"\rnet-zero-repaint");
+                    let batch = (0..before + 1 - after)
+                        .map(|line| format!("\r\nbatch-{line:04}"))
+                        .collect::<String>();
+                    if cut_after_batch {
+                        feed(&source, batch.as_bytes());
+                        assert_eq!(total(), before);
+                    }
+                    assert!(source.core.lock().unwrap().recent_fallback.needs_refresh);
+                    if alternate {
+                        feed(&source, b"\x1b[?1049hALT");
+                    }
+                    let restored = restore_fallback_fixture(&source, &tx);
+                    let restored = restore_fallback_fixture(&restored, &tx);
+                    if alternate {
+                        for pane in [&source, &restored] {
+                            feed(pane, b"\x1b[?1049l");
+                        }
+                    }
+                    if !cut_after_batch {
+                        for pane in [&source, &restored] {
+                            feed(pane, batch.as_bytes());
+                        }
+                    }
+                    if let Some((rows, cols)) = resize {
+                        assert_eq!(
+                            source.resize(rows, cols, 8, 16),
+                            restored.resize(rows, cols, 8, 16)
+                        );
+                    }
+                    assert_fallback_equivalent(&source, &restored);
+                    let page_rows = before + 1 - after;
+                    for pane in [&source, &restored] {
+                        let core = pane.core.lock().unwrap();
+                        let text = recent_text(&core, CACHE_LINES, false).text;
+                        for expected in [
+                            "net-zero-repaint".to_string(),
+                            "batch-0000".to_string(),
+                            format!("batch-{:04}", page_rows / 2),
+                            format!("batch-{:04}", page_rows - 1),
+                        ] {
+                            assert!(text.lines().any(|line| line == expected), "lost {expected}: resize={resize:?}, alternate={alternate}, cut_after_batch={cut_after_batch}");
+                        }
+                    }
+                    for output in [
+                        b"\rfinal-repaint".as_slice(),
+                        b"\r\nnext-line",
+                        b"\x1b[2J\x1b[Hclean",
+                    ] {
+                        feed(&source, output);
+                        feed(&restored, output);
+                        assert_fallback_equivalent(&source, &restored);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn unwraps_soft_wrapped_rows() {
         let snapshot = vec![
@@ -346,6 +489,20 @@ mod tests {
 
     #[test]
     fn deferred_repaint_survives_real_scrollback_pruning() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(None);
+    }
+
+    #[test]
+    fn deferred_repaint_survives_real_scrollback_pruning_resize_rows() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(Some((2, 40)));
+    }
+
+    #[test]
+    fn deferred_repaint_survives_real_scrollback_pruning_resize_both_axes() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(Some((2, 20)));
+    }
+
+    fn assert_deferred_repaint_survives_real_scrollback_pruning(resize: Option<(u16, u16)>) {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(40, 1, 1).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
@@ -387,6 +544,9 @@ mod tests {
             .collect::<String>();
         pane.process_pty_bytes(pane_id, 0, batch.as_bytes(), &tx);
         assert_eq!(state(), (before, true));
+        if let Some((rows, cols)) = resize {
+            pane.resize(rows, cols, 8, 16);
+        }
         let mut core = pane.core.lock().unwrap();
         let fallback =
             super::super::finish_recent_snapshot(&mut core, String::new(), CACHE_LINES, false);
@@ -483,16 +643,21 @@ mod tests {
 
     #[test]
     fn seed_history_updates_fallback() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(5, 2, 1024).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        for (rows, expected) in [(2, "abcde\nfghij\nend\n"), (3, "abcdefghij\nend\n")] {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::ghostty::Terminal::new(5, rows, 1024).unwrap();
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        pane.seed_history_ansi("abcdefghij\r\nend");
-        pane.resize(3, 10, 8, 16);
+            pane.seed_history_ansi("abcdefghij\r\nend");
+            pane.resize(3, 10, 8, 16);
 
-        let core = pane.core.lock().unwrap();
-        assert_eq!(recent_text(&core, 10, false).text, "abcdefghij\nend\n");
-        assert_eq!(recent_text(&core, 10, true).text, "abcdefghij\nend\n");
+            // With two original rows, the prefix is history and fixed-origin
+            // reflow splits its soft wrap at the active boundary. With three,
+            // the entire logical line is active and still unwraps normally.
+            let core = pane.core.lock().unwrap();
+            assert_eq!(recent_text(&core, 10, false).text, expected);
+            assert_eq!(recent_text(&core, 10, true).text, expected);
+        }
     }
 
     #[test]

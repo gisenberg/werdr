@@ -1,0 +1,697 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index c45672ab..1d5f4cb0 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -2083,6 +2083,30 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
+                                       uint32_t cell_width_px,
+                                       uint32_t cell_height_px);
+
++/**
++ * Resize without pulling retained history into the active area.
++ *
++ * Like ghostty_terminal_resize(), including column reflow and size reports,
++ * but enlargement appends blank rows below the active screen even when the
++ * cursor was at the bottom. Both screens use this policy. Retained history
++ * remains available, subject to the configured history limits.
++ * Column reflow keeps history and active content in separate domains, splitting
++ * soft wraps at their boundary while retaining historical cell content.
++ * Vacant rows after unwrapping are filled with blanks, not retained history.
++ * Nonwrapped active rows measure trailing spaces like ConPTY. Padding styles
++ * remain visible within the final row without manufacturing additional rows.
++ * This per-call policy is intended for fixed-origin consoles such as ConPTY.
++ * NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.
++ *
++ * @ingroup terminal
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_resize_preserve_active(
++    GhosttyTerminal terminal,
++    uint16_t cols,
++    uint16_t rows,
++    uint32_t cell_width_px,
++    uint32_t cell_height_px);
++
+ /**
+  * Set an option on the terminal.
+  *
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index 97f0b788..ae8f0cab 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -190,6 +190,7 @@ comptime {
+         _ = @import("quirks_memset.zig");
+
+         const c = terminal.c_api;
++        @export(&c.terminal_resize_preserve_active, .{ .name = "ghostty_terminal_resize_preserve_active" });
+         const features = terminal.options;
+         if (features.input_encode) {
+             @export(&c.key_event_new, .{ .name = "ghostty_key_event_new" });
+diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
+index 2e300302..22c76fa2 100644
+--- a/vendor/libghostty-vt/src/terminal/PageList.zig
++++ b/vendor/libghostty-vt/src/terminal/PageList.zig
+@@ -1236,6 +1236,13 @@ pub const Resize = struct {
+     /// be truncated if the new size is smaller than the old size.
+     reflow: bool = true,
+
++    /// Allow resizing to pull retained history into the active area.
++    /// Disable to keep history and active content in separate reflow domains
++    /// and append blank rows when growth or unwrapping creates vacant space.
++    pull_scrollback: bool = true,
++    /// Measure active nonwrapped rows like ConPTY, independently of styling.
++    conpty_padding: bool = false,
++
+     /// Set this to the current cursor position in the active area. Some
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+@@ -1301,7 +1308,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+         .gt => {
+             // We grow rows after cols so that we can do our unwrapping/reflow
+             // before we do a no-reflow grow.
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
+             try self.resizeWithoutReflow(opts);
+         },
+
+@@ -1313,7 +1320,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+                 copy.cols = self.cols;
+                 break :opts copy;
+             });
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback, opts.conpty_padding);
+         },
+     }
+
+@@ -1338,9 +1345,19 @@ fn resizeCols(
+     self: *PageList,
+     cols: size.CellCountInt,
+     cursor: ?Resize.Cursor,
++    pull_scrollback: bool,
++    conpty_padding: bool,
+ ) Allocator.Error!void {
+     assert(cols != self.cols);
+
++    // A console with a fixed active origin reflows history and the active
++    // buffer separately. Track the boundary before rewriting any source pages.
++    const active_top = if (!pull_scrollback)
++        try self.trackPin(self.pin(.{ .active = .{} }).?)
++    else
++        null;
++    defer if (active_top) |p| self.untrackPin(p);
++
+     // If we have a cursor position (x,y), then we try under any col resizing
+     // to keep the same number remaining active rows beneath it. This is a
+     // very special case if you can imagine clearing the screen (i.e.
+@@ -1461,11 +1478,26 @@ fn resizeCols(
+     // Reflow all our rows.
+     {
+         var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
++        var reached_active_top = false;
+         while (it.next()) |row| {
++            if (active_top) |p| {
++                if (!reached_active_top and row.node == p.node and row.y == p.y) {
++                    reached_active_top = true;
++                    // Do not join an active continuation to a history prefix.
++                    // Only change destination metadata, leaving fallible reflow
++                    // independent of mutations to the source rows.
++                    if (row.rowAndCell().row.wrap_continuation) {
++                        reflow_cursor.page_row.wrap = false;
++                        if (reflow_cursor.x > 0 or reflow_cursor.pending_wrap)
++                            reflow_cursor.new_rows = @max(reflow_cursor.new_rows, 1);
++                    }
++                }
++            }
+             try reflow_cursor.reflowRow(
+                 self,
+                 row,
+                 if (preserved_cursor) |c| c.tracked_pin else null,
++                conpty_padding and reached_active_top,
+             );
+
+             // Once we're done reflowing a page, we're done with it, so
+@@ -1521,7 +1553,14 @@ fn resizeCols(
+             c.tracked_pin.*,
+         ) orelse break :cursor;
+
+-        const active_pin = self.pin(.{ .active = .{} });
++        const active_pin = pin: {
++            const current = self.pin(.{ .active = .{} });
++            if (active_top) |p| {
++                if (!p.garbage and current != null and current.?.before(p.*))
++                    break :pin @as(?Pin, p.*);
++            }
++            break :pin current;
++        };
+
+         // We need to determine how many rows we wrapped from the original
+         // and subtract that from the remaining rows we expect because if
+@@ -1530,6 +1569,12 @@ fn resizeCols(
+         const wrapped = wrapped: {
+             var wrapped: usize = 0;
+
++            // Row shrink can leave the cursor above the preserved origin.
++            // Never iterate upward toward a lower endpoint in that case.
++            if (active_pin) |ap| {
++                if (c.tracked_pin.before(ap)) break :wrapped 0;
++            }
++
+             var row_it = c.tracked_pin.rowIterator(.left_up, active_pin);
+             while (row_it.next()) |next| {
+                 const row = next.rowAndCell().row;
+@@ -1550,6 +1595,17 @@ fn resizeCols(
+             req_rows -= 1;
+         }
+     }
++
++    // Unwrapping can otherwise fill the newly vacant active rows with history.
++    // Append blank rows to keep the old origin at zero. If narrowing pushed it
++    // into history, leave it there rather than resurrecting scrolled content.
++    if (active_top) |p| {
++        if (!p.garbage) {
++            if (self.pointFromPin(.active, p.*)) |pt| {
++                for (0..pt.active.y) |_| _ = try self.grow();
++            }
++        }
++    }
+ }
+
+ // We use a cursor to track where we are in the src/dst. This is very
+@@ -1627,6 +1683,7 @@ const ReflowCursor = struct {
+         list: *PageList,
+         row: Pin,
+         cursor_pin: ?*Pin,
++        conpty_padding: bool,
+     ) Allocator.Error!void {
+         const src_page: *Page = row.node.page();
+         const src_row = row.rowAndCell().row;
+@@ -1636,9 +1693,19 @@ const ReflowCursor = struct {
+         // Calculate the columns in this row. First up we trim non-semantic
+         // rightmost blanks.
+         var cols_len = src_page.size.cols;
++        var styled_padding = false;
+         if (!src_row.wrap) {
+             while (cols_len > 0) {
+-                if (!cells[cols_len - 1].isEmpty()) break;
++                const cell = cells[cols_len - 1];
++                const padding = conpty_padding and
++                    cell.wide == .narrow and !cell.hasGrapheme() and
++                    !cell.protected and !cell.hyperlink and
++                    cell.semantic_content == .output and
++                    (cell.codepoint() == 0 or cell.codepoint() == ' ');
++                if (!cell.isEmpty() and !padding) break;
++                if (padding and (cell.hasStyling() or
++                    cell.content_tag == .bg_color_palette or
++                    cell.content_tag == .bg_color_rgb)) styled_padding = true;
+                 cols_len -= 1;
+             }
+
+@@ -1688,9 +1755,14 @@ const ReflowCursor = struct {
+             }
+         }
+
++        // ConPTY copies row attributes separately from measured text. Keep
++        // the padding's visible style on the final destination row, but never
++        // let it wrap into another row. A completely styled blank row still
++        // occupies one row. Wrapped rows and retained history use the normal
++        // lossless policy. Cursor/pin extension above takes precedence.
+         // Defer processing of blank rows so that blank rows
+         // at the end of the page list are never written.
+-        if (cols_len == 0) {
++        if (cols_len == 0 and !styled_padding) {
+             // If this blank row was a wrap continuation somehow
+             // then we won't need to write it since it should be
+             // a part of the previously written row.
+@@ -1720,7 +1792,22 @@ const ReflowCursor = struct {
+         self.copyRowMetadata(src_row);
+
+         var x: usize = 0;
+-        while (x < cols_len) {
++        var paint_len: usize = cols_len;
++        var painting_padding = false;
++        while (true) {
++            if (x >= cols_len and !painting_padding) {
++                painting_padding = true;
++                // Wide glyphs can insert a spacer at the right margin. Only
++                // the actual post-text cursor knows how much room remains.
++                if (styled_padding) {
++                    if (!self.pending_wrap) {
++                        paint_len = x + self.page.size.cols - self.x;
++                    } else if (cols_len == 0) {
++                        paint_len = self.page.size.cols;
++                    }
++                }
++            }
++            if (x >= paint_len) break;
+             if (self.pending_wrap) {
+                 self.page_row.wrap = true;
+                 try self.cursorScrollOrNewPage(list, cap);
+@@ -1736,10 +1823,11 @@ const ReflowCursor = struct {
+             // per-cell state machine below for most of the work.
+             // Rows with tracked pins take the slow path so pin
+             // remapping behaves identically.
+-            if (!row_has_pins) {
++            if (!row_has_pins and x < cells.len) {
+                 const max_run = @min(
+-                    cols_len - x,
++                    paint_len - x,
+                     @as(usize, self.page.size.cols) - self.x,
++                    cells.len - x,
+                 );
+                 const window = cells[x..][0..max_run];
+                 const run = bulkRunLength(window);
+@@ -1765,7 +1853,7 @@ const ReflowCursor = struct {
+
+             if (self.writeCell(
+                 list,
+-                &cells[x],
++                &cells[@min(x, cells.len - 1)],
+                 src_page,
+             )) |result| switch (result) {
+                 // Wrote the cell, move to the next.
+@@ -2857,6 +2945,16 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
+             // Making rows larger we adjust our row count, and then grow
+             // to the row count.
+             .gt => gt: {
++                if (!opts.pull_scrollback) {
++                    // ConPTY and other fixed-origin consoles retain their
++                    // old active rows on enlargement. Append blank rows even
++                    // for a bottom cursor rather than consuming history.
++                    const delta = rows - self.rows;
++                    self.rows = rows;
++                    for (0..delta) |_| _ = try self.grow();
++                    break :gt;
++                }
++
+                 // If our rows increased and our cursor is NOT at the bottom,
+                 // we want to try to preserve the y value of the old cursor.
+                 // In other words, we don't want to "pull down" scrollback.
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index e1aa45ae..f03e55fd 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -2012,6 +2012,10 @@ pub const Resize = struct {
+     /// lost from the top of the scrollback.
+     reflow: bool = true,
+
++    /// Whether growth or column reflow may pull history into the active area.
++    pull_scrollback: bool = true,
++    conpty_padding: bool = false,
++
+     /// Set this to enable prompt redraw on resize. This signals
+     /// that the running program can redraw the prompt if the cursor is
+     /// currently at a prompt. This detects OSC133 prompts lines and clears
+@@ -2108,6 +2112,8 @@ pub inline fn resize(
+         .rows = opts.rows,
+         .cols = opts.cols,
+         .reflow = opts.reflow,
++        .pull_scrollback = opts.pull_scrollback,
++        .conpty_padding = opts.conpty_padding,
+         .cursor = .{
+             .x = self.cursor.x,
+             .y = self.cursor.y,
+diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
+index c11fda0f..8787958f 100644
+--- a/vendor/libghostty-vt/src/terminal/Terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
+@@ -3987,6 +3987,11 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
+ pub const Resize = struct {
+     cols: size.CellCountInt,
+     rows: size.CellCountInt,
++    /// Keep false for consoles whose growth and reflow retain the active origin.
++    /// This is a per-resize policy, not terminal state or a scrollback limit.
++    pull_scrollback: bool = true,
++    /// Match ConPTY's nonwrapped trailing-space measurement during reflow.
++    conpty_padding: bool = false,
+     cell_size_px: ?struct {
+         width: u32,
+         height: u32,
+@@ -4092,6 +4097,8 @@ pub fn resize(
+         .rows = opts.rows,
+         .reflow = self.modes.get(.wraparound),
+         .prompt_redraw = self.flags.shell_redraws_prompt,
++        .pull_scrollback = opts.pull_scrollback,
++        .conpty_padding = opts.conpty_padding,
+     });
+
+     // Alternate screen, if it exists, doesn't reflow. The primary resize
+@@ -4105,6 +4112,8 @@ pub fn resize(
+                 .cols = opts.cols,
+                 .rows = opts.rows,
+                 .reflow = false,
++                .pull_scrollback = opts.pull_scrollback,
++                .conpty_padding = opts.conpty_padding,
+             }) catch |err| break :resize err;
+
+             // Resize succeeded.
+@@ -4332,6 +4341,138 @@ test "Terminal setScrollback only affects primary screen" {
+     try testing.expectEqual(alternate, t.screens.active);
+ }
+
++test "Terminal: resize preserve active origin keeps bottom cursor and history" {
++    const alloc = testing.allocator;
++    for ([_]bool{ false, true }) |pull_scrollback| {
++        for ([_]size.CellCountInt{ 10, 20 }) |cols| {
++            var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 3 });
++            defer t.deinit(alloc);
++            try t.screens.active.testWriteString("one\ntwo\nthree\nfour\nprompt");
++            try testing.expectEqual(2, t.screens.active.cursor.y);
++            const before = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++            defer alloc.free(before);
++
++            try t.resize(alloc, .{ .cols = cols, .rows = 5, .pull_scrollback = pull_scrollback });
++            try testing.expectEqual(@as(size.CellCountInt, if (pull_scrollback) 4 else 2), t.screens.active.cursor.y);
++            const after = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++            defer alloc.free(after);
++            try testing.expectEqualStrings(before, after);
++
++            const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++            defer alloc.free(visible);
++            try testing.expectEqualStrings(if (pull_scrollback) "one\ntwo\nthree\nfour\nprompt" else "three\nfour\nprompt", visible);
++        }
++    }
++}
++
++test "Terminal: resize preserve active origin includes hidden primary" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 3 });
++    defer t.deinit(alloc);
++    const primary = t.screens.active;
++    try primary.testWriteString("one\ntwo\nthree\nfour\nprompt");
++    _ = try t.switchScreen(.alternate);
++    try t.screens.active.testWriteString("alt1\nalt2\nalt3");
++    try t.resize(alloc, .{ .cols = 20, .rows = 5, .pull_scrollback = false });
++    try testing.expectEqual(2, primary.cursor.y);
++    try testing.expectEqual(2, t.screens.active.cursor.y);
++    _ = try t.switchScreen(.primary);
++    const visible = try primary.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(visible);
++    try testing.expectEqualStrings("three\nfour\nprompt", visible);
++    const history = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(history);
++    try testing.expectEqualStrings("one\ntwo\nthree\nfour\nprompt", history);
++}
++
++test "Terminal: resize preserve active origin retains width reflow content" {
++    const alloc = testing.allocator;
++    for ([_]size.CellCountInt{ 6, 20 }) |cols| {
++        var expected = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++        defer expected.deinit(alloc);
++        var actual = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++        defer actual.deinit(alloc);
++        const text = "history\none\ntwo\nwrapped-prompt-with-text";
++        try expected.screens.active.testWriteString(text);
++        try actual.screens.active.testWriteString(text);
++        try expected.resize(alloc, .{ .cols = cols, .rows = 4 });
++        try actual.resize(alloc, .{ .cols = cols, .rows = 4, .pull_scrollback = false });
++        const a = try expected.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(a);
++        const b = try actual.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(b);
++        try testing.expectEqualStrings(a, b);
++        try testing.expectEqual(expected.screens.active.cursor.x, actual.screens.active.cursor.x);
++        try testing.expectEqual(if (cols == 20) 2 else expected.screens.active.cursor.y, actual.screens.active.cursor.y);
++    }
++}
++
++test "Terminal: resize preserve active origin shrink then grow retains history" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 5 });
++    defer t.deinit(alloc);
++    try t.screens.active.testWriteString("one\ntwo\nthree\nfour\nprompt");
++    try t.resize(alloc, .{ .cols = 10, .rows = 1, .pull_scrollback = false });
++    try testing.expectEqual(0, t.screens.active.cursor.y);
++    try t.resize(alloc, .{ .cols = 10, .rows = 5, .pull_scrollback = false });
++    try testing.expectEqual(0, t.screens.active.cursor.y);
++    const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(visible);
++    try testing.expectEqualStrings("prompt", visible);
++    const all = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(all);
++    try testing.expectEqualStrings("one\ntwo\nthree\nfour\nprompt", all);
++}
++
++test "Terminal: resize preserve active origin retains saved cursor across pages" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 80, .rows = 3, .max_scrollback_bytes = null });
++    defer t.deinit(alloc);
++    const primary = t.screens.active;
++    const page_rows = primary.pages.pages.first.?.capacity().rows;
++    t.setScrollbackMaxLines(page_rows);
++    for (0..4 * page_rows) |_| try primary.testWriteString("retained\n");
++    try primary.testWriteString("prompt");
++    t.saveCursor();
++    const old_x = primary.cursor.x;
++    const old_y = primary.cursor.y;
++    const before = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(before);
++    try t.resize(alloc, .{ .cols = 80, .rows = @intCast(page_rows + 3), .pull_scrollback = false });
++    try testing.expectEqual(old_x, primary.cursor.x);
++    try testing.expectEqual(old_y, primary.cursor.y);
++    t.setCursorPos(1, 1);
++    t.restoreCursor();
++    try testing.expectEqual(old_x, primary.cursor.x);
++    try testing.expectEqual(old_y, primary.cursor.y);
++    const after = try primary.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(after);
++    try testing.expectEqualStrings(before, after);
++    try testing.expect(!primary.pages.limits.exceeded(&primary.pages, .lines));
++}
++
++test "Terminal: resize preserve active origin combined wrapped growth" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++    defer t.deinit(alloc);
++    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++    defer reference.deinit(alloc);
++    const text = "history\none\ntwo\n羊🐑-wrapped-prompt";
++    try t.screens.active.testWriteString(text);
++    try reference.screens.active.testWriteString(text);
++    try reference.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
++    const expected_x = reference.screens.active.cursor.x;
++    const expected_y = reference.screens.active.cursor.y;
++    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(expected);
++    try t.resize(alloc, .{ .cols = 30, .rows = 9, .pull_scrollback = false });
++    try testing.expectEqual(expected_x, t.screens.active.cursor.x);
++    try testing.expectEqual(expected_y, t.screens.active.cursor.y);
++    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++    defer alloc.free(actual);
++    try testing.expectEqualStrings(expected, actual);
++}
++
+ test "Terminal: resize resets synchronized output" {
+     const alloc = testing.allocator;
+     const io_impl = testing.io;
+@@ -16507,3 +16648,143 @@ test "Terminal: eraseDisplay complete ignores stale prompt on recycled row" {
+
+     try testing.expectEqual(t.screens.active.pages.rows, t.screens.active.pages.total_rows);
+ }
++
++test "Terminal: fixed origin width reflow matches active buffer without history" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++    defer t.deinit(alloc);
++    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4, .max_scrollback_bytes = 0 });
++    defer reference.deinit(alloc);
++    const text = "history\none\ntwo\nwrapped-command\nOK\nprompt";
++    try t.screens.active.testWriteString(text);
++    try reference.screens.active.testWriteString(text);
++    const original = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(original);
++    const original_reference = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(original_reference);
++    try testing.expectEqualStrings(original_reference, original);
++    try reference.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
++    try t.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
++    try testing.expectEqual(reference.screens.active.cursor.y, t.screens.active.cursor.y);
++    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(actual);
++    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++    defer alloc.free(expected);
++    try testing.expectEqualStrings(expected, actual);
++}
++
++test "Terminal: fixed origin width reflow retains split history across cycles" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 5, .rows = 3 });
++    defer t.deinit(alloc);
++    try t.screens.active.testWriteString("ABCDEFGHIJ\nK\nL");
++    try testing.expect(t.screens.active.pages.pin(.{ .active = .{} }).?.rowAndCell().row.wrap_continuation);
++    for ([_]size.CellCountInt{ 10, 5, 10, 5, 10 }) |cols| {
++        try t.resize(alloc, .{ .cols = cols, .rows = 3, .pull_scrollback = false });
++        const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++        defer alloc.free(visible);
++        try testing.expectEqualStrings("FGHIJ\nK\nL", visible);
++        const all = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(all);
++        try testing.expectEqualStrings("ABCDE\nFGHIJ\nK\nL", all);
++        const top = t.screens.active.pages.pin(.{ .active = .{} }).?;
++        try testing.expect(!top.rowAndCell().row.wrap_continuation);
++        try testing.expect(!top.up(1).?.rowAndCell().row.wrap);
++        try testing.expectEqual(@as(size.CellCountInt, 2), t.screens.active.cursor.y);
++    }
++}
++
++test "Terminal: fixed origin width reflow boundary matrix" {
++    const alloc = testing.allocator;
++    const fixtures = [_][]const u8{
++        "history\none\ntwo\nwrapped-command\nOK\nprompt",
++        "ABCDEFGHIJ\nK\nL\nM",
++        "AB羊🐑CD羊🐑EF\nK\nL\nM",
++        "history\nold\n\n\n\nprompt",
++        "history\nold\n\n\n\n",
++        "history\nold\nactive\n\n",
++    };
++    for (fixtures) |text| {
++        for ([_]size.CellCountInt{ 5, 10 }) |cols| {
++            for ([_]size.CellCountInt{ 3, 15, 30 }) |new_cols| {
++                for ([_]size.CellCountInt{ 3, 4, 7 }) |rows| {
++                    errdefer std.debug.print("fixture={s}, {d}x4 -> {d}x{d}\n", .{ text, cols, new_cols, rows });
++                    var t = try init(testing.io, alloc, .{ .cols = cols, .rows = 4 });
++                    defer t.deinit(alloc);
++                    var reference = try init(testing.io, alloc, .{
++                        .cols = cols,
++                        .rows = 4,
++                    });
++                    defer reference.deinit(alloc);
++                    try t.screens.active.testWriteString(text);
++                    try reference.screens.active.testWriteString(text);
++                    // Keep identical resize limits, removing only the history
++                    // prefix. A zero-byte limit also changes pruning on resize.
++                    reference.screens.active.pages.eraseHistory(null);
++                    const original = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(original);
++                    const reference_original = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(reference_original);
++                    try testing.expectEqualStrings(reference_original, original);
++                    try reference.resize(alloc, .{ .cols = new_cols, .rows = rows, .pull_scrollback = false });
++                    try t.resize(alloc, .{ .cols = new_cols, .rows = rows, .pull_scrollback = false });
++                    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(actual);
++                    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(expected);
++                    try testing.expectEqualStrings(expected, actual);
++                    try testing.expectEqual(reference.screens.active.cursor.y, t.screens.active.cursor.y);
++                    try testing.expectEqual(reference.screens.active.cursor.x, t.screens.active.cursor.x);
++                }
++            }
++        }
++    }
++}
++
++test "Terminal: fixed origin width reflow cursor above boundary" {
++    const alloc = testing.allocator;
++    for ([_]size.CellCountInt{ 3, 15, 30 }) |cols| {
++        for ([_]size.CellCountInt{ 2, 4, 7 }) |rows| {
++            for ([_]size.CellCountInt{ 0, 1, 3 }) |cursor_y| {
++                for ([_]bool{ false, true }) |hidden| {
++                    errdefer std.debug.print("10x4 -> {d}x{d}, cursor={d}, hidden={}\n", .{ cols, rows, cursor_y, hidden });
++                    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++                    defer t.deinit(alloc);
++                    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
++                    defer reference.deinit(alloc);
++                    const actual_screen = t.screens.active;
++                    const expected_screen = reference.screens.active;
++                    const text = "history\none\ntwo\nwrapped-command\nOK\nprompt";
++                    try actual_screen.testWriteString(text);
++                    try expected_screen.testWriteString(text);
++                    expected_screen.pages.eraseHistory(null);
++                    actual_screen.cursorAbsolute(1, cursor_y);
++                    expected_screen.cursorAbsolute(1, cursor_y);
++                    t.saveCursor();
++                    reference.saveCursor();
++                    if (hidden) {
++                        _ = try t.switchScreen(.alternate);
++                        _ = try reference.switchScreen(.alternate);
++                    }
++                    try t.resize(alloc, .{ .cols = cols, .rows = rows, .pull_scrollback = false });
++                    try reference.resize(alloc, .{ .cols = cols, .rows = rows, .pull_scrollback = false });
++                    const actual = try actual_screen.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(actual);
++                    const expected = try expected_screen.dumpStringAlloc(alloc, .{ .viewport = .{} });
++                    defer alloc.free(expected);
++                    try testing.expectEqualStrings(expected, actual);
++                    try testing.expectEqual(expected_screen.cursor.x, actual_screen.cursor.x);
++                    try testing.expectEqual(expected_screen.cursor.y, actual_screen.cursor.y);
++                    if (hidden) {
++                        _ = try t.switchScreen(.primary);
++                        _ = try reference.switchScreen(.primary);
++                    }
++                    t.restoreCursor();
++                    reference.restoreCursor();
++                    try testing.expectEqual(expected_screen.cursor.x, actual_screen.cursor.x);
++                    try testing.expectEqual(expected_screen.cursor.y, actual_screen.cursor.y);
++                }
++            }
++        }
++    }
++}
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index b8c5b6bc..a1cfcdc5 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -328,3 +328,5 @@ test {
+     // We want to make sure we run the tests for the C allocator interface.
+     _ = @import("../../lib/allocator.zig");
+ }
++
++pub const terminal_resize_preserve_active = terminal.resize_preserve_active;
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index bc8b2c0b..32ab2838 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1781,10 +1781,34 @@ pub fn resize(
+     cell_width_px: u32,
+     cell_height_px: u32,
+ ) callconv(lib.calling_conv) Result {
++    return resizeWithScrollback(terminal_, cols, rows, cell_width_px, cell_height_px, true);
++}
++
++/// Additive fixed-origin variant; the original resize ABI retains its policy.
++pub fn resize_preserve_active(
++    terminal_: Terminal,
++    cols: size.CellCountInt,
++    rows: size.CellCountInt,
++    cell_width_px: u32,
++    cell_height_px: u32,
++) callconv(lib.calling_conv) Result {
++    return resizeWithScrollback(terminal_, cols, rows, cell_width_px, cell_height_px, false);
++}
++
++fn resizeWithScrollback(
++    terminal_: Terminal,
++    cols: size.CellCountInt,
++    rows: size.CellCountInt,
++    cell_width_px: u32,
++    cell_height_px: u32,
++    pull_scrollback: bool,
++) Result {
+     const wrapper = terminal_ orelse return .invalid_value;
+     wrapper.stream.handler.resize(.{
+         .cols = cols,
+         .rows = rows,
++        .pull_scrollback = pull_scrollback,
++        .conpty_padding = !pull_scrollback,
+         .cell_size_px = .{
+             .width = cell_width_px,
+             .height = cell_height_px,
+@@ -6249,6 +6273,20 @@ test "resize sends in-band size report" {
+     // height_px = 40*18 = 720, width_px = 100*9 = 900
+     try testing.expect(S.last_data != null);
+     try testing.expectEqualStrings("\x1B[48;40;100;720;900t", S.last_data.?);
++
++    try testing.expectEqual(Result.success, resize_preserve_active(t, 110, 45, 9, 18));
++    try testing.expectEqualStrings("\x1B[48;45;110;810;990t", S.last_data.?);
++}
++
++test "resize preserve active origin rejects invalid dimensions without mutation" {
++    try testing.expectEqual(Result.invalid_value, resize_preserve_active(null, 80, 24, 9, 18));
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 10, 3));
++    defer free(t);
++    try testing.expectEqual(Result.invalid_value, resize_preserve_active(t, 0, 5, 9, 18));
++    try testing.expectEqual(Result.invalid_value, resize_preserve_active(t, 20, 0, 9, 18));
++    try testing.expectEqual(10, t.?.terminal.cols);
++    try testing.expectEqual(3, t.?.terminal.rows);
+ }
+
+ test "resize no size report without mode 2048" {

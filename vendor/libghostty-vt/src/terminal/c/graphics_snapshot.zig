@@ -1,0 +1,415 @@
+//! Retained graphics for exclusively held C terminals with no animation ticker.
+//! Process/producer fences and attachment transport belong to the embedding host.
+const std = @import("std");
+const lib = @import("../lib.zig");
+const terminal_c = @import("terminal.zig");
+const snapshots = @import("../kitty/storage_snapshot.zig");
+const restore_storage = @import("../kitty/storage_restore.zig");
+const images = @import("../kitty/image_snapshot.zig");
+const image = @import("../kitty/graphics_image.zig");
+const Storage = @import("../kitty/graphics_storage.zig").ImageStorage;
+const Mapping = @import("../kitty/generation_snapshot.zig").Mapping;
+const Result = @import("result.zig").Result;
+const keys = [_]@import("../ScreenSet.zig").Key{ .primary, .alternate };
+
+pub const Limits = extern struct {
+    size: usize = @sizeOf(Limits),
+    encoded_bytes: usize,
+    backing_bytes: usize,
+    images: usize,
+    placements: usize,
+    policy_bytes: usize,
+
+    fn native(self: Limits) snapshots.Limits {
+        return .{ .encoded_bytes = self.encoded_bytes, .backing_bytes = self.backing_bytes, .images = self.images, .placements = self.placements, .policy_bytes = self.policy_bytes };
+    }
+};
+pub const RetainFn = *const fn (?*anyopaque, *const image.FileBacking) callconv(lib.calling_conv) bool;
+pub const ResolveFn = *const fn (?*anyopaque, u64, usize, *image.FileBacking) callconv(lib.calling_conv) bool;
+
+fn mapError(err: anyerror) Result {
+    return switch (err) {
+        error.OutOfMemory => .out_of_memory,
+        error.LimitExceeded, error.GenerationExhausted => .limit_exceeded,
+        else => .invalid_value,
+    };
+}
+
+fn hasPending(storage: *const Storage) bool {
+    var it = storage.images.valueIterator();
+    while (it.next()) |img| if (img.data == .pending) return true;
+    return false;
+}
+
+pub fn encode_alloc(terminal_: terminal_c.Terminal, allocator: ?*const lib.alloc.Allocator, limits_: ?*const Limits, retain: ?RetainFn, context: ?*anyopaque, out_ptr_: ?*?[*]u8, out_len_: ?*usize) callconv(lib.calling_conv) Result {
+    const out_ptr = out_ptr_ orelse return .invalid_value;
+    const out_len = out_len_ orelse return .invalid_value;
+    out_ptr.* = null;
+    out_len.* = 0;
+    const wrapper = terminal_ orelse return .invalid_value;
+    const limits = limits_ orelse return .invalid_value;
+    if (limits.size != @sizeOf(Limits)) return .invalid_value;
+    if (comptime !@import("terminal_options").kitty_graphics) return .invalid_value;
+    for (keys) |key| if (wrapper.terminal.screens.get(key)) |screen| {
+        if (hasPending(&screen.kitty_images)) return .invalid_value;
+    };
+    const alloc = lib.alloc.default(allocator);
+    // No C ticker exists: null is absent clock authority, not timestamp zero.
+    const bytes = snapshots.capture(alloc, wrapper.terminal, null, limits.native()) catch |err| return mapError(err);
+    var success = false;
+    defer if (!success) alloc.free(bytes);
+    for (keys) |key| if (wrapper.terminal.screens.get(key)) |screen| {
+        var it = screen.kitty_images.images.valueIterator();
+        while (it.next()) |img| switch (img.data) {
+            .native_file => |backing| {
+                const callback = retain orelse return .invalid_value;
+                if (!callback(context, &backing)) return .invalid_value;
+            },
+            else => {},
+        };
+    };
+    out_ptr.* = bytes.ptr;
+    out_len.* = bytes.len;
+    success = true;
+    return .success;
+}
+
+const Resolver = struct {
+    callback: ResolveFn,
+    context: ?*anyopaque,
+
+    fn resolve(ctx: ?*anyopaque, identity: u64, len: usize) images.Error!image.FileBacking {
+        const self: *const Resolver = @ptrCast(@alignCast(ctx.?));
+        var backing: image.FileBacking = .{ .context = null, .identity = 0, .len = 0, .read = null, .release = null };
+        if (!self.callback(self.context, identity, len, &backing)) return error.BackingUnavailable;
+        return backing;
+    }
+};
+
+pub fn restore(terminal_: terminal_c.Terminal, input: ?[*]const u8, len: usize, limits_: ?*const Limits, resolve: ?ResolveFn, context: ?*anyopaque) callconv(lib.calling_conv) Result {
+    const wrapper = terminal_ orelse return .invalid_value;
+    const limits = limits_ orelse return .invalid_value;
+    if (limits.size != @sizeOf(Limits) or input == null) return .invalid_value;
+    if (len > limits.encoded_bytes) return .limit_exceeded;
+    if (comptime !@import("terminal_options").kitty_graphics) return .invalid_value;
+    const alloc = wrapper.terminal.gpa();
+    var resolver: Resolver = .{ .callback = resolve orelse undefined, .context = context };
+    var hooks: [2]?image.SnapshotFileHook = .{ null, null };
+    for (keys, 0..) |key, i| if (wrapper.terminal.screens.get(key)) |screen| {
+        hooks[i] = screen.kitty_images.image_limits.snapshot_file;
+    };
+    var prepared = restore_storage.Prepared.prepare(alloc, input.?[0..len], limits.native(), if (resolve != null) .{ .context = &resolver, .resolve = Resolver.resolve } else null, hooks) catch |err| return mapError(err);
+    defer prepared.deinit();
+    // Reject clock authority and producer state this C API cannot adopt.
+    if (prepared.clock_cut != null) return .invalid_value;
+    var stores: [2]*Storage = undefined;
+    var count: usize = 0;
+    for (&prepared.stores) |*slot| if (slot.*) |*storage| {
+        if (hasPending(storage)) return .invalid_value;
+        stores[count] = storage;
+        count += 1;
+    };
+    const max_refs = std.math.add(usize, limits.images, 4) catch return .limit_exceeded;
+    var mapping = Mapping.fromStorage(alloc, stores[0..count], &.{}, max_refs) catch |err| return mapError(err);
+    defer mapping.deinit(alloc);
+    mapping.assign(wrapper.io.io()) catch |err| return mapError(err);
+    mapping.apply(stores[0..count]) catch |err| return mapError(err);
+    // No failure may occur after store replacement. Returned policy allocation
+    // joins the existing wrapper owner before the old policy allocation dies.
+    const policy = prepared.installUnpublished(wrapper.terminal) catch |err| return mapError(err);
+    const old = wrapper.tmp_dir_path;
+    wrapper.tmp_dir_path = policy.bytes;
+    if (old) |bytes| alloc.free(bytes);
+    return .success;
+}
+
+const test_limits: Limits = .{ .encoded_bytes = 1 << 20, .backing_bytes = 1 << 20, .images = 100, .placements = 100, .policy_bytes = 4096 };
+
+test "graphics snapshot C disabled API rejects without output" {
+    if (comptime @import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 20, 4));
+    defer terminal_c.free(t);
+    var ptr: ?[*]u8 = undefined;
+    var len: usize = 999;
+    try testing.expectEqual(Result.invalid_value, encode_alloc(t, &lib.alloc.test_allocator, &test_limits, null, null, &ptr, &len));
+    try testing.expect(ptr == null and len == 0);
+    try testing.expectEqual(Result.invalid_value, restore(t, "".ptr, 0, &test_limits, null, null));
+}
+
+fn write(t: terminal_c.Terminal, bytes: []const u8) void {
+    terminal_c.vt_write(t, bytes.ptr, bytes.len);
+}
+
+fn captureTest(t: terminal_c.Terminal) ![]u8 {
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try std.testing.expectEqual(Result.success, encode_alloc(t, &lib.alloc.test_allocator, &test_limits, null, null, &ptr, &len));
+    return ptr.?[0..len];
+}
+
+test "graphics snapshot C owns both policies and preserves continuation" {
+    if (comptime !@import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    var source: terminal_c.Terminal = null;
+    var dest: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &dest, 20, 4));
+    defer terminal_c.free(dest);
+    write(source, "\x1b[?1049h");
+    write(dest, "\x1b[?1049h");
+    var policy: terminal_c.SnapshotGraphicsPolicyV1 = .{};
+    try testing.expectEqual(Result.success, terminal_c.snapshot_graphics_policy_get(source, &policy));
+    policy.screens[0].flags |= 16;
+    policy.screens[0].directory = .{ .ptr = "primary-dir".ptr, .len = "primary-dir".len };
+    policy.screens[1].flags |= 16;
+    policy.screens[1].directory = .{ .ptr = "alternate-dir".ptr, .len = "alternate-dir".len };
+    try testing.expectEqual(Result.success, terminal_c.snapshot_graphics_policy_set(source, &policy, null));
+    for (keys) |key| {
+        source.?.terminal.screens.switchTo(key);
+        write(source, "\x1b_Ga=t,f=32,s=1,v=1,i=1;AQIDBA==\x1b\\");
+        write(source, "\x1b_Ga=p,i=1,p=1\x1b\\");
+        write(source, "\x1b_Ga=t,f=32,s=1,v=1,i=2,m=1;AQI=\x1b\\");
+    }
+    const source_generation = source.?.terminal.screens.get(.primary).?.kitty_images.generation;
+    const bytes = try captureTest(source);
+    defer testing.allocator.free(bytes);
+    terminal_c.free(source);
+    source = null;
+    try testing.expectEqual(Result.success, restore(dest, bytes.ptr, bytes.len, &test_limits, null, null));
+    try testing.expect(dest.?.terminal.screens.get(.primary).?.kitty_images.generation > source_generation);
+    for (keys, 0..) |key, i| {
+        dest.?.terminal.screens.switchTo(key);
+        const store = &dest.?.terminal.screens.active.kitty_images;
+        try testing.expectEqualStrings(if (i == 0) "primary-dir" else "alternate-dir", store.image_limits.temporary_file.enabled.directory);
+        try testing.expectEqual(@as(u32, 1), store.placements.count());
+        write(dest, "\x1b_Gm=0;AwQ=\x1b\\");
+        try testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, store.images.get(2).?.data.complete);
+    }
+    // Normal policy replacement can free the restored blob without dangling
+    // initialized loading fields or freeing per-screen slices independently.
+    const replacement: lib.String = .{ .ptr = "new-dir".ptr, .len = "new-dir".len };
+    try testing.expectEqual(Result.success, terminal_c.set(dest, .kitty_image_medium_temp_file, &replacement));
+    for (keys) |key| try testing.expectEqualStrings("new-dir", dest.?.terminal.screens.get(key).?.kitty_images.image_limits.temporary_file.enabled.directory);
+}
+
+test "graphics snapshot C rejects unsupported clock producer and budgets atomically" {
+    if (comptime !@import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 20, 4));
+    defer terminal_c.free(t);
+    write(t, "\x1b_Ga=t,f=32,s=1,v=1,i=1;AQIDBA==\x1b\\");
+    const before = try captureTest(t);
+    defer testing.allocator.free(before);
+    const bad = try testing.allocator.dupe(u8, before);
+    defer testing.allocator.free(bad);
+    bad[7] = 1;
+    try testing.expectEqual(Result.invalid_value, restore(t, bad.ptr, bad.len, &test_limits, null, null));
+    var small = test_limits;
+    small.encoded_bytes = before.len - 1;
+    try testing.expectEqual(Result.limit_exceeded, restore(t, before.ptr, before.len, &small, null, null));
+    small = test_limits;
+    small.size = 0;
+    try testing.expectEqual(Result.invalid_value, restore(t, before.ptr, before.len, &small, null, null));
+    const after = try captureTest(t);
+    defer testing.allocator.free(after);
+    try testing.expectEqualSlices(u8, before, after);
+    const s = t.?.terminal.screens.active;
+    _ = try s.kitty_images.addPendingImage(t.?.io.io(), testing.allocator, s, .{ .id = 2, .width = 1, .height = 1, .format = .rgba, .data = .{ .pending = 4 } });
+    var out: ?[*]u8 = undefined;
+    var len: usize = 999;
+    try testing.expectEqual(Result.invalid_value, encode_alloc(t, &lib.alloc.test_allocator, &test_limits, null, null, &out, &len));
+    try testing.expect(out == null and len == 0);
+    const pending = try snapshots.capture(testing.allocator, t.?.terminal, null, test_limits.native());
+    defer testing.allocator.free(pending);
+    try testing.expectEqual(Result.invalid_value, restore(t, pending.ptr, pending.len, &test_limits, null, null));
+    try testing.expectEqual(@as(usize, 4), s.kitty_images.images.get(2).?.data.pending);
+}
+
+fn failingRestore(alloc: std.mem.Allocator, bytes: []const u8) !void {
+    const testing = std.testing;
+    const c_alloc: lib.alloc.Allocator = .fromZig(&alloc);
+    var dest: terminal_c.Terminal = null;
+    const created = terminal_c.new(&c_alloc, &dest, 20, 4);
+    if (created == .out_of_memory) return error.OutOfMemory;
+    try testing.expectEqual(Result.success, created);
+    defer terminal_c.free(dest);
+    const before = try captureTest(dest);
+    defer testing.allocator.free(before);
+    const result = restore(dest, bytes.ptr, bytes.len, &test_limits, null, null);
+    if (result == .out_of_memory) {
+        const after = try captureTest(dest);
+        defer testing.allocator.free(after);
+        try testing.expectEqualSlices(u8, before, after);
+        return error.OutOfMemory;
+    }
+    try testing.expectEqual(Result.success, result);
+}
+
+test "graphics snapshot C allocation failures preserve destination" {
+    if (comptime !@import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    var source: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    write(source, "\x1b_Ga=t,f=32,s=1,v=1,i=1;AQIDBA==\x1b\\\x1b_Ga=p,i=1,p=1\x1b\\");
+    const bytes = try captureTest(source);
+    defer testing.allocator.free(bytes);
+    try testing.checkAllAllocationFailures(testing.allocator, failingRestore, .{bytes});
+}
+
+const TestHost = struct {
+    refs: usize = 1,
+    retained: usize = 0,
+    resolves: usize = 0,
+    reads: usize = 0,
+    reject_retain: bool = false,
+    retain_limit: usize = std.math.maxInt(usize),
+    invalid_length: bool = false,
+    fn backing(self: *@This(), identity: u64) image.FileBacking {
+        return .{ .context = self, .identity = identity, .len = 4, .read = read, .release = release };
+    }
+    fn read(context: ?*anyopaque, _: [*]u8, _: usize) callconv(.c) bool {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.reads += 1;
+        return false;
+    }
+    fn release(context: ?*anyopaque) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.refs -= 1;
+    }
+    fn retain(context: ?*anyopaque, backing_: *const image.FileBacking) callconv(lib.calling_conv) bool {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.reject_retain or self.retained >= self.retain_limit or backing_.identity != 77 or backing_.len != 4) return false;
+        self.refs += 1;
+        self.retained += 1;
+        return true;
+    }
+    fn resolve(context: ?*anyopaque, identity: u64, len: usize, out: *image.FileBacking) callconv(lib.calling_conv) bool {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (identity != 77 or len != 4 or self.retained == 0) return false;
+        self.refs += 1;
+        self.resolves += 1;
+        out.* = self.backing(88);
+        if (self.invalid_length) out.len = 3;
+        return true;
+    }
+};
+
+test "graphics snapshot C file retention resolution and rejection ownership" {
+    if (comptime !@import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    var host: TestHost = .{};
+    var source: terminal_c.Terminal = null;
+    var dest: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &dest, 20, 4));
+    defer terminal_c.free(dest);
+    write(source, "\x1b[?1049h");
+    const active = source.?.terminal.screens.active;
+    for (keys) |key| {
+        const screen = source.?.terminal.screens.get(key).?;
+        host.refs += 1;
+        try screen.kitty_images.addImage(source.?.io.io(), testing.allocator, screen, .{ .id = 1, .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = host.backing(77) } });
+    }
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.invalid_value, encode_alloc(source, &lib.alloc.test_allocator, &test_limits, null, null, &ptr, &len));
+    try testing.expect(ptr == null and len == 0);
+    host.reject_retain = true;
+    try testing.expectEqual(Result.invalid_value, encode_alloc(source, &lib.alloc.test_allocator, &test_limits, TestHost.retain, &host, &ptr, &len));
+    try testing.expect(ptr == null and len == 0);
+    host.reject_retain = false;
+    host.retain_limit = 1;
+    try testing.expectEqual(Result.invalid_value, encode_alloc(source, &lib.alloc.test_allocator, &test_limits, TestHost.retain, &host, &ptr, &len));
+    try testing.expect(ptr == null and len == 0);
+    try testing.expectEqual(@as(usize, 1), host.retained);
+    // Host aborts the capture transaction, releasing the first screen's retain.
+    host.refs -= host.retained;
+    host.retained = 0;
+    host.retain_limit = std.math.maxInt(usize);
+    try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &test_limits, TestHost.retain, &host, &ptr, &len));
+    try testing.expect(source.?.terminal.screens.active == active);
+    try testing.expectEqual(@as(usize, 2), host.retained);
+    const bytes = ptr.?[0..len];
+    defer testing.allocator.free(bytes);
+    terminal_c.free(source);
+    source = null;
+    try testing.expectEqual(@as(usize, 3), host.refs);
+    // Missing alternate screen must not partially install the primary store.
+    try testing.expectEqual(Result.invalid_value, restore(dest, bytes.ptr, bytes.len, &test_limits, TestHost.resolve, &host));
+    try testing.expectEqual(@as(u32, 0), dest.?.terminal.screens.active.kitty_images.images.count());
+    try testing.expectEqual(@as(usize, 3), host.refs);
+    write(dest, "\x1b[?1049h");
+    try testing.expectEqual(Result.invalid_value, restore(dest, bytes.ptr, bytes.len, &test_limits, null, null));
+    host.invalid_length = true;
+    try testing.expectEqual(Result.invalid_value, restore(dest, bytes.ptr, bytes.len, &test_limits, TestHost.resolve, &host));
+    try testing.expectEqual(@as(usize, 3), host.refs);
+    host.invalid_length = false;
+    try testing.expectEqual(Result.success, restore(dest, bytes.ptr, bytes.len, &test_limits, TestHost.resolve, &host));
+    try testing.expectEqual(@as(u64, 88), dest.?.terminal.screens.active.kitty_images.images.get(1).?.data.native_file.identity);
+    terminal_c.free(dest);
+    dest = null;
+    host.refs -= host.retained;
+    host.retained = 0;
+    try testing.expectEqual(@as(usize, 1), host.refs);
+    try testing.expectEqual(@as(usize, 0), host.reads);
+}
+
+test "graphics snapshot C preserves opaque timestamps and destination hook lifetime" {
+    if (comptime !@import("terminal_options").kitty_graphics) return error.SkipZigTest;
+    const testing = std.testing;
+    const Context = struct {
+        expected: terminal_c.Terminal,
+        valid: bool = false,
+        fn callback(term: terminal_c.Terminal, userdata: ?*anyopaque, _: *const image.SnapshotFileRequest, _: *image.FileBacking) callconv(lib.calling_conv) bool {
+            const ctx: *@This() = @ptrCast(@alignCast(userdata.?));
+            ctx.valid = term == ctx.expected;
+            return false;
+        }
+    };
+    var source: terminal_c.Terminal = null;
+    var dest: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 20, 4));
+    defer terminal_c.free(source);
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &dest, 20, 4));
+    defer terminal_c.free(dest);
+    const directory: lib.String = .{ .ptr = "retained-dir".ptr, .len = "retained-dir".len };
+    try testing.expectEqual(Result.success, terminal_c.set(source, .kitty_image_medium_temp_file, &directory));
+    try testing.expectEqual(Result.success, terminal_c.set(source, .kitty_image_snapshot_file, @ptrCast(&Context.callback)));
+    write(source, "\x1b_Ga=t,f=32,s=1,v=1,i=1;AQIDBA==\x1b\\\x1b_Ga=f,f=32,s=1,v=1,i=1,z=60;BAUGBw==\x1b\\");
+    const animation = source.?.terminal.screens.active.kitty_images.images.getPtr(1).?.animation.?;
+    try testing.expect(animation.frame_shown_at_ms == null);
+    const never_shown = try captureTest(source);
+    defer testing.allocator.free(never_shown);
+    animation.frame_shown_at_ms = std.math.maxInt(u64);
+    const bytes = try captureTest(source);
+    defer testing.allocator.free(bytes);
+    terminal_c.free(source);
+    source = null;
+    const before = try captureTest(dest);
+    defer testing.allocator.free(before);
+    try testing.expectEqual(Result.invalid_value, restore(dest, bytes.ptr, bytes.len, &test_limits, null, null));
+    const after = try captureTest(dest);
+    defer testing.allocator.free(after);
+    try testing.expectEqualSlices(u8, before, after);
+    var context: Context = .{ .expected = dest };
+    dest.?.effects.userdata = &context;
+    try testing.expectEqual(Result.success, terminal_c.set(dest, .kitty_image_snapshot_file, @ptrCast(&Context.callback)));
+    try testing.expectEqual(Result.success, restore(dest, never_shown.ptr, never_shown.len, &test_limits, null, null));
+    try testing.expect(dest.?.terminal.screens.active.kitty_images.images.get(1).?.animation.?.frame_shown_at_ms == null);
+    try testing.expectEqual(Result.success, restore(dest, bytes.ptr, bytes.len, &test_limits, null, null));
+    try testing.expectEqual(@as(?u64, std.math.maxInt(u64)), dest.?.terminal.screens.active.kitty_images.images.get(1).?.animation.?.frame_shown_at_ms);
+    write(dest, "\x1b[?1049h");
+    const limits = dest.?.terminal.screens.active.kitty_images.image_limits;
+    try testing.expectEqualStrings("retained-dir", limits.temporary_file.enabled.directory);
+    const hook = limits.snapshot_file.?;
+    var request: image.SnapshotFileRequest = .{ .fd = -1, .expected_len = 4 };
+    var backing: image.FileBacking = undefined;
+    try testing.expect(!hook.callback(hook.context, &request, &backing));
+    try testing.expect(context.valid);
+}

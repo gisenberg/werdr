@@ -79,8 +79,397 @@
           ],
           "type": "string"
         },
+        "AgentViewBuiltinField": {
+          "enum": [
+            "status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewBuiltinSortField": {
+          "enum": [
+            "workspace_order",
+            "tab_order",
+            "pane_order",
+            "attention",
+            "status",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewContext": {
+          "enum": [
+            "current_workspace_id",
+            "current_tab_id"
+          ],
+          "type": "string"
+        },
+        "AgentViewField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/event/$defs/AgentViewBuiltinField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewFilter": {
+          "oneOf": [
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "all",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "any",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filter": {
+                  "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                },
+                "op": {
+                  "const": "not",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filter"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "eq",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/schemas/event/$defs/AgentViewValue"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "in",
+                  "type": "string"
+                },
+                "values": {
+                  "items": {
+                    "$ref": "#/schemas/event/$defs/AgentViewValue"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "values"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/event/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "exists",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "field"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSetParams": {
+          "properties": {
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/AgentViewFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sort": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/AgentViewSort"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "AgentViewSort": {
+          "properties": {
+            "field": {
+              "$ref": "#/schemas/event/$defs/AgentViewSortField"
+            },
+            "order": {
+              "$ref": "#/schemas/event/$defs/AgentViewSortOrder",
+              "default": "asc"
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "type": "object"
+        },
+        "AgentViewSortField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/event/$defs/AgentViewBuiltinSortField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "AgentViewValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "properties": {
+                "context": {
+                  "$ref": "#/schemas/event/$defs/AgentViewContext"
+                }
+              },
+              "required": [
+                "context"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "popup_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "command_manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Ephemeral runtime notification; presentation remains client-local.",
+              "properties": {
+                "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/schemas/event/$defs/SemanticNotificationKind"
+                },
+                "pane_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/ToastHerdrPosition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sound": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/SemanticNotificationSound"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tab_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "terminal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notification_semantic",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "kind",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "definition": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/AgentViewSetParams"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "agent_view_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -728,6 +1117,9 @@
         },
         "EventKind": {
           "enum": [
+            "popup.changed",
+            "command.manifest_changed",
+            "notification.semantic",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -753,7 +1145,8 @@
             "pane_exited",
             "pane_agent_detected",
             "pane_agent_status_changed",
-            "layout_updated"
+            "layout_updated",
+            "agent_view_changed"
           ],
           "type": "string"
         },
@@ -808,10 +1201,23 @@
             "pane_id": {
               "type": "string"
             },
+            "restore_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
+            },
+            "right_click_passthrough": {
+              "description": "Whether an unmodified right click belongs to a mouse-reporting application.\nMissing on older runtimes; clients must not infer ownership from mouse mode.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "scroll": {
               "anyOf": [
@@ -999,6 +1405,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,
@@ -1022,6 +1435,24 @@
           ],
           "type": "object"
         },
+        "SemanticNotificationKind": {
+          "enum": [
+            "needs_attention",
+            "finished",
+            "update_installed",
+            "custom",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "SemanticNotificationSound": {
+          "enum": [
+            "done",
+            "request",
+            "unknown"
+          ],
+          "type": "string"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -1033,6 +1464,12 @@
           "properties": {
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
+            },
+            "custom_label": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "focused": {
               "type": "boolean"
@@ -1068,6 +1505,15 @@
           ],
           "type": "object"
         },
+        "ToastHerdrPosition": {
+          "enum": [
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right"
+          ],
+          "type": "string"
+        },
         "WorkspaceInfo": {
           "properties": {
             "active_tab_id": {
@@ -1076,8 +1522,42 @@
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
             },
+            "branch": {
+              "description": "Cached native Git metadata; absence does not imply a clean repository.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "custom_label": {
+              "description": "Whether the label was explicitly supplied rather than derived from cwd.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
+            },
+            "git_ahead_behind": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "label": {
               "type": "string"
@@ -1712,10 +2192,42 @@
           ],
           "type": "object"
         },
+        "CommandExecuteParams": {
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PaneSelectionReadParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/CommandTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "None is an explicit global context, permitted only while the endpoint has no workspaces."
+            }
+          },
+          "required": [
+            "command_id"
+          ],
+          "type": "object"
+        },
         "CommandInvokeParams": {
           "properties": {
             "command_id": {
-              "description": "Opaque endpoint-issued command identifier from the client-shell projection.",
+              "description": "Opaque endpoint-issued command identifier from command.list.",
               "type": "string"
             },
             "pane_id": {
@@ -1750,6 +2262,29 @@
           },
           "required": [
             "command_id"
+          ],
+          "type": "object"
+        },
+        "CommandTarget": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "terminal_id"
           ],
           "type": "object"
         },
@@ -2592,110 +3127,6 @@
           ],
           "type": "object"
         },
-        "PaneGraphicsClearParams": {
-          "properties": {
-            "layer_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "pane_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "pane_id"
-          ],
-          "type": "object"
-        },
-        "PaneGraphicsFormat": {
-          "enum": [
-            "png",
-            "rgb",
-            "rgba",
-            "bgra"
-          ],
-          "type": "string"
-        },
-        "PaneGraphicsPlacementParams": {
-          "properties": {
-            "grid_cols": {
-              "default": 0,
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "grid_rows": {
-              "default": 0,
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "viewport_col": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            },
-            "viewport_row": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            }
-          },
-          "type": "object"
-        },
-        "PaneGraphicsSetParams": {
-          "properties": {
-            "data_base64": {
-              "default": "",
-              "type": "string"
-            },
-            "format": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsFormat"
-            },
-            "image_height": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "image_width": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "layer_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "placement": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsPlacementParams",
-              "default": {
-                "grid_cols": 0,
-                "grid_rows": 0,
-                "viewport_col": 0,
-                "viewport_row": 0
-              }
-            },
-            "z_index": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "pane_id",
-            "format",
-            "image_width",
-            "image_height"
-          ],
-          "type": "object"
-        },
         "PaneInputSetParams": {
           "properties": {
             "pane_id": {
@@ -3007,6 +3438,16 @@
             "pane_id": {
               "type": "string"
             },
+            "resume_argv": {
+              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "seq": {
               "format": "uint64",
               "minimum": 0,
@@ -3049,6 +3490,16 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "resume_argv": {
+              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "seq": {
               "format": "uint64",
@@ -3795,6 +4246,57 @@
           ],
           "type": "string"
         },
+        "PluginPopupOpenParams": {
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "entrypoint": {
+              "type": "string"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "plugin_id": {
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/schemas/request/$defs/CommandTarget"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "plugin_id",
+            "entrypoint",
+            "target"
+          ],
+          "type": "object"
+        },
         "PluginSetEnabledParams": {
           "properties": {
             "plugin_id": {
@@ -3874,6 +4376,21 @@
           },
           "required": [
             "plugin_id"
+          ],
+          "type": "object"
+        },
+        "PopupCloseExactParams": {
+          "properties": {
+            "owner_tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "owner_tab_id"
           ],
           "type": "object"
         },
@@ -3959,6 +4476,18 @@
           },
           "type": "object"
         },
+        "ServerSshAgentRegisterParams": {
+          "properties": {
+            "socket_path": {
+              "description": "Absolute remote-host agent socket. Registration lasts until this API connection closes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "socket_path"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -3968,6 +4497,42 @@
         },
         "Subscription": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "popup.changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "command.manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "notification.semantic",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -3982,6 +4547,10 @@
             },
             {
               "properties": {
+                "include_git_status": {
+                  "description": "Requires the workspace_git_status capability; holds Git refresh interest\nuntil this subscription disconnects, independently of native UI settings.",
+                  "type": "boolean"
+                },
                 "type": {
                   "const": "workspace.updated",
                   "type": "string"
@@ -4319,6 +4888,18 @@
               "required": [
                 "type",
                 "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "agent.view.changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
               ],
               "type": "object"
             },
@@ -4782,6 +5363,22 @@
         {
           "properties": {
             "method": {
+              "const": "server.stop_if_idle",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "server.live_handoff",
               "type": "string"
             },
@@ -4803,6 +5400,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "server.ssh_agent.register",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ServerSshAgentRegisterParams"
             }
           },
           "required": [
@@ -4883,6 +5496,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ReleaseNotesDismissParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "command.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "command.execute",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/CommandExecuteParams"
             }
           },
           "required": [
@@ -5390,6 +6035,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.view.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.view.set",
               "type": "string"
             },
@@ -5710,6 +6371,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.edit_scrollback",
               "type": "string"
             },
@@ -5870,6 +6547,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.link.resolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneLinkActivateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.rename",
               "type": "string"
             },
@@ -5939,54 +6632,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneReadParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.set",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsSetParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.clear",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsClearParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.info",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneTarget"
             }
           },
           "required": [
@@ -6099,6 +6744,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.close_exact",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupCloseExactParams"
             }
           },
           "required": [
@@ -6350,6 +7027,22 @@
         {
           "properties": {
             "method": {
+              "const": "plugin.popup.open",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PluginPopupOpenParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "plugin.pane.focus",
               "type": "string"
             },
@@ -6527,6 +7220,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,
@@ -6626,6 +7326,15 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "completion_seq": {
+              "description": "The current idle transition completed work, independently of who has viewed it.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -6833,6 +7542,297 @@
           ],
           "type": "string"
         },
+        "AgentViewBuiltinField": {
+          "enum": [
+            "status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewBuiltinSortField": {
+          "enum": [
+            "workspace_order",
+            "tab_order",
+            "pane_order",
+            "attention",
+            "status",
+            "agent",
+            "seen",
+            "state_change_seq"
+          ],
+          "type": "string"
+        },
+        "AgentViewContext": {
+          "enum": [
+            "current_workspace_id",
+            "current_tab_id"
+          ],
+          "type": "string"
+        },
+        "AgentViewField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/success_response/$defs/AgentViewBuiltinField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewFilter": {
+          "oneOf": [
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "all",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filters": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                  },
+                  "type": "array"
+                },
+                "op": {
+                  "const": "any",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filters"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "filter": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                },
+                "op": {
+                  "const": "not",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "filter"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "eq",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewValue"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "in",
+                  "type": "string"
+                },
+                "values": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentViewValue"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "op",
+                "field",
+                "values"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewField"
+                },
+                "op": {
+                  "const": "exists",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "field"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewInfo": {
+          "description": "Current native view and its evaluated pane order. A missing definition means no override.",
+          "properties": {
+            "definition": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewSetParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pane_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pane_ids"
+          ],
+          "type": "object"
+        },
+        "AgentViewSetParams": {
+          "properties": {
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sort": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentViewSort"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "AgentViewSort": {
+          "properties": {
+            "field": {
+              "$ref": "#/schemas/success_response/$defs/AgentViewSortField"
+            },
+            "order": {
+              "$ref": "#/schemas/success_response/$defs/AgentViewSortOrder",
+              "default": "asc"
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "type": "object"
+        },
+        "AgentViewSortField": {
+          "anyOf": [
+            {
+              "$ref": "#/schemas/success_response/$defs/AgentViewBuiltinSortField"
+            },
+            {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AgentViewSortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "AgentViewValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "properties": {
+                "context": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewContext"
+                }
+              },
+              "required": [
+                "context"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -6840,6 +7840,187 @@
             "no_foreground_client"
           ],
           "type": "string"
+        },
+        "CommandAction": {
+          "enum": [
+            "shell",
+            "pane",
+            "popup",
+            "plugin_action",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "CommandEffect": {
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "shell_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "pane": {
+                  "$ref": "#/schemas/success_response/$defs/CommandTarget"
+                },
+                "type": {
+                  "const": "pane_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "popup": {
+                  "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                },
+                "type": {
+                  "const": "popup_opened",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "popup"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "log_id": {
+                  "type": "string"
+                },
+                "plugin_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "plugin_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "log_id",
+                "plugin_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "CommandInfo": {
+          "description": "Configuration-backed command metadata. Executable text stays on the owning endpoint.",
+          "properties": {
+            "action": {
+              "$ref": "#/schemas/success_response/$defs/CommandAction"
+            },
+            "binding_labels": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command_id",
+            "binding_labels",
+            "action"
+          ],
+          "type": "object"
+        },
+        "CommandPopup": {
+          "properties": {
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "owner_tab_id": {
+              "type": "string"
+            },
+            "owner_workspace_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "terminal_id",
+            "owner_workspace_id",
+            "owner_tab_id"
+          ],
+          "type": "object"
+        },
+        "CommandTarget": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "terminal_id"
+          ],
+          "type": "object"
         },
         "ConfigReloadStatus": {
           "enum": [
@@ -6851,6 +8032,129 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "popup_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "command_manifest_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Ephemeral runtime notification; presentation remains client-local.",
+              "properties": {
+                "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/schemas/success_response/$defs/SemanticNotificationKind"
+                },
+                "pane_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/ToastHerdrPosition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sound": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/SemanticNotificationSound"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tab_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "terminal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notification_semantic",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "kind",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "definition": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/AgentViewSetParams"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "agent_view_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -7513,6 +8817,9 @@
         },
         "EventKind": {
           "enum": [
+            "popup.changed",
+            "command.manifest_changed",
+            "notification.semantic",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -7538,7 +8845,8 @@
             "pane_exited",
             "pane_agent_detected",
             "pane_agent_status_changed",
-            "layout_updated"
+            "layout_updated",
+            "agent_view_changed"
           ],
           "type": "string"
         },
@@ -7973,10 +9281,23 @@
             "pane_id": {
               "type": "string"
             },
+            "restore_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
+            },
+            "right_click_passthrough": {
+              "description": "Whether an unmodified right click belongs to a mouse-reporting application.\nMissing on older runtimes; clients must not infer ownership from mouse mode.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "scroll": {
               "anyOf": [
@@ -8159,6 +9480,35 @@
             "direction",
             "ratio",
             "rect"
+          ],
+          "type": "object"
+        },
+        "PaneLinkRegion": {
+          "description": "Inclusive display-cell columns on a pane's current viewport.",
+          "properties": {
+            "end_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "row",
+            "start_col",
+            "end_col"
           ],
           "type": "object"
         },
@@ -8446,6 +9796,13 @@
         },
         "PaneScrollInfo": {
           "properties": {
+            "alternate_screen_active": {
+              "description": "Absent on older endpoints; clients must not infer the active screen from history size.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "max_offset_from_bottom": {
               "format": "uint64",
               "minimum": 0,
@@ -9224,6 +10581,79 @@
             },
             {
               "properties": {
+                "effect": {
+                  "$ref": "#/schemas/success_response/$defs/CommandEffect"
+                },
+                "type": {
+                  "const": "command_executed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "effect"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "popup": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "popup_session",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "popup": {
+                  "$ref": "#/schemas/success_response/$defs/CommandPopup"
+                },
+                "type": {
+                  "const": "popup_opened",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "popup"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "commands": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/CommandInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "command_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "commands"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "snapshot": {
                   "$ref": "#/schemas/success_response/$defs/SessionSnapshot"
                 },
@@ -9530,6 +10960,22 @@
               "required": [
                 "type",
                 "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "agent_view_state",
+                  "type": "string"
+                },
+                "view": {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewInfo"
+                }
+              },
+              "required": [
+                "type",
+                "view"
               ],
               "type": "object"
             },
@@ -9919,108 +11365,6 @@
             },
             {
               "properties": {
-                "revision": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "sequence": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "type": {
-                  "const": "pane_graphics_frame_ack",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "sequence",
-                "revision"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "cell_height_px": {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "cell_width_px": {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "file_frame_damage": {
-                  "default": false,
-                  "description": "Accepts damage metadata while still consuming a complete canonical file.",
-                  "type": "boolean"
-                },
-                "file_frame_direct_max_bytes": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "file_frame_directory": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "file_frame_formats": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "file_frame_max_bytes": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "file_frame_transport": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "max_layers_per_pane": {
-                  "default": 0,
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "pane_visible": {
-                  "description": "True only when this pane is on the currently rendered terminal surface.",
-                  "type": "boolean"
-                },
-                "pixel_mouse": {
-                  "default": false,
-                  "type": "boolean"
-                },
-                "type": {
-                  "const": "pane_graphics_info",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "cell_width_px",
-                "cell_height_px",
-                "pane_visible"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "explain": true,
                 "type": {
                   "const": "agent_explain",
@@ -10376,6 +11720,25 @@
             },
             {
               "properties": {
+                "regions": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneLinkRegion"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "pane_link_resolved",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "regions"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "handled": {
                   "type": "boolean"
                 },
@@ -10523,8 +11886,36 @@
             }
           ]
         },
+        "SemanticNotificationKind": {
+          "enum": [
+            "needs_attention",
+            "finished",
+            "update_installed",
+            "custom",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "SemanticNotificationSound": {
+          "enum": [
+            "done",
+            "request",
+            "unknown"
+          ],
+          "type": "string"
+        },
         "ServerCapabilities": {
           "properties": {
+            "command_catalog": {
+              "default": false,
+              "description": "Supports command.list and command.manifest_changed subscriptions.",
+              "type": "boolean"
+            },
+            "command_execution": {
+              "default": false,
+              "description": "Executes opaque commands with explicit context and producer-owned result identities.",
+              "type": "boolean"
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"
@@ -10546,9 +11937,39 @@
             "live_handoff": {
               "type": "boolean"
             },
+            "passive_metadata": {
+              "default": false,
+              "description": "Inactive endpoint attachment never creates sessions or nudges live panes.",
+              "type": "boolean"
+            },
+            "popup_sessions": {
+              "default": false,
+              "description": "Supports popup.get, popup.close_exact, plugin.popup.open and popup.changed subscriptions.",
+              "type": "boolean"
+            },
+            "semantic_notifications": {
+              "default": false,
+              "description": "Supports opt-in ephemeral semantic notification subscriptions.",
+              "type": "boolean"
+            },
+            "ssh_agent_registration": {
+              "default": false,
+              "description": "Supports connection-scoped `server.ssh_agent.register` on the local JSON API.",
+              "type": "boolean"
+            },
+            "stop_if_idle": {
+              "default": false,
+              "description": "Atomically rejects shutdown while sessions or pending work remain.",
+              "type": "boolean"
+            },
             "surface_interest": {
               "default": false,
               "description": "Whether this server supports explicit client-shell surface interest.",
+              "type": "boolean"
+            },
+            "workspace_git_status": {
+              "default": false,
+              "description": "Supports include_git_status on workspace.updated subscriptions.",
               "type": "boolean"
             }
           },
@@ -10559,6 +11980,16 @@
         },
         "SessionSnapshot": {
           "properties": {
+            "agent_view": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentViewInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "agents": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/AgentInfo"
@@ -10600,6 +12031,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "runtime_boot_id": {
+              "description": "Opaque owning-runtime incarnation, stable across client reconnects.\nMissing on older runtimes; never infer identity from pane IDs or version.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "tabs": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/TabInfo"
@@ -10639,6 +12077,12 @@
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
+            "custom_label": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
             },
@@ -10673,6 +12117,15 @@
           ],
           "type": "object"
         },
+        "ToastHerdrPosition": {
+          "enum": [
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right"
+          ],
+          "type": "string"
+        },
         "WorkspaceInfo": {
           "properties": {
             "active_tab_id": {
@@ -10681,8 +12134,42 @@
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
+            "branch": {
+              "description": "Cached native Git metadata; absence does not imply a clean repository.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "custom_label": {
+              "description": "Whether the label was explicitly supplied rather than derived from cwd.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
+            },
+            "git_ahead_behind": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "label": {
               "type": "string"

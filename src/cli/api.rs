@@ -11,6 +11,7 @@ pub(super) fn run_api_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "schema" => api_schema(&args[1..]),
         "snapshot" => api_snapshot(&args[1..]),
+        "projection" => api_projection(&args[1..]),
         "help" | "--help" | "-h" => {
             print_api_help();
             Ok(0)
@@ -50,6 +51,19 @@ fn api_schema(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     }
+    Ok(0)
+}
+
+fn api_projection(args: &[String]) -> std::io::Result<i32> {
+    let watch = match args {
+        [] => false,
+        [flag] if flag == "--watch" => true,
+        _ => {
+            eprintln!("usage: herdr api projection [--watch]");
+            return Ok(2);
+        }
+    };
+    crate::client::run_runtime_projection(watch)?;
     Ok(0)
 }
 
@@ -99,6 +113,7 @@ fn schema_summary_text() -> std::io::Result<String> {
 fn print_api_help() {
     eprintln!("herdr api commands:");
     eprintln!("  herdr api snapshot");
+    eprintln!("  herdr api projection [--watch]");
     eprintln!("  herdr api schema [--json | --output PATH]");
 }
 

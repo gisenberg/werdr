@@ -15,6 +15,8 @@ pub const CTrackedGridRef = ?*TrackedGridRef;
 
 pub const TrackedGridRef = struct {
     alloc: std.mem.Allocator,
+    // A detached reference may outlive both decoder and terminal.
+    decode_budget: ?*@import("../snapshot/main.zig").Budget = null,
     terminal: terminal_c.Terminal,
     screen_key: terminal_c.TerminalScreen,
     screen_generation: usize,
@@ -37,7 +39,9 @@ pub fn tracked_grid_ref_free(ref_: CTrackedGridRef) callconv(lib.calling_conv) v
         _ = wrapper.tracked_grid_refs.swapRemove(ref);
     }
     if (ref.pageList()) |list| list.untrackPin(ref.pin);
+    const budget = ref.decode_budget;
     ref.alloc.destroy(ref);
+    if (budget) |owner| owner.release();
 }
 
 pub fn tracked_grid_ref_has_value(ref_: CTrackedGridRef) callconv(lib.calling_conv) bool {
@@ -91,12 +95,108 @@ pub fn tracked_grid_ref_set(
     return .success;
 }
 
+/// Export a stable coordinate without changing the active screen or viewport.
+pub fn tracked_grid_ref_screen_point(
+    ref_: CTrackedGridRef,
+    out_screen: ?*terminal_c.TerminalScreen,
+    out_point: ?*point.Coordinate,
+) callconv(lib.calling_conv) Result {
+    const ref = ref_ orelse return .invalid_value;
+    const list = ref.pageList() orelse return .no_value;
+    if (ref.pin.garbage) return .no_value;
+    const pt = list.pointFromPin(.screen, ref.pin.*) orelse return .no_value;
+    if (out_screen) |out| out.* = ref.screen_key;
+    if (out_point) |out| out.* = pt.coord();
+    return .success;
+}
+
+test "tracked observer snapshot explicit screen and mixed page widths" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 20, 4));
+    defer terminal_c.free(terminal);
+    const t = terminal.?.terminal;
+    const list = &t.screens.active.pages;
+    // Model a retained wide page while the current grid is narrower.
+    // Restore the dimension before terminal destruction.
+    list.cols = 8;
+    defer list.cols = 20;
+    var ref: CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
+        terminal,
+        0,
+        point.Point.cval(.{ .screen = .{ .x = 13, .y = 0 } }),
+        &ref,
+    ));
+    defer tracked_grid_ref_free(ref);
+    var screen: terminal_c.TerminalScreen = undefined;
+    var coord: point.Coordinate = undefined;
+    try testing.expectEqual(Result.success, tracked_grid_ref_screen_point(ref, &screen, &coord));
+    try testing.expectEqual(terminal_c.TerminalScreen.primary, screen);
+    try testing.expectEqual(@as(u16, 13), coord.x);
+    try testing.expectEqual(Result.success, tracked_grid_ref_screen_point(ref, null, null));
+    var invalid: CTrackedGridRef = null;
+    try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track(
+        terminal,
+        point.Point.cval(.{ .screen = .{ .x = 13, .y = 0 } }),
+        &invalid,
+    ));
+    for ([_]c_int{ -1, 1, 2 }) |key| {
+        try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track_screen(
+            terminal,
+            key,
+            point.Point.cval(.{ .screen = .{} }),
+            &invalid,
+        ));
+        try testing.expect(invalid == null);
+    }
+    try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track_screen(
+        terminal,
+        0,
+        point.Point.cval(.{ .screen = .{} }),
+        null,
+    ));
+    try testing.expect(t.screens.get(.alternate) == null);
+    try testing.expectEqual(terminal_c.TerminalScreen.primary, t.screens.active_key);
+}
+
+test "tracked observer snapshot removed screen generation and pruned pin" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 20, 4));
+    defer terminal_c.free(terminal);
+    terminal_c.vt_write(terminal, "\x1b[?1049h", 8);
+    var ref: CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
+        terminal,
+        1,
+        point.Point.cval(.{ .screen = .{} }),
+        &ref,
+    ));
+    defer tracked_grid_ref_free(ref);
+    const t = terminal.?.terminal;
+    t.screens.switchTo(.primary);
+    t.screens.remove(t.gpa(), .alternate);
+    terminal_c.vt_write(terminal, "\x1b[?1049h", 8);
+    try testing.expectEqual(Result.no_value, tracked_grid_ref_screen_point(ref, null, null));
+    var valid: CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
+        terminal,
+        0,
+        point.Point.cval(.{ .screen = .{} }),
+        &valid,
+    ));
+    defer tracked_grid_ref_free(valid);
+    // Garbage is the native state of a pruned reference.
+    valid.?.pin.garbage = true;
+    try testing.expectEqual(Result.no_value, tracked_grid_ref_screen_point(valid, null, null));
+}
+
 test "tracked_grid_ref snapshots after terminal scroll" {
     var terminal: terminal_c.Terminal = null;
     try testing.expectEqual(Result.success, terminal_c.new(
         &lib.alloc.test_allocator,
         &terminal,
-        .{ .cols = 5, .rows = 2, .max_scrollback = 10_000 },
+        5,
+        2,
     ));
     defer terminal_c.free(terminal);
 
@@ -128,7 +228,8 @@ test "tracked_grid_ref reports no value after reset" {
     try testing.expectEqual(Result.success, terminal_c.new(
         &lib.alloc.test_allocator,
         &terminal,
-        .{ .cols = 5, .rows = 2, .max_scrollback = 10_000 },
+        5,
+        2,
     ));
     defer terminal_c.free(terminal);
 
@@ -154,7 +255,8 @@ test "tracked_grid_ref reports no value after alternate screen reset" {
     try testing.expectEqual(Result.success, terminal_c.new(
         &lib.alloc.test_allocator,
         &terminal,
-        .{ .cols = 5, .rows = 2, .max_scrollback = 10_000 },
+        5,
+        2,
     ));
     defer terminal_c.free(terminal);
 
@@ -194,7 +296,8 @@ test "tracked_grid_ref reports no value after terminal free" {
     try testing.expectEqual(Result.success, terminal_c.new(
         &lib.alloc.test_allocator,
         &terminal,
-        .{ .cols = 5, .rows = 2, .max_scrollback = 10_000 },
+        5,
+        2,
     ));
 
     terminal_c.vt_write(terminal, "A", 1);

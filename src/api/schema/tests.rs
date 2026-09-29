@@ -201,8 +201,7 @@ fn generated_protocol_schema_artifact_is_current() {
         )
     });
     assert_eq!(
-        expected,
-        actual,
+        expected, actual,
         "generated API schema artifact is stale; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
     );
 }
@@ -218,6 +217,20 @@ fn request_round_trips_for_server_stop() {
     assert_eq!(json["method"], "server.stop");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
+}
+
+#[test]
+fn stop_if_idle_has_a_distinct_method_and_defaults_to_unsupported() {
+    let request = Request {
+        id: "idle-stop".into(),
+        method: Method::ServerStopIfIdle(EmptyParams::default()),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "server.stop_if_idle");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff": false})).unwrap();
+    assert!(!capabilities.stop_if_idle);
 }
 
 #[test]
@@ -695,6 +708,7 @@ fn scroll_changed_subscription_event_round_trips() {
             pane_id: "p_1_1".into(),
             workspace_id: "w_1".into(),
             scroll: PaneScrollInfo {
+                alternate_screen_active: Some(false),
                 offset_from_bottom: 12,
                 max_offset_from_bottom: 240,
                 viewport_rows: 30,
@@ -722,11 +736,19 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                stop_if_idle: true,
+                popup_sessions: true,
+                command_execution: true,
+                command_catalog: true,
+                semantic_notifications: true,
+                workspace_git_status: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
+                passive_metadata: true,
                 health_check: true,
+                ssh_agent_registration: false,
             }),
         },
     };
@@ -753,6 +775,7 @@ fn session_snapshot_request_and_response_round_trip() {
             snapshot: Box::new(SessionSnapshot {
                 version: "0.1.2".into(),
                 protocol: 16,
+                runtime_boot_id: None,
                 focused_workspace_id: None,
                 focused_tab_id: None,
                 focused_pane_id: None,
@@ -761,6 +784,7 @@ fn session_snapshot_request_and_response_round_trip() {
                 panes: Vec::new(),
                 layouts: Vec::new(),
                 agents: Vec::new(),
+                agent_view: None,
             }),
         },
     };
@@ -795,6 +819,9 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "herdr".into(),
+                custom_label: None,
+                branch: None,
+                git_ahead_behind: None,
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
@@ -814,6 +841,7 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 number: 1,
                 label: "herdr".into(),
+                custom_label: None,
                 focused: true,
                 pane_count: 1,
                 agent_status: AgentStatus::Unknown,
@@ -825,7 +853,9 @@ fn worktree_request_and_response_round_trip() {
                 tab_id: "w_1:1".into(),
                 focused: true,
                 cwd: Some("/worktrees/herdr/worktree-api".into()),
+                right_click_passthrough: None,
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -881,6 +911,9 @@ fn worktree_lifecycle_events_round_trip() {
         workspace_id: "w_2".into(),
         number: 2,
         label: "herdr".into(),
+        custom_label: None,
+        branch: None,
+        git_ahead_behind: None,
         focused: true,
         pane_count: 1,
         tab_count: 1,
@@ -1242,6 +1275,7 @@ fn create_response_round_trips_with_root_pane() {
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "review".into(),
+                custom_label: None,
                 focused: false,
                 pane_count: 1,
                 agent_status: AgentStatus::Unknown,
@@ -1253,7 +1287,9 @@ fn create_response_round_trips_with_root_pane() {
                 tab_id: "w_1:2".into(),
                 focused: false,
                 cwd: Some("/tmp/review".into()),
+                right_click_passthrough: None,
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1432,4 +1468,150 @@ fn popup_close_request_round_trips() {
 
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
+}
+
+#[test]
+fn legacy_scroll_geometry_does_not_claim_a_screen_mode() {
+    let legacy = r#"{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":24}"#;
+    let scroll: PaneScrollInfo = serde_json::from_str(legacy).unwrap();
+    assert_eq!(scroll.alternate_screen_active, None);
+    assert!(!serde_json::to_string(&scroll)
+        .unwrap()
+        .contains("alternate_screen_active"));
+    for alternate in [false, true] {
+        let current = PaneScrollInfo {
+            alternate_screen_active: Some(alternate),
+            ..scroll
+        };
+        let encoded = serde_json::to_string(&current).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PaneScrollInfo>(&encoded).unwrap(),
+            current
+        );
+    }
+}
+
+#[test]
+fn semantic_notification_json_subscription_and_optional_capability() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id":"notifications", "method":"events.subscribe",
+        "params":{"subscriptions":[{"type":"notification.semantic"}]}
+    }))
+    .unwrap();
+    assert!(
+        matches!(request.method, Method::EventsSubscribe(EventsSubscribeParams { subscriptions })
+        if matches!(subscriptions.as_slice(), [Subscription::NotificationSemantic {}]))
+    );
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.semantic_notifications);
+    assert!(!capabilities.workspace_git_status);
+    assert_eq!(
+        serde_json::from_value::<SemanticNotificationKind>(serde_json::json!("future_kind"))
+            .unwrap(),
+        SemanticNotificationKind::Unknown
+    );
+    assert_eq!(
+        serde_json::from_value::<SemanticNotificationSound>(serde_json::json!("future_sound"))
+            .unwrap(),
+        SemanticNotificationSound::Unknown
+    );
+}
+
+#[test]
+fn workspace_sidebar_facts_are_optional_for_older_endpoints() {
+    let legacy = serde_json::json!({
+        "workspace_id": "w1", "number": 1, "label": "repo", "focused": true,
+        "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1",
+        "agent_status": "unknown"
+    });
+    let mut workspace: WorkspaceInfo = serde_json::from_value(legacy).unwrap();
+    assert_eq!(workspace.custom_label, None);
+    assert_eq!(workspace.branch, None);
+    assert_eq!(workspace.git_ahead_behind, None);
+    let absent = serde_json::to_value(&workspace).unwrap();
+    for field in ["custom_label", "branch", "git_ahead_behind"] {
+        assert!(absent.get(field).is_none());
+    }
+    workspace.custom_label = Some(false);
+    workspace.branch = Some("worktree/topic".into());
+    workspace.git_ahead_behind = Some((0, 0));
+    let json = serde_json::to_value(&workspace).unwrap();
+    assert_eq!(json["custom_label"], false);
+    assert_eq!(json["git_ahead_behind"], serde_json::json!([0, 0]));
+    assert_eq!(
+        serde_json::from_value::<WorkspaceInfo>(json).unwrap(),
+        workspace
+    );
+}
+
+#[test]
+fn command_catalog_contract_is_optional_and_forward_compatible() {
+    let request: Request = serde_json::from_value(
+        serde_json::json!({"id":"catalog","method":"command.list","params":{}}),
+    )
+    .unwrap();
+    assert!(matches!(request.method, Method::CommandList(_)));
+    let command: CommandInfo = serde_json::from_value(serde_json::json!({"command_id":"opaque","binding_labels":["prefix+z"],"action":"future_action"})).unwrap();
+    assert_eq!(command.action, CommandAction::Unknown);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.command_catalog);
+    let subscription: Subscription =
+        serde_json::from_value(serde_json::json!({"type":"command.manifest_changed"})).unwrap();
+    assert!(matches!(
+        subscription,
+        Subscription::CommandManifestChanged {}
+    ));
+    assert_eq!(
+        EventKind::CommandManifestChanged.dot_name(),
+        "command.manifest_changed"
+    );
+}
+
+#[test]
+fn scoped_command_effects_keep_unknown_results_non_actionable() {
+    let effect: CommandEffect = serde_json::from_value(
+        serde_json::json!({"type":"future_effect","pane_id":"not-a-navigation-target"}),
+    )
+    .unwrap();
+    assert_eq!(effect, CommandEffect::Unknown);
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff":false})).unwrap();
+    assert!(!capabilities.command_execution);
+    assert!(!capabilities.popup_sessions);
+    let request: Request = serde_json::from_value(serde_json::json!({"id":"execute","method":"command.execute","params":{"command_id":"opaque","target":{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","terminal_id":"term1"}}})).unwrap();
+    assert!(crate::api::request_changes_ui(&request));
+}
+
+#[test]
+fn popup_lifecycle_subscription_uses_public_dot_name() {
+    let subscription: Subscription =
+        serde_json::from_value(serde_json::json!({"type":"popup.changed"})).unwrap();
+    assert_eq!(subscription, Subscription::PopupChanged {});
+    assert_eq!(EventKind::PopupChanged.dot_name(), "popup.changed");
+}
+
+#[test]
+fn pane_link_resolve_round_trips() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "hover", "method": "pane.link.resolve",
+        "params": {"pane_id": "pane-1", "viewport_row": 2, "col": 3}
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::PaneLinkResolve(_)));
+    let result = ResponseResult::PaneLinkResolved {
+        regions: vec![PaneLinkRegion {
+            row: 2,
+            start_col: 3,
+            end_col: 9,
+        }],
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["type"], "pane_link_resolved");
+    assert_eq!(json["regions"][0]["end_col"], 9);
+    assert_eq!(
+        serde_json::from_value::<ResponseResult>(json).unwrap(),
+        result
+    );
 }

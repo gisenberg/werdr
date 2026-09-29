@@ -2,6 +2,25 @@
 
 Terminal based agent runtime for coding agents.
 
+## Werdr fork workflow
+
+This section takes precedence over the upstream workflow rules below when working in the `gisenberg/werdr` fork.
+It does not grant maintainer authority in `herdrdev/herdr` or change the rules for submitting work upstream.
+
+- Carry authorized tasks through implementation, verification, commits, pushes, and deployment without separate approval of plans or commit messages.
+- A request to fix, ship, deploy, land, integrate, or merge authorizes the normal fork pull-request and merge workflow once the work is complete and verified.
+- Keep local iteration on the current task branch unless isolation is useful or integration is requested.
+- Preserve unrelated changes and keep commits focused.
+- Use the native saved-machine catalog for browser onboarding and fleet navigation; support stable private LAN aliases alongside Tailscale targets.
+- Identify the gateway by its hostname in browser host labels; never use the ambiguous label `Local`.
+- Review the final diff and run checks appropriate to the changed surfaces before publishing or deploying.
+- For changes confined to the web gateway, browser client, or fork documentation, use `npm --prefix web run check` and relevant browser tests; upstream `just check` is required when changing the Rust runtime or integrating runtime changes.
+- Commit and push completed work before calling a deployment durable, and verify the intended remote commit.
+- Push to both `origin` and `mirror` when both are configured, and report partial failures accurately.
+- Deploy web updates through the pinned homelab installer and preserve the separate native runtime and its live panes.
+- Ask for clarification only when missing information prevents safe progress, or when an action is destructive, irreversible, or outside the authorized scope.
+- Requests limited to review, diagnosis, or explanation do not authorize deployment or merging.
+
 ## Scope and Audience
 
 These instructions are layered.
@@ -125,7 +144,8 @@ When the current pull request head is green and both bot reviews are complete, r
 
 If the current session is already inside an isolated task worktree, keep using it. Do not create nested worktrees.
 
-Before committing, propose the commit message and get alignment.
+For the canonical upstream repository, propose the commit message and get alignment before committing.
+In the werdr fork, follow the autonomous fork workflow above.
 
 After Can confirms the change is integrated, update the shared checkout, remove the task worktree, and delete the task branch locally and remotely.
 
@@ -139,6 +159,18 @@ just check              # formatting check + cargo nextest + maintenance script 
 ```
 
 Run `just check` before committing unless Can explicitly accepts narrower validation. Do not bypass failing checks; fix the failure or explain exactly why a narrower check is enough.
+
+Windows MSVC cross-compilation from Unix requires SDK/CRT headers and libraries.
+Install `xwin` with `cargo install xwin --locked`, then run
+`just setup-windows-cross` once and accept Microsoft's SDK license when prompted.
+This downloads the SDK directly from Microsoft; no Windows machine is required.
+The SDK and Zig libc configuration live at `~/.local/share/herdr/windows-cross/`,
+shared by worktrees. `just windows-lint` and the Windows stage of `just check`
+use this configuration automatically. To use another SDK, set
+`LIBGHOSTTY_VT_WINDOWS_LIBC` to its Zig libc configuration file.
+Setup accepts `--accept-license` for explicit noninteractive license acceptance;
+normal checks never download the SDK. Native Windows builds auto-detect their
+installed SDK. Native Linux/macOS builds do not need the Windows SDK.
 
 Unit tests live next to the code (`#[cfg(test)] mod tests`). New `AppState` or `Workspace` behavior should be testable with `AppState::test_new()` and `Workspace::test_new()` without PTYs.
 
@@ -173,8 +205,8 @@ Before validating a fix on Windows, sync or apply the Linux worktree changes
 into `C:\work\repo`, then run the needed Windows build or test commands there.
 Reuse the shared Rust caches under `C:\Users\herdr\.cargo` and
 `C:\Users\herdr\.rustup`. Do not use WSL on the VM. The VM may have a newer
-Zig on `PATH`; Herdr currently requires Zig 0.15.2, so set
-`$env:ZIG = "C:\Users\herdr\zig-0.15.2\zig.exe"` before running Cargo commands
+Zig on `PATH`; Herdr currently requires Zig 0.16.0, so set
+`$env:ZIG = "C:\Users\herdr\zig-0.16.0\zig.exe"` before running Cargo commands
 that build the vendored libghostty-vt.
 
 After validation, leave `C:\work\repo` clean. Remove temporary files and delete
@@ -186,7 +218,9 @@ manual testing, reset `C:\work\repo` back to a clean checkout before finishing.
 
 Agent detection changes should use the manifest hot-reload loop. Use the project-local `herdr-throwaway-repro` skill to create a disposable named session and drive the real agent UI through Herdr's CLI/API into the target state. Read the pane with `herdr agent read <pane> --source detection --format text` and inspect matching with `herdr agent explain <pane> --json`. Update the bundled manifest in `src/detect/manifests/<agent>.toml`, copy that manifest to the local override path at `~/.config/herdr/agent-detection/<agent>.toml`, then run `herdr server reload-agent-manifests` against the session under test. Before writing the override, check whether one already exists; never overwrite or remove a pre-existing override without alignment. Once the rule is correct, remove the temporary override or restore the previous one exactly so the committed bundled manifest remains the source of truth.
 
-Do not add large agent-specific full-screen fixture suites for routine manifest tuning. Keep Rust tests focused on manifest parsing, rule semantics, skip-state semantics, source precedence, cache reload behavior, and update flow. Use live pane reads for agent-specific screen evidence.
+Unit-test Herdr's detection engine, not individual CLI agents' screen or title conventions. Use synthetic manifests and minimal input strings to test parsing, regions, matching, AND/OR/NOT gates, rule priority, skip-state semantics, source precedence, cache reload behavior, and update flow. Keep bundled-manifest schema validation, process identification, and integration hook/protocol tests. Do not add tests that classify captured or invented CLI screens against bundled agent rules, or freeze an agent's specific detection rule IDs and priorities.
+
+Validate agent-specific detection behavior with live smoke tests through the manifest hot-reload loop above. Exercise the changed state and nearby transitions (idle, working, blocked, and background work where supported), including relevant optional OSC settings. Record the CLI version, observed signals, and outcomes. Passing engine tests proves the rules execute as written; it does not prove compatibility with the current CLI.
 
 `distribution/agent-detection/` is the remotely published catalog for released clients. Keep changes for already released agents aligned with their bundled manifests unless the validator records an exact compatibility exception. A newly bundled agent that current stable clients cannot identify may remain unpublished behind an exact version-and-digest exception, but it must be added to the catalog and the exception removed before the first stable release that ships it. `just release-docs-check` enforces that no unpublished exceptions remain.
 
@@ -208,7 +242,7 @@ Unreleased docs live in `docs/next/website/src/content/docs/`. Update those when
 
 The active preview release docs live in `docs/preview/website/`. Preview CI owns this mutable snapshot and commits it atomically with `distribution/preview.json`; never edit it manually. Validate it with `node scripts/docs/preview.mjs check`.
 
-Published stable-release documentation lives in `docs/versions/`. Release CI seeds each version from the tagged `docs/next` tree, and maintainers may correct factual documentation errors in a published version afterward. Apply a correction separately to `docs/next` when it also applies to future releases; never replace a published tree with the current draft. The private website renders `/docs/preview/` from the active preview snapshot, `/docs/<version>/` from the maintained version directories, and `/docs/` from the version selected by `docs/versions/manifest.json`. Herdr remains the source of truth for the public snapshots.
+Published stable-release documentation lives in `docs/versions/`. Release CI seeds each version from the tagged `docs/next` tree, and maintainers may make corrections and improvements that apply to that version afterward, without another Herdr release. Do not document unreleased behavior in a published version. Apply each change separately to `docs/next` when it also applies to future releases; never replace a published tree with the current draft. The private website renders `/docs/preview/` from the active preview snapshot, `/docs/<version>/` from the maintained version directories, and `/docs/` from the version selected by `docs/versions/manifest.json`. Herdr remains the source of truth for the public snapshots.
 
 During release review, finalize `docs/next` and run `just release-docs-check`. Do not copy draft docs into preview or published versions manually. Preview CI snapshots the selected commit. After a stable GitHub Release succeeds, release CI seeds a new version from the exact tag and updates `distribution/latest.json`. The resulting master commit triggers the private website deployment.
 
@@ -222,7 +256,8 @@ Put local PRDs, planning notes, and exploratory specs under `.local/prd/`; `.loc
 
 Use lowercase conventional commits, no emojis, and no AI co-author lines. Commit subjects feed preview release notes, so keep them descriptive.
 
-Before committing, propose the commit message and get alignment.
+For the canonical upstream repository, propose the commit message and get alignment before committing.
+In the werdr fork, follow the autonomous fork workflow above.
 
 When a normal feature or fix commit relates to a GitHub issue, add a commit body line `refs #<issue-number>` after the subject:
 
@@ -249,7 +284,7 @@ account is not a verified maintainer, do not run release commands, push release
 assets, or modify release channel files; follow the external contributor
 guardrail.
 
-Herdr has one main branch and two update channels. Stable and preview both build from `master`; there is no long-lived preview branch.
+Herdr has one main branch and two update channels. Normal previews select a commit from `master`. Stable promotes a published preview, never the latest `master`. There is no long-lived release or preview branch.
 
 Normal users default to stable. Stable docs are `/docs/`, stable updates use `distribution/latest.json`, and Homebrew/Nix stay stable-only.
 
@@ -267,16 +302,26 @@ herdr channel set stable
 herdr update
 ```
 
-Preview releases are GitHub prereleases produced by `.github/workflows/preview.yml` on manual dispatch and the Wednesday/Friday schedule. The workflow updates `distribution/preview.json`, which the private website publishes as `/preview.json`. Do not hand-edit `distribution/preview.json`; fix the workflow or `scripts/preview.py` and rerun Preview.
+Preview releases are GitHub prereleases produced by `.github/workflows/preview.yml` only on `preview-*` tag pushes. Use `just preview <commit-or-ref>` (default: HEAD) to validate the source, create the annotated `preview-<commit-date>-<short-sha>` tag, and push it. Normal source commits must be reachable from master and contain the tag-triggered preview workflow; older dispatch-only revisions cannot be previewed by tagging them. For an isolated hotfix, create a temporary `release/<name>` branch from the current stable tag, apply only the reviewed fix, push that branch, then run `just preview` at its tip. CI validates the tagged commit, not a moving branch. Branch naming and ancestry prevent selection mistakes; they do not replace reviewing the hotfix diff. Ensure the fix also reaches master. Preview is required even for hotfixes. A hotfix based on a legacy stable release must include the promotion tooling update before previewing; CI rejects candidates that still carry the old ungated stable workflow.
 
-Stable releases use:
+All tags are protected by the repository's `release-tags` ruleset: only repository admins may create, update, or delete them. Do not grant GitHub Actions or writer bots a tag bypass. Both publishing workflows require tag-push events and check the original actor's and rerun actor's current repository admin permission before publication. Normal PR test workflows remain automatic and unchanged. Immutable releases protect published binaries.
+
+Preview notes contain only the build identifier (date and source SHA) and a comparison link. Do not generate a categorized commit summary for previews; curated release notes belong to stable releases.
+
+The workflow updates `distribution/preview.json`, which the private website publishes as `/preview.json`. Do not hand-edit `distribution/preview.json`; fix the workflow or `scripts/preview.py` and rerun Preview. Published preview releases and tags are retained; CI must not delete protected tags or leave old preview tags without their releases.
+
+Stable releases start in an isolated checkout at the selected published preview tag, not current master. Commit curated release docs there, then use:
 
 ```bash
 just check
-just release 0.x.y
+just release 0.x.y preview-<build-id>
 ```
 
-Before stable release, run `/pre-release-audit`, finalize `docs/next`, and run `just pre-release-check` to validate the staged docs, distribution contract, and render scaling. `just release` prepares the changelog and release commit, tags it, and pushes the tag. GitHub Actions builds binaries, creates the GitHub release, closes released issues, snapshots and promotes the tagged docs, and updates `distribution/latest.json`. The private website repository owns rendering and deployment.
+Before stable release, run `/pre-release-audit` against the currently published stable tag, finalize `docs/next`, and run `just pre-release-check` to validate the staged docs, distribution contract, and render scaling. `just release` prepares the changelog and release commit, validates the preview-to-release diff, and pushes only an annotated stable tag. Its `Preview` and `Previous-Stable` trailers are required provenance, not optional notes. `just release-prepare` and `just release-publish` also require the preview tag argument. Do not merge or rebase newer master commits into the candidate.
+
+Only the Herdr package version in Cargo.toml/Cargo.lock, changelogs, staged READMEs, staged website prose, product announcement, and stable skill may differ from the preview. Code, dependencies, API schemas, build configuration, and other files must match. These checks run locally and in CI before stable builds. Old previews without this promotion tooling require a new preview first. Stable rebuilds the selected source with stable version identity; it does not reuse preview binaries.
+
+GitHub Actions builds binaries, creates the GitHub release, closes issues using the recorded previous stable boundary, snapshots the tagged docs, and updates `distribution/latest.json`. It applies only the release-preparation diff back to master with a three-way merge, preserving newer development. A conflict stops distribution publication and needs manual resolution; do not resolve it by copying the whole release tree over master. Remove temporary release/hotfix branches after publication and metadata reconciliation. The private website repository owns rendering and deployment.
 
 Before the first stable Windows release, publish and verify a preview containing stable-channel support. Existing Windows preview users need that preview before `herdr channel set stable` can migrate them.
 

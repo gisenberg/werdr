@@ -1,0 +1,429 @@
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/generation_snapshot.zig b/vendor/libghostty-vt/src/terminal/kitty/generation_snapshot.zig
+new file mode 100644
+index 00000000..e067ed3d
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/kitty/generation_snapshot.zig
+@@ -0,0 +1,300 @@
++//! Ordered generation rebinding for one coordinated graphics restore.
++//! Include both screens and every external pending token in the same mapping.
++//! Only staged, unpublished storage may be remapped by this module.
++const std = @import("std");
++const storage = @import("graphics_storage.zig");
++const Storage = storage.ImageStorage;
++const Allocator = std.mem.Allocator;
++pub const Error = error{ OutOfMemory, LimitExceeded, InvalidPhase, InvalidSnapshot, UnknownGeneration, GenerationExhausted };
++
++pub const Mapping = struct {
++    entries: std.ArrayListUnmanaged(Entry),
++    phase: enum { prepared, assigned, applied } = .prepared,
++
++    pub const Entry = struct { source: u64, destination: u64 = 0 };
++
++    pub fn deinit(self: *Mapping, alloc: Allocator) void {
++        self.entries.deinit(alloc);
++        self.* = undefined;
++    }
++
++    fn lessThan(_: void, a: Entry, b: Entry) bool {
++        return a.source < b.source;
++    }
++
++    fn finish(self: *Mapping) void {
++        std.mem.sort(Entry, self.entries.items, {}, lessThan);
++        var len: usize = 0;
++        for (self.entries.items) |entry| {
++            if (entry.source == 0 or (len > 0 and self.entries.items[len - 1].source == entry.source)) continue;
++            self.entries.items[len] = entry;
++            len += 1;
++        }
++        self.entries.items.len = len;
++    }
++
++    /// Limits count input references, including duplicates and zero sentinels.
++    /// Allocation is bounded by max_references * sizeof(Entry), before stamps
++    /// are consumed. Capacities and allocator overhead are not RSS guarantees.
++    pub fn prepare(alloc: Allocator, sources: []const u64, max_references: usize) Error!Mapping {
++        if (sources.len > max_references) return error.LimitExceeded;
++        _ = std.math.mul(usize, sources.len, @sizeOf(Entry)) catch return error.LimitExceeded;
++        var result: Mapping = .{ .entries = try .initCapacity(alloc, sources.len) };
++        for (sources) |source| result.entries.appendAssumeCapacity(.{ .source = source });
++        result.finish();
++        return result;
++    }
++
++    /// Register storage stamps, image stamps, saved frame-target stamps and
++    /// external dependent stamps. Stale references are deliberately included,
++    /// even when no resident image has that generation or identifier.
++    pub fn fromStorage(alloc: Allocator, stores: []const *const Storage, external: []const u64, max_references: usize) Error!Mapping {
++        var count = external.len;
++        for (stores) |s| {
++            count = std.math.add(usize, count, 1) catch return error.LimitExceeded;
++            count = std.math.add(usize, count, s.images.count()) catch return error.LimitExceeded;
++            if (s.loading) |loading| if (loading.frame != null) {
++                count = std.math.add(usize, count, 1) catch return error.LimitExceeded;
++            };
++        }
++        if (count > max_references) return error.LimitExceeded;
++        _ = std.math.mul(usize, count, @sizeOf(Entry)) catch return error.LimitExceeded;
++        var result: Mapping = .{ .entries = try .initCapacity(alloc, count) };
++        for (external) |source| result.entries.appendAssumeCapacity(.{ .source = source });
++        for (stores) |s| {
++            result.entries.appendAssumeCapacity(.{ .source = s.generation });
++            var it = s.images.valueIterator();
++            while (it.next()) |img| result.entries.appendAssumeCapacity(.{ .source = img.generation });
++            if (s.loading) |loading| if (loading.frame) |frame| result.entries.appendAssumeCapacity(.{ .source = frame.image_generation });
++        }
++        result.finish();
++        return result;
++    }
++
++    /// Reserve after all fallible assembly work when possible. Aborted restores
++    /// may leave unused destination stamps, which must never be reused.
++    /// Exhaustion leaves both the map and global counter unchanged.
++    pub fn assign(self: *Mapping, io: std.Io) Error!void {
++        if (self.phase != .prepared) return error.InvalidPhase;
++        if (self.entries.items.len > 0) {
++            const count = std.math.cast(u64, self.entries.items.len) orelse return error.LimitExceeded;
++            const first = storage.reserveGenerations(io, count) orelse return error.GenerationExhausted;
++            for (self.entries.items, 0..) |*entry, i| entry.destination = first + @as(u64, @intCast(i));
++        }
++        self.phase = .assigned;
++    }
++
++    pub fn translate(self: *const Mapping, source: u64) Error!u64 {
++        if (self.phase == .prepared) return error.InvalidPhase;
++        if (source == 0) return 0;
++        var low: usize = 0;
++        var high = self.entries.items.len;
++        while (low < high) {
++            const mid = low + (high - low) / 2;
++            const entry = self.entries.items[mid];
++            if (entry.source == source) return entry.destination;
++            if (entry.source < source) low = mid + 1 else high = mid;
++        }
++        return error.UnknownGeneration;
++    }
++
++    /// Preflight every store before changing any, then replace all generation
++    /// equivalence classes together. Does not alter dirty flags or clocks.
++    /// Call once with the complete staged batch under exclusive ownership.
++    pub fn apply(self: *Mapping, stores: []const *Storage) Error!void {
++        if (self.phase != .assigned) return error.InvalidPhase;
++        for (stores, 0..) |s, i| {
++            for (stores[0..i]) |prior| {
++                if (prior == s or (s.loading != null and prior.loading == s.loading) or
++                    (s.images.metadata != null and prior.images.metadata == s.images.metadata)) return error.InvalidSnapshot;
++            }
++            _ = try self.translate(s.generation);
++            var it = s.images.valueIterator();
++            while (it.next()) |img| _ = try self.translate(img.generation);
++            if (s.loading) |loading| if (loading.frame) |frame| {
++                _ = try self.translate(frame.image_generation);
++            };
++        }
++        // Lookups are now infallible; no allocation or native mutation API is
++        // called, so stale references, image ages and shared stamps stay exact.
++        for (stores) |s| {
++            s.generation = self.translate(s.generation) catch unreachable;
++            var it = s.images.valueIterator();
++            while (it.next()) |img| img.generation = self.translate(img.generation) catch unreachable;
++            if (s.loading) |loading| if (loading.frame) |*frame| {
++                frame.image_generation = self.translate(frame.image_generation) catch unreachable;
++            };
++        }
++        self.phase = .applied;
++    }
++};
++
++test "generation snapshot preserves order equality and zero" {
++    const testing = std.testing;
++    var map = try Mapping.prepare(testing.allocator, &.{ 0, 50, 10, 50, std.math.maxInt(u64), 30 }, 6);
++    defer map.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 4), map.entries.items.len);
++    try testing.expectError(error.InvalidPhase, map.translate(0));
++    const before = storage.nextGeneration(testing.io);
++    try map.assign(testing.io);
++    try testing.expectEqual(@as(u64, 0), try map.translate(0));
++    try testing.expect(try map.translate(10) > before);
++    try testing.expect(try map.translate(10) < try map.translate(30));
++    try testing.expect(try map.translate(30) < try map.translate(50));
++    try testing.expect(try map.translate(50) < try map.translate(std.math.maxInt(u64)));
++    try testing.expect(storage.nextGeneration(testing.io) > try map.translate(std.math.maxInt(u64)));
++    try testing.expectError(error.UnknownGeneration, map.translate(49));
++    try testing.expectError(error.InvalidPhase, map.assign(testing.io));
++}
++
++test "generation snapshot both stores and stale frame references" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const LoadingImage = @import("graphics_image.zig").LoadingImage;
++    var primary: Storage = .{ .generation = 40, .dirty = false };
++    defer primary.images.deinit(alloc);
++    try primary.images.put(alloc, 1, .{ .id = 1, .number = 7, .generation = 40 });
++    try primary.images.put(alloc, 2, .{ .id = 2, .number = 7, .generation = 10 });
++    var live: LoadingImage = .{ .image = .{}, .quiet = .no, .temporary_directory = null, .frame = .{ .cmd = .{}, .image_generation = 40 } };
++    primary.loading = &live;
++    var alternate: Storage = .{ .generation = 0, .dirty = true };
++    var stale: LoadingImage = .{ .image = .{}, .quiet = .no, .temporary_directory = null, .frame = .{ .cmd = .{}, .image_generation = 30 } };
++    alternate.loading = &stale;
++    var map = try Mapping.fromStorage(alloc, &.{ &primary, &alternate }, &.{ 10, 20 }, 8);
++    defer map.deinit(alloc);
++    try map.assign(testing.io);
++    try map.apply(&.{ &primary, &alternate });
++    try testing.expectEqual(try map.translate(40), primary.generation);
++    try testing.expectEqual(primary.generation, primary.images.get(1).?.generation);
++    try testing.expectEqual(primary.generation, live.frame.?.image_generation);
++    try testing.expectEqual(try map.translate(10), primary.images.get(2).?.generation);
++    try testing.expectEqual(try map.translate(30), stale.frame.?.image_generation);
++    try testing.expect(stale.frame.?.image_generation != primary.generation);
++    try testing.expectEqual(@as(u64, 0), alternate.generation);
++    try testing.expect(!primary.dirty and alternate.dirty);
++    try testing.expectEqual(@as(u32, 1), primary.imagePtrByIdOrNumber(0, 7).?.id);
++    try testing.expectError(error.InvalidPhase, map.apply(&.{ &primary, &alternate }));
++}
++
++test "generation snapshot preflight leaves every store unchanged" {
++    const testing = std.testing;
++    var first: Storage = .{ .generation = 100 };
++    var second: Storage = .{ .generation = 999 };
++    var map = try Mapping.prepare(testing.allocator, &.{100}, 1);
++    defer map.deinit(testing.allocator);
++    try map.assign(testing.io);
++    try testing.expectError(error.UnknownGeneration, map.apply(&.{ &first, &second }));
++    try testing.expectEqual(@as(u64, 100), first.generation);
++    try testing.expectEqual(@as(u64, 999), second.generation);
++    try testing.expectError(error.InvalidSnapshot, map.apply(&.{ &first, &first }));
++    try testing.expectEqual(@as(u64, 100), first.generation);
++    second.generation = 100;
++    try map.apply(&.{ &first, &second });
++    try testing.expectEqual(first.generation, second.generation);
++}
++
++fn prepareFailing(alloc: Allocator) !void {
++    var map = try Mapping.prepare(alloc, &.{ 3, 2, 1, 3, 0 }, 5);
++    defer map.deinit(alloc);
++}
++
++test "generation snapshot allocation and reference budgets" {
++    const testing = std.testing;
++    try testing.checkAllAllocationFailures(testing.allocator, prepareFailing, .{});
++    try testing.expectError(error.LimitExceeded, Mapping.prepare(testing.failing_allocator, &.{ 1, 1 }, 1));
++    var s: Storage = .{};
++    try testing.expectError(error.LimitExceeded, Mapping.fromStorage(testing.failing_allocator, &.{&s}, &.{0}, 1));
++    var empty = try Mapping.prepare(testing.failing_allocator, &.{}, 0);
++    defer empty.deinit(testing.failing_allocator);
++    try empty.assign(testing.io);
++    try empty.apply(&.{&s});
++    try testing.expectEqual(@as(u64, 0), s.generation);
++}
++
++test "generation snapshot rejects shallow map ownership before writes" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    var first: Storage = .{ .generation = 100 };
++    defer first.images.deinit(alloc);
++    try first.images.put(alloc, 1, .{ .id = 1, .generation = 100 });
++    var shallow = first;
++    var map = try Mapping.fromStorage(alloc, &.{ &first, &shallow }, &.{}, 4);
++    defer map.deinit(alloc);
++    try map.assign(testing.io);
++    try testing.expectError(error.InvalidSnapshot, map.apply(&.{ &first, &shallow }));
++    try testing.expectEqual(@as(u64, 100), first.generation);
++    try testing.expectEqual(@as(u64, 100), shallow.generation);
++    try testing.expectEqual(@as(u64, 100), first.images.get(1).?.generation);
++}
++
++test "generation snapshot pending tokens preserve completion authority" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const Terminal = @import("../Terminal.zig");
++    var t = try Terminal.init(testing.io, alloc, .{ .rows = 4, .cols = 8 });
++    defer t.deinit(alloc);
++    const s = &t.screens.active.kitty_images;
++    const stale = try s.addPendingImage(testing.io, alloc, t.screens.active, .{ .id = 1, .data = .{ .pending = 0 } });
++    const live = try s.addPendingImage(testing.io, alloc, t.screens.active, .{ .id = 1, .data = .{ .pending = 0 } });
++    var map = try Mapping.fromStorage(alloc, &.{s}, &.{ stale.generation, live.generation }, 4);
++    defer map.deinit(alloc);
++    try map.assign(testing.io);
++    try map.apply(&.{s});
++    const stale_destination: Storage.PendingImage = .{ .id = 1, .generation = try map.translate(stale.generation) };
++    const live_destination: Storage.PendingImage = .{ .id = 1, .generation = try map.translate(live.generation) };
++    try testing.expect(!stale_destination.complete(s, testing.io, ""));
++    try testing.expect(live_destination.complete(s, testing.io, ""));
++    try testing.expectEqual(live_destination.generation, s.images.get(1).?.generation);
++    try testing.expect(s.generation > live_destination.generation);
++    try testing.expect(!live_destination.complete(s, testing.io, ""));
++}
++
++test "generation snapshot preserves eviction age and number lookup" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const Terminal = @import("../Terminal.zig");
++    var t = try Terminal.init(testing.io, alloc, .{ .rows = 4, .cols = 8 });
++    defer t.deinit(alloc);
++    const s = &t.screens.active.kitty_images;
++    for ([_]u32{ 2, 1 }) |id| {
++        const pixels = try alloc.dupe(u8, "RGB");
++        errdefer alloc.free(pixels);
++        try s.addImage(testing.io, alloc, t.screens.active, .{ .id = id, .number = 7, .width = 1, .height = 1, .format = .rgb, .data = .{ .complete = pixels } });
++    }
++    var map = try Mapping.fromStorage(alloc, &.{s}, &.{}, 3);
++    defer map.deinit(alloc);
++    try map.assign(testing.io);
++    try map.apply(&.{s});
++    try testing.expectEqual(@as(u32, 1), s.imagePtrByIdOrNumber(0, 7).?.id);
++    s.setLimit(testing.io, alloc, t.screens.active, 3);
++    try testing.expect(s.imageById(2) == null);
++    try testing.expect(s.imageById(1) != null);
++}
++
++test "generation snapshot live and stale frame continuation" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const Terminal = @import("../Terminal.zig");
++    const command = @import("graphics_command.zig");
++    const execute = @import("graphics_exec.zig").execute;
++    for ([_]bool{ false, true }) |stale| {
++        var t = try Terminal.init(testing.io, alloc, .{ .rows = 4, .cols = 8 });
++        defer t.deinit(alloc);
++        const s = &t.screens.active.kitty_images;
++        const root = try command.Parser.parseString(alloc, "a=t,f=24,s=2,v=1,i=1;////////");
++        defer root.deinit(alloc);
++        try testing.expect(execute(testing.io, alloc, &t, &root).?.ok());
++        const first = try command.Parser.parseString(alloc, "a=f,i=1,f=24,s=2,v=1,m=1;/wAA");
++        defer first.deinit(alloc);
++        try testing.expect(execute(testing.io, alloc, &t, &first) == null);
++        if (stale) s.markImageContentChanged(testing.io, s.imagePtrByIdOrNumber(1, 0).?);
++        var map = try Mapping.fromStorage(alloc, &.{s}, &.{}, 3);
++        defer map.deinit(alloc);
++        try map.assign(testing.io);
++        try map.apply(&.{s});
++        const last = try command.Parser.parseString(alloc, "a=f,m=0;AAD/");
++        defer last.deinit(alloc);
++        try testing.expectEqual(!stale, execute(testing.io, alloc, &t, &last).?.ok());
++        try testing.expect(s.loading == null);
++    }
++}
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics.zig b/vendor/libghostty-vt/src/terminal/kitty/graphics.zig
+index a92b5b50..f91c1417 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/graphics.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/graphics.zig
+@@ -11,6 +11,8 @@
+ //! aim to ship a v1 of this implementation came at some cost. I learned a lot
+ //! though and I think we can go back through and fix this up.
+
++pub const generation_snapshot = @import("generation_snapshot.zig");
++
+ const render = @import("graphics_render.zig");
+ const command = @import("graphics_command.zig");
+ const exec = @import("graphics_exec.zig");
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig b/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
+index 2526b57a..eb78e157 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
+@@ -38,6 +38,13 @@ pub fn nextGeneration(io: std.Io) u64 {
+     return generation_counter.next(io);
+ }
+
++/// Atomically reserve a nonempty contiguous range for snapshot rebinding.
++/// Returns its first stamp, or null without mutation when exhausted or empty.
++/// Ordinary mutation retains its existing single-stamp fast path.
++pub fn reserveGenerations(io: std.Io, count: u64) ?u64 {
++    return generation_counter.reserve(io, count);
++}
++
+ /// Backing implementation for the generation counter. We use a
+ /// lock-free atomic counter where we can, but not all targets support
+ /// 64-bit atomic operations (e.g. 32-bit ARM Android), so we fall back
+@@ -47,17 +54,41 @@ pub fn nextGeneration(io: std.Io) u64 {
+ /// The pointer-width check is a conservative proxy for 64-bit atomic
+ /// support: every 64-bit target supports 64-bit atomics, while 32-bit
+ /// targets may not (per the compiler's atomic operand validation).
+-const GenerationCounter = if (@bitSizeOf(usize) >= 64) struct {
++const GenerationCounter = if (@bitSizeOf(usize) >= 64) AtomicGenerationCounter else LockedGenerationCounter;
++
++const AtomicGenerationCounter = struct {
+     value: std.atomic.Value(u64) = .init(0),
+
++    fn reserve(self: *@This(), io: std.Io, count: u64) ?u64 {
++        _ = io;
++        if (count == 0) return null;
++        var previous = self.value.load(.monotonic);
++        while (true) {
++            const last = std.math.add(u64, previous, count) catch return null;
++            previous = self.value.cmpxchgWeak(previous, last, .monotonic, .monotonic) orelse return previous + 1;
++        }
++    }
++
+     fn next(self: *@This(), io: std.Io) u64 {
+         _ = io;
+         return self.value.fetchAdd(1, .monotonic) + 1;
+     }
+-} else struct {
++};
++
++const LockedGenerationCounter = struct {
+     mutex: std.Io.Mutex = .init,
+     value: u64 = 0,
+
++    fn reserve(self: *@This(), io: std.Io, count: u64) ?u64 {
++        if (count == 0) return null;
++        self.mutex.lockUncancelable(io);
++        defer self.mutex.unlock(io);
++        const last = std.math.add(u64, self.value, count) catch return null;
++        const first = self.value + 1;
++        self.value = last;
++        return first;
++    }
++
+     fn next(self: *@This(), io: std.Io) u64 {
+         self.mutex.lockUncancelable(io);
+         defer self.mutex.unlock(io);
+@@ -66,6 +97,47 @@ const GenerationCounter = if (@bitSizeOf(usize) >= 64) struct {
+     }
+ };
+
++test "generation snapshot reservation exhaustion is atomic" {
++    const testing = std.testing;
++    // Exercise the mutex fallback on 64-bit hosts as well as its native target.
++    inline for (if (@bitSizeOf(usize) >= 64) .{ AtomicGenerationCounter, LockedGenerationCounter } else .{LockedGenerationCounter}) |Counter| {
++        var counter: Counter = .{};
++        try testing.expect(counter.reserve(testing.io, 0) == null);
++        try testing.expectEqual(@as(?u64, 1), counter.reserve(testing.io, 3));
++        try testing.expectEqual(@as(u64, 4), counter.next(testing.io));
++        try testing.expect(counter.reserve(testing.io, std.math.maxInt(u64)) == null);
++        try testing.expectEqual(@as(?u64, 5), counter.reserve(testing.io, std.math.maxInt(u64) - 4));
++        try testing.expect(counter.reserve(testing.io, 1) == null);
++    }
++}
++
++test "generation snapshot reservations interleave with native mutations" {
++    if (@import("builtin").single_threaded) return error.SkipZigTest;
++    inline for (if (@bitSizeOf(usize) >= 64) .{ AtomicGenerationCounter, LockedGenerationCounter } else .{LockedGenerationCounter}) |Counter| {
++        var counter: Counter = .{};
++        var results: [4][256]u64 = undefined;
++        const Worker = struct {
++            fn run(c: *Counter, values: *[256]u64) void {
++                for (0..64) |i| {
++                    const first = c.reserve(std.testing.io, 3).?;
++                    for (0..3) |j| values[i * 4 + j] = first + j;
++                    values[i * 4 + 3] = c.next(std.testing.io);
++                }
++            }
++        };
++        var threads: [4]?std.Thread = @splat(null);
++        defer for (threads) |thread| if (thread) |t| t.join();
++        for (&threads, 0..) |*thread, i| thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &counter, &results[i] });
++        for (&threads) |*thread| {
++            thread.*.?.join();
++            thread.* = null;
++        }
++        const flat = std.mem.bytesAsSlice(u64, std.mem.asBytes(&results));
++        std.mem.sort(u64, flat, {}, std.sort.asc(u64));
++        for (flat, 1..) |value, expected| try std.testing.expectEqual(@as(u64, @intCast(expected)), value);
++    }
++}
++
+ /// An image storage is associated with a terminal screen (i.e. main
+ /// screen, alt screen) and contains all the transmitted images and
+ /// placements.

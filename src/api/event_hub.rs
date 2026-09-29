@@ -1,12 +1,24 @@
 #[derive(Clone, Default)]
 pub struct EventHub {
     inner: std::sync::Arc<std::sync::Mutex<EventHubState>>,
+    workspace_git_interests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]
 struct EventHubState {
     next_sequence: u64,
+    next_notification_subscriber: u64,
+    notification_subscribers: std::collections::HashMap<
+        u64,
+        std::sync::mpsc::SyncSender<crate::api::schema::EventEnvelope>,
+    >,
     events: Vec<(u64, crate::api::schema::EventEnvelope)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EventHistoryError {
+    Lost,
+    Unavailable,
 }
 
 impl EventHub {
@@ -37,10 +49,226 @@ impl EventHub {
             .collect()
     }
 
+    pub(super) fn events_after_checked(
+        &self,
+        sequence: u64,
+    ) -> Result<Vec<(u64, crate::api::schema::EventEnvelope)>, EventHistoryError> {
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| EventHistoryError::Unavailable)?;
+        if state
+            .events
+            .first()
+            .is_some_and(|(first, _)| sequence < first.saturating_sub(1))
+        {
+            return Err(EventHistoryError::Lost);
+        }
+        Ok(state
+            .events
+            .iter()
+            .filter(|(event_sequence, _)| *event_sequence > sequence)
+            .cloned()
+            .collect())
+    }
+
     pub fn current_sequence(&self) -> u64 {
         let Ok(state) = self.inner.lock() else {
             return 0;
         };
         state.next_sequence
+    }
+}
+
+/// A delivery sink exists only while its subscription connection is alive.
+pub(crate) struct SemanticNotificationSubscription {
+    hub: EventHub,
+    id: u64,
+    receiver: std::sync::mpsc::Receiver<crate::api::schema::EventEnvelope>,
+}
+
+impl SemanticNotificationSubscription {
+    pub(crate) fn poll(&self) -> Option<crate::api::schema::EventEnvelope> {
+        self.receiver.try_recv().ok()
+    }
+}
+
+impl Drop for SemanticNotificationSubscription {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.hub.inner.lock() {
+            state.notification_subscribers.remove(&self.id);
+        }
+    }
+}
+
+impl EventHub {
+    pub(crate) fn subscribe_semantic_notifications(&self) -> SemanticNotificationSubscription {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(Self::MAX_EVENTS);
+        let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        state.next_notification_subscriber += 1;
+        let id = state.next_notification_subscriber;
+        state.notification_subscribers.insert(id, sender);
+        SemanticNotificationSubscription {
+            hub: self.clone(),
+            id,
+            receiver,
+        }
+    }
+
+    pub(crate) fn has_semantic_notification_subscribers(&self) -> bool {
+        self.inner
+            .lock()
+            .is_ok_and(|state| !state.notification_subscribers.is_empty())
+    }
+
+    /// Success means at least one live sink accepted this bounded event.
+    pub(crate) fn publish_semantic_notification(
+        &self,
+        notification: crate::api::schema::SemanticNotificationEvent,
+    ) -> bool {
+        let event = crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::NotificationSemantic,
+            data: crate::api::schema::EventData::NotificationSemantic { notification },
+        };
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        let mut delivered = false;
+        state
+            .notification_subscribers
+            .retain(|_, sender| match sender.try_send(event.clone()) {
+                Ok(()) => {
+                    delivered = true;
+                    true
+                }
+                Err(std::sync::mpsc::TrySendError::Full(_)) => true,
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
+            });
+        delivered
+    }
+}
+
+/// Keeps periodic Git metadata refresh active only for this subscription's lifetime.
+pub(crate) struct WorkspaceGitInterest(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for WorkspaceGitInterest {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl EventHub {
+    pub(crate) fn workspace_git_interest(&self) -> WorkspaceGitInterest {
+        self.workspace_git_interests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        WorkspaceGitInterest(self.workspace_git_interests.clone())
+    }
+
+    pub(crate) fn has_workspace_git_interest(&self) -> bool {
+        self.workspace_git_interests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use crate::api::schema::{EventData, EventEnvelope, EventKind};
+
+    fn notification() -> crate::api::schema::SemanticNotificationEvent {
+        crate::api::schema::SemanticNotificationEvent {
+            kind: crate::api::schema::SemanticNotificationKind::Custom,
+            title: "event".into(),
+            body: None,
+            sound: None,
+            agent: None,
+            workspace_id: None,
+            tab_id: None,
+            pane_id: None,
+            terminal_id: None,
+            position: None,
+        }
+    }
+
+    fn event() -> EventEnvelope {
+        EventEnvelope {
+            event: EventKind::WorkspaceFocused,
+            data: EventData::WorkspaceFocused {
+                workspace_id: "workspace_1".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn semantic_notification_sinks_are_bounded_ephemeral_and_scoped() {
+        let hub = EventHub::default();
+        assert!(!hub.publish_semantic_notification(notification()));
+        let subscription = hub.subscribe_semantic_notifications();
+        assert!(
+            subscription.poll().is_none(),
+            "new subscriptions must not replay old notifications"
+        );
+        for _ in 0..EventHub::MAX_EVENTS {
+            assert!(hub.publish_semantic_notification(notification()));
+        }
+        assert!(
+            !hub.publish_semantic_notification(notification()),
+            "full sink must not claim delivery"
+        );
+        assert!(subscription.poll().is_some());
+        assert!(hub.publish_semantic_notification(notification()));
+        let second = hub.subscribe_semantic_notifications();
+        assert!(second.poll().is_none());
+        assert!(
+            hub.publish_semantic_notification(notification()),
+            "one full sink must not block another"
+        );
+        assert!(second.poll().is_some());
+        drop(subscription);
+        drop(second);
+        assert!(!hub.has_semantic_notification_subscribers());
+        assert!(!hub.publish_semantic_notification(notification()));
+        assert!(
+            hub.events_after(0).is_empty(),
+            "semantic events are not historical lifecycle events"
+        );
+    }
+
+    #[test]
+    fn checked_history_distinguishes_retained_boundary_from_lost_events() {
+        let hub = EventHub::default();
+        assert!(hub.events_after_checked(0).unwrap().is_empty());
+        for _ in 0..EventHub::MAX_EVENTS {
+            hub.push(event());
+        }
+        assert_eq!(
+            hub.events_after_checked(0).unwrap().len(),
+            EventHub::MAX_EVENTS
+        );
+        hub.push(event());
+        assert_eq!(hub.events_after_checked(0), Err(EventHistoryError::Lost));
+        let retained = hub.events_after_checked(1).unwrap();
+        assert_eq!(retained.len(), EventHub::MAX_EVENTS);
+        assert_eq!(retained.first().unwrap().0, 2);
+        assert_eq!(retained.last().unwrap().0, hub.current_sequence());
+        assert!(hub
+            .events_after_checked(hub.current_sequence())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn checked_history_reports_unavailable_instead_of_empty_after_poison() {
+        let hub = EventHub::default();
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = hub.inner.lock().unwrap();
+            panic!("poison the test event history");
+        })
+        .is_err());
+        assert_eq!(
+            hub.events_after_checked(0),
+            Err(EventHistoryError::Unavailable)
+        );
     }
 }

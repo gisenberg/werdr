@@ -6,6 +6,7 @@ use bytes::Bytes;
 use ratatui::{layout::Rect, Frame};
 use tokio::sync::{mpsc, Notify};
 
+#[cfg(all(test, unix))]
 use crate::events::AppEvent;
 use crate::layout::PaneId;
 
@@ -16,9 +17,114 @@ use crate::layout::PaneId;
 /// type instead of the pane module's implementation detail.
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
+/// Exclusive terminal-only pause. The registry borrow prevents mutation while
+/// an owner captures several runtimes together; this is not process ownership.
+#[cfg(unix)]
+pub(crate) struct TerminalCaptureGuard<'a>(crate::pane::TerminalDraftPause<'a>);
+
+#[cfg(unix)]
+impl TerminalCaptureGuard<'_> {
+    pub(crate) fn snapshot(
+        &self,
+        limits: crate::pane::DraftLimits,
+    ) -> Result<crate::pane::PaneStateDraft, String> {
+        self.0.snapshot(limits)
+    }
+
+    pub(crate) async fn resume(self) -> Result<(), String> {
+        self.0.resume().await
+    }
+}
+
 impl TerminalRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_set_process_shutdown_probe(
+        &mut self,
+        probe: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        self.0.test_set_process_shutdown_probe(probe);
+    }
+    // Process-local evidence only, not a cross-process child reaper lease.
+    pub(crate) fn exit_record(&self) -> crate::pane::ExitRecord {
+        self.0.exit_record()
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_manual_actor(
+    ) -> (Self, impl FnMut(), std::os::unix::net::UnixStream) {
+        let (runtime, pump, peer) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_manual_actor();
+        (Self(runtime), pump, peer)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_actor() -> (
+        Self,
+        crate::pty::actor::PtyIoActorHandle,
+        std::os::unix::net::UnixStream,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (runtime, actor, peer, reads) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_actor();
+        (Self(runtime), actor, peer, reads)
+    }
+    #[cfg(unix)]
+    pub(crate) async fn pause_for_terminal_capture(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<TerminalCaptureGuard<'_>, String> {
+        crate::pane::TerminalDraftPause::begin(&mut self.0, timeout)
+            .await
+            .map(TerminalCaptureGuard)
+    }
+    #[cfg(unix)]
+    pub(crate) fn capture_identity(&self) -> crate::pane::CaptureIdentity {
+        self.0.capture_identity()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn matches_capture_identity(&self, identity: &crate::pane::CaptureIdentity) -> bool {
+        self.0.matches_capture_identity(identity)
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn capture_terminal_state_draft(
+        &mut self,
+        limits: crate::pane::DraftLimits,
+        timeout: std::time::Duration,
+    ) -> Result<crate::pane::PaneStateDraft, String> {
+        self.0.capture_terminal_state_draft(limits, timeout).await
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture(bytes: &[u8]) -> Self {
+        Self(crate::pane::PaneRuntime::test_for_draft_capture(bytes))
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_delayed_detector(
+        bytes: &[u8],
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let (runtime, release) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_delayed_detector(bytes);
+        (Self(runtime), release)
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_for_draft_capture_with_publishing_detector(
+        events: crate::events::AppEventSender,
+        publication: Vec<AppEvent>,
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let (runtime, release) =
+            crate::pane::PaneRuntime::test_for_draft_capture_with_publishing_detector(
+                b"kept",
+                Some((events, publication)),
+            );
+        (Self(runtime), release)
     }
 
     #[cfg(unix)]
@@ -65,7 +171,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -93,7 +199,7 @@ impl TerminalRuntime {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &crate::pane::PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -127,7 +233,7 @@ impl TerminalRuntime {
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &crate::pane::PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -162,7 +268,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -197,7 +303,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -249,6 +355,10 @@ impl TerminalRuntime {
         self.0.set_full_lifecycle_authority_active(active);
     }
 
+    pub fn set_self_reported_agent_active(&self, active: bool) {
+        self.0.set_self_reported_agent_active(active);
+    }
+
     pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
         self.0.resize(rows, cols, cell_width_px, cell_height_px);
     }
@@ -270,12 +380,20 @@ impl TerminalRuntime {
         self.0.scroll_reset();
     }
 
+    pub fn clear_screen(&self) -> Result<(), String> {
+        self.0.clear_screen()
+    }
+
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
         self.0.set_scroll_offset_from_bottom(lines);
     }
 
     pub fn scroll_metrics(&self) -> Option<crate::pane::ScrollMetrics> {
         self.0.scroll_metrics()
+    }
+
+    pub fn scroll_state(&self) -> Option<(crate::pane::ScrollMetrics, bool)> {
+        self.0.scroll_state()
     }
 
     pub(crate) fn search_text_window(
@@ -348,6 +466,10 @@ impl TerminalRuntime {
         self.0.synchronized_output_active()
     }
 
+    pub(crate) fn synchronized_output_state(&self) -> (bool, u64) {
+        self.0.synchronized_output_state()
+    }
+
     pub fn visible_text(&self) -> String {
         self.0.visible_text()
     }
@@ -411,20 +533,29 @@ impl TerminalRuntime {
         self.0.render(frame, area, show_cursor);
     }
 
-    pub(crate) fn collect_dirty_patch(
+    pub(crate) fn collect_dirty_patch_snapshot(
         &self,
         area_width: u16,
         area_height: u16,
-    ) -> crate::pane::TerminalDirtyPatchOutcome {
-        self.0.collect_dirty_patch(area_width, area_height)
+    ) -> Option<crate::pane::TerminalDirtyPatchSnapshot> {
+        self.0.collect_dirty_patch_snapshot(area_width, area_height)
     }
 
     pub fn visible_hyperlinks(&self, area: Rect) -> Vec<((u16, u16), String, String)> {
         self.0.visible_hyperlinks(area)
     }
 
-    pub(crate) fn kitty_graphics_may_have_placements(&self) -> bool {
-        self.0.kitty_graphics_may_have_placements()
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.0.link_regions_at(col, row, resolve)
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.0.link_target_at(col, row)
     }
 
     pub fn kitty_image_placements_with_data_filter<F>(
@@ -435,6 +566,10 @@ impl TerminalRuntime {
         F: FnMut(crate::ghostty::KittyImageDescriptor) -> bool,
     {
         self.0.kitty_image_placements_with_data_filter(needs_data)
+    }
+
+    pub(crate) fn kitty_image_fingerprints(&self, image_ids: &[u32]) -> Vec<Option<u64>> {
+        self.0.kitty_image_fingerprints(image_ids)
     }
 
     pub fn keyboard_protocol(&self) -> crate::input::KeyboardProtocol {
@@ -549,6 +684,10 @@ impl TerminalRuntime {
         self.0.cwd()
     }
 
+    pub fn cwd_for_persistence(&self) -> Option<std::path::PathBuf> {
+        self.0.cwd_for_persistence()
+    }
+
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
         self.0.follow_cwd()
     }
@@ -572,6 +711,18 @@ impl TerminalRuntime {
 
 #[cfg(test)]
 impl TerminalRuntime {
+    #[cfg(unix)]
+    pub(crate) fn test_enable_kitty_source_forwarding(&self) {
+        self.0.test_enable_kitty_source_forwarding();
+    }
+
+    pub(crate) fn test_contend_during_dirty_collection(
+        &self,
+        bytes: Vec<u8>,
+    ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
+        self.0.test_contend_during_dirty_collection(bytes)
+    }
+
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
         let (runtime, rx) = crate::pane::PaneRuntime::test_with_channel(cols, rows);
         (Self(runtime), rx)

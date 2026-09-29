@@ -20,7 +20,6 @@ pub struct GitStatusRefreshDemand {
 }
 
 impl GitStatusRefreshDemand {
-    #[cfg(test)]
     pub const ALL: Self = Self {
         branch: true,
         ahead_behind: true,

@@ -1,5 +1,16 @@
 use super::App;
 
+/// This identity is neither persisted nor transferred during runtime handoff.
+/// Missing entropy disables JSON clients' optional same-boot optimizations.
+pub(super) fn new_runtime_boot_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    if let Err(error) = getrandom::fill(&mut bytes) {
+        tracing::warn!(%error, "runtime boot identity unavailable");
+        return None;
+    }
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 impl App {
     pub(crate) fn find_pane(
         &self,

@@ -1,0 +1,238 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index 6404af53..c45672ab 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -2446,6 +2446,29 @@ GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track(
+     GhosttyPoint point,
+     GhosttyTrackedGridRef *out_ref);
+ 
++/**
++ * Track a point on an existing selected screen without activating it.
++ * Missing screens, invalid screen identifiers and out-of-range points return
++ * GHOSTTY_INVALID_VALUE. Allocation and ownership match grid_ref_track.
++ * The screen is never initialized as a side effect.
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track_screen(
++    GhosttyTerminal terminal,
++    GhosttyTerminalScreen screen,
++    GhosttyPoint point,
++    GhosttyTrackedGridRef *out_ref);
++
++/**
++ * Export the owning screen and full-screen coordinate of a tracked reference.
++ * Does not change the active screen, viewport or reference. Null references
++ * return GHOSTTY_INVALID_VALUE; stale or garbage references return GHOSTTY_NO_VALUE.
++ * Output pointers may be NULL and are written only on success.
++ */
++GHOSTTY_API GhosttyResult ghostty_tracked_grid_ref_screen_point(
++    GhosttyTrackedGridRef ref,
++    GhosttyTerminalScreen *out_screen,
++    GhosttyPointCoordinate *out_point);
++
+ /**
+  * Convert a grid reference back to a point in the given coordinate system.
+  *
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index 5737f70e..bd77c582 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -371,6 +371,7 @@ comptime {
+         }
+         if (features.grid_introspection) {
+             @export(&c.terminal_grid_ref_track, .{ .name = "ghostty_terminal_grid_ref_track" });
++            @export(&c.terminal_grid_ref_track_screen, .{ .name = "ghostty_terminal_grid_ref_track_screen" });
+         }
+         if (features.snapshot) {
+             @export(&c.snapshot_encode, .{ .name = "ghostty_snapshot_encode" });
+@@ -413,6 +414,7 @@ comptime {
+             @export(&c.tracked_grid_ref_free, .{ .name = "ghostty_tracked_grid_ref_free" });
+             @export(&c.tracked_grid_ref_has_value, .{ .name = "ghostty_tracked_grid_ref_has_value" });
+             @export(&c.tracked_grid_ref_point, .{ .name = "ghostty_tracked_grid_ref_point" });
++            @export(&c.tracked_grid_ref_screen_point, .{ .name = "ghostty_tracked_grid_ref_screen_point" });
+             @export(&c.tracked_grid_ref_set, .{ .name = "ghostty_tracked_grid_ref_set" });
+         }
+         if (features.grid_introspection and features.snapshot) {
+diff --git a/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig b/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
+index a4f1b36f..b6a9658b 100644
+--- a/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
++++ b/vendor/libghostty-vt/src/terminal/c/grid_ref_tracked.zig
+@@ -95,6 +95,101 @@ pub fn tracked_grid_ref_set(
+     return .success;
+ }
+ 
++/// Export a stable coordinate without changing the active screen or viewport.
++pub fn tracked_grid_ref_screen_point(
++    ref_: CTrackedGridRef,
++    out_screen: ?*terminal_c.TerminalScreen,
++    out_point: ?*point.Coordinate,
++) callconv(lib.calling_conv) Result {
++    const ref = ref_ orelse return .invalid_value;
++    const list = ref.pageList() orelse return .no_value;
++    if (ref.pin.garbage) return .no_value;
++    const pt = list.pointFromPin(.screen, ref.pin.*) orelse return .no_value;
++    if (out_screen) |out| out.* = ref.screen_key;
++    if (out_point) |out| out.* = pt.coord();
++    return .success;
++}
++
++test "tracked observer snapshot explicit screen and mixed page widths" {
++    var terminal: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 20, 4));
++    defer terminal_c.free(terminal);
++    const t = terminal.?.terminal;
++    const list = &t.screens.active.pages;
++    // Model a retained wide page while the current grid is narrower.
++    // Restore the dimension before terminal destruction.
++    list.cols = 8;
++    defer list.cols = 20;
++    var ref: CTrackedGridRef = null;
++    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
++        terminal,
++        0,
++        point.Point.cval(.{ .screen = .{ .x = 13, .y = 0 } }),
++        &ref,
++    ));
++    defer tracked_grid_ref_free(ref);
++    var screen: terminal_c.TerminalScreen = undefined;
++    var coord: point.Coordinate = undefined;
++    try testing.expectEqual(Result.success, tracked_grid_ref_screen_point(ref, &screen, &coord));
++    try testing.expectEqual(terminal_c.TerminalScreen.primary, screen);
++    try testing.expectEqual(@as(u16, 13), coord.x);
++    try testing.expectEqual(Result.success, tracked_grid_ref_screen_point(ref, null, null));
++    var invalid: CTrackedGridRef = null;
++    try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track(
++        terminal,
++        point.Point.cval(.{ .screen = .{ .x = 13, .y = 0 } }),
++        &invalid,
++    ));
++    for ([_]c_int{ -1, 1, 2 }) |key| {
++        try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track_screen(
++            terminal,
++            key,
++            point.Point.cval(.{ .screen = .{} }),
++            &invalid,
++        ));
++        try testing.expect(invalid == null);
++    }
++    try testing.expectEqual(Result.invalid_value, terminal_c.grid_ref_track_screen(
++        terminal,
++        0,
++        point.Point.cval(.{ .screen = .{} }),
++        null,
++    ));
++    try testing.expect(t.screens.get(.alternate) == null);
++    try testing.expectEqual(terminal_c.TerminalScreen.primary, t.screens.active_key);
++}
++
++test "tracked observer snapshot removed screen generation and pruned pin" {
++    var terminal: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 20, 4));
++    defer terminal_c.free(terminal);
++    terminal_c.vt_write(terminal, "\x1b[?1049h", 8);
++    var ref: CTrackedGridRef = null;
++    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
++        terminal,
++        1,
++        point.Point.cval(.{ .screen = .{} }),
++        &ref,
++    ));
++    defer tracked_grid_ref_free(ref);
++    const t = terminal.?.terminal;
++    t.screens.switchTo(.primary);
++    t.screens.remove(t.gpa(), .alternate);
++    terminal_c.vt_write(terminal, "\x1b[?1049h", 8);
++    try testing.expectEqual(Result.no_value, tracked_grid_ref_screen_point(ref, null, null));
++    var valid: CTrackedGridRef = null;
++    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_screen(
++        terminal,
++        0,
++        point.Point.cval(.{ .screen = .{} }),
++        &valid,
++    ));
++    defer tracked_grid_ref_free(valid);
++    // Garbage is the native state of a pruned reference.
++    valid.?.pin.garbage = true;
++    try testing.expectEqual(Result.no_value, tracked_grid_ref_screen_point(valid, null, null));
++}
++
+ test "tracked_grid_ref snapshots after terminal scroll" {
+     var terminal: terminal_c.Terminal = null;
+     try testing.expectEqual(Result.success, terminal_c.new(
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index 7b63a126..e0d7b5c1 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -229,6 +229,7 @@ pub const search_get = search.get;
+ pub const search_get_multi = search.get_multi;
+ pub const terminal_grid_ref = terminal.grid_ref;
+ pub const terminal_grid_ref_track = terminal.grid_ref_track;
++pub const terminal_grid_ref_track_screen = terminal.grid_ref_track_screen;
+ pub const terminal_point_from_grid_ref = terminal.point_from_grid_ref;
+ 
+ pub const snapshot_encode = snapshot.encode;
+@@ -257,6 +258,7 @@ pub const grid_ref_style = grid_ref.grid_ref_style;
+ pub const tracked_grid_ref_free = grid_ref_tracked.tracked_grid_ref_free;
+ pub const tracked_grid_ref_has_value = grid_ref_tracked.tracked_grid_ref_has_value;
+ pub const tracked_grid_ref_point = grid_ref_tracked.tracked_grid_ref_point;
++pub const tracked_grid_ref_screen_point = grid_ref_tracked.tracked_grid_ref_screen_point;
+ pub const tracked_grid_ref_set = grid_ref_tracked.tracked_grid_ref_set;
+ pub const tracked_grid_ref_snapshot = grid_ref_tracked.tracked_grid_ref_snapshot;
+ 
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index bf42e8f4..cef91872 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1825,14 +1825,40 @@ pub fn grid_ref_track(
+     terminal_: Terminal,
+     pt: point.Point.C,
+     out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
++) callconv(lib.calling_conv) Result {
++    const wrapper = terminal_ orelse return .invalid_value;
++    // Preserve the active-screen API's current-width bounds.
++    if (point.Point.fromC(pt).coord().x >= wrapper.terminal.screens.active.pages.cols) {
++        if (out_ref) |out| out.* = null;
++        return .invalid_value;
++    }
++    return grid_ref_track_screen(terminal_, @intFromEnum(wrapper.terminal.screens.active_key), pt, out_ref);
++}
++
++pub fn grid_ref_track_screen(
++    terminal_: Terminal,
++    screen_raw: c_int,
++    pt: point.Point.C,
++    out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
+ ) callconv(lib.calling_conv) Result {
+     const wrapper = terminal_ orelse return .invalid_value;
+     const out = out_ref orelse return .invalid_value;
+     out.* = null;
+ 
+     const t: *ZigTerminal = wrapper.terminal;
+-    const list = &t.screens.active.pages;
+-    const p = list.pin(.fromC(pt)) orelse return .invalid_value;
++    const key = std.enums.fromInt(TerminalScreen, screen_raw) orelse return .invalid_value;
++    const screen = t.screens.get(key) orelse return .invalid_value;
++    const list = &screen.pages;
++    const requested = point.Point.fromC(pt);
++    const p = if (requested == .screen) value: {
++        // Historical pages may retain widths different from the current grid.
++        // Resolve full-screen coordinates against the addressed page, matching
++        // the coordinate exported from an existing tracked reference.
++        var pin = list.getTopLeft(.screen).down(requested.screen.y) orelse return .invalid_value;
++        if (requested.screen.x >= pin.node.cols()) return .invalid_value;
++        pin.x = requested.screen.x;
++        break :value pin;
++    } else list.pin(requested) orelse return .invalid_value;
+     const tracked_pin = list.trackPin(p) catch return .out_of_memory;
+ 
+     const alloc = t.gpa();
+@@ -1843,8 +1869,8 @@ pub fn grid_ref_track(
+     ref.* = .{
+         .alloc = alloc,
+         .terminal = wrapper,
+-        .screen_key = t.screens.active_key,
+-        .screen_generation = t.screens.generation(t.screens.active_key),
++        .screen_key = key,
++        .screen_generation = t.screens.generation(key),
+         .pin = tracked_pin,
+     };
+ 

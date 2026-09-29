@@ -1,0 +1,47 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index a3bece43..c3fa9875 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -363,23 +363,39 @@ export class CanvasRenderer {
+     // Use font-level metrics (fontBoundingBox) rather than glyph-specific metrics.
+     // This ensures cells accommodate ALL glyphs including powerline chars (U+E0B0-U+E0BF)
+     // which are designed to fill the full cell height. Fall back to actual metrics.
+-    const ascent =
++    let ascent =
+       widthMetrics.fontBoundingBoxAscent ||
+       widthMetrics.actualBoundingBoxAscent ||
+       this.fontSize * 0.8;
+-    const descent =
++    let descent =
+       widthMetrics.fontBoundingBoxDescent ||
+       widthMetrics.actualBoundingBoxDescent ||
+       this.fontSize * 0.2;
+
++    // Browser font boxes can under-report actual ink (for example, an
++    // underscore can extend below fontBoundingBoxDescent). Measure printable
++    // ASCII in every supported style so the next row cannot erase that ink.
++    // This runs only when measuring a font, never in the per-cell paint loop.
++    const sample = Array.from({ length: 95 }, (_, index) =>
++      String.fromCharCode(index + 32)
++    ).join('');
++    for (const style of ['', 'bold ', 'italic ', 'italic bold ']) {
++      ctx.font = this.buildFontString(style);
++      const ink = ctx.measureText(sample);
++      ascent = Math.max(ascent, ink.actualBoundingBoxAscent || 0);
++      descent = Math.max(descent, ink.actualBoundingBoxDescent || 0);
++    }
++
+     // Round to device pixels so cell boundaries fall on exact physical pixels at any DPR.
+     // Non-integer DPR values (1.25, 1.5, 1.75) otherwise produce fractional coordinates
+     // at cell edges, causing the canvas rasteriser to antialias clearRect/fillRect edges
+     // and create thin seams between cells on alpha:true canvases.
+     const dpr = this.devicePixelRatio;
+     const width = Math.ceil(widthMetrics.width * dpr) / dpr;
+-    const height = Math.ceil((ascent + descent) * dpr) / dpr;
+     const baseline = Math.ceil(ascent * dpr) / dpr;
++    // Baseline rounding consumes space too; rounding only the sum can leave
++    // fractional-DPR descenders outside the allocated cell.
++    const height = baseline + Math.ceil(descent * dpr) / dpr;
+
+     return { width, height, baseline };
+   }

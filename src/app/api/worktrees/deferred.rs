@@ -16,8 +16,14 @@ impl App {
         &mut self,
         request: Request,
         respond_to: std::sync::mpsc::Sender<String>,
+        client_local: bool,
     ) -> bool {
         match request.method {
+            crate::api::schema::Method::WorktreeList(_)
+            | crate::api::schema::Method::WorktreeOpen(_) => {
+                self.start_api_worktree_read(request, respond_to, client_local);
+                true
+            }
             crate::api::schema::Method::WorktreeCreate(params) => {
                 self.start_api_worktree_create(request.id, params, respond_to);
                 true
@@ -187,7 +193,9 @@ impl App {
         let path = checkout_path;
         let source_checkout_path = api_request.source_checkout_path.clone();
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::WorktreeAdd);
         std::thread::spawn(move || {
+            let work = work.start();
             let result = if let Some(parent_dir) = parent_dir {
                 std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
             } else {
@@ -209,6 +217,7 @@ impl App {
                     result,
                 },
             )));
+            work.complete();
         });
     }
 
@@ -341,7 +350,9 @@ impl App {
         let force = params.force;
         let trust_repository = params.trust_repository;
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::WorktreeRemove);
         std::thread::spawn(move || {
+            let work = work.start();
             let result = crate::worktree::run_worktree_remove_command_with_recovery(
                 &command,
                 &repo_root,
@@ -360,6 +371,7 @@ impl App {
                     result,
                 },
             )));
+            work.complete();
         });
     }
 
@@ -632,28 +644,20 @@ impl App {
                     .pending_worktree_remove_runtime_exits
                     .contains_key(&pane_id)
                 {
-                    if self
-                        .pending_worktree_remove_runtime_restores
-                        .insert(pane_id, operation_id)
-                        .is_none()
-                    {
-                        let event_tx = self.event_tx.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            let _ = event_tx
-                                .send(AppEvent::WorktreeRuntimeRestoreFailed {
-                                    pane_id,
-                                    operation_id,
-                                })
-                                .await;
-                        });
-                    }
+                    self.schedule_worktree_runtime_restore(
+                        pane_id,
+                        operation_id,
+                        terminal_id.clone(),
+                    );
                 } else {
                     pane_updates.extend(self.publish_worktree_runtime_agent_release(pane_id));
                     if !self.respawn_shell_for_launch_pane(pane_id, false) {
-                        self.pending_worktree_remove_runtime_restores
-                            .insert(pane_id, operation_id);
-                        self.queue_worktree_runtime_restore_failed(pane_id, operation_id);
+                        self.queue_worktree_runtime_restore_failed(
+                            pane_id,
+                            operation_id,
+                            terminal_id.clone(),
+                            Duration::ZERO,
+                        );
                     }
                 }
             }

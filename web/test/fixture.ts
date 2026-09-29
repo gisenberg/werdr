@@ -1,0 +1,78 @@
+import { scryptSync, randomBytes } from 'node:crypto';
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, relative, resolve } from 'node:path';
+import { createServer } from 'node:net';
+import { get as httpsGet } from 'node:https';
+
+const exec = promisify(execFile);
+export async function fixture(passwordLogin = false, secure = false, isolatedClaude = false, editor?: string, nativeRuntime?: string) {
+  const directory = await mkdtemp(resolve(tmpdir(), 'werdr-e2e-'));
+  const username = 'test-user', password = randomBytes(24).toString('hex');
+  const salt = randomBytes(16);
+  const credentialsPath = resolve(directory, 'credentials.json');
+  if (passwordLogin) await writeFile(credentialsPath, JSON.stringify({ username, passwordHash: `scrypt$${salt.toString('hex')}$${scryptSync(password, salt, 32).toString('hex')}` }), { mode: 0o600 });
+  if (isolatedClaude) await mkdir(resolve(directory, 'claude-config'));
+  // External release and manifest updates must not race fixture-owned events or
+  // change detection definitions while an isolated browser test is running.
+  await mkdir(resolve(directory, 'herdr'), { recursive: true });
+  await writeFile(resolve(directory, 'herdr/config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n', { mode: 0o600 });
+  const binary = resolve(nativeRuntime || process.env.WERDR_TEST_HERDR_BIN || '../.local/bin/herdr');
+  const env = { ...process.env, HERDR_CONFIG_PATH: resolve(directory, 'herdr/config.toml'), XDG_CONFIG_HOME: directory, XDG_STATE_HOME: resolve(directory, 'state'), SHELL: '/bin/bash', WERDR_HERDR_BIN: binary, ...(isolatedClaude ? { CLAUDE_CONFIG_DIR: resolve(directory, 'claude-config') } : {}), ...(editor === undefined ? {} : { EDITOR: editor, VISUAL: editor }) };
+  for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSION', 'WERDR_SOCKET_PATH', 'WERDR_SESSION']) delete (env as Record<string, string | undefined>)[key];
+  const listener = createServer(); await new Promise<void>(r => listener.listen(0, '127.0.0.1', r));
+  const port = (listener.address() as { port: number }).port;
+  await new Promise<void>(r => listener.close(() => r()));
+  const url = `${secure ? 'https' : 'http'}://127.0.0.1:${port}`;
+  const certPath = resolve(directory, 'cert.pem'), keyPath = resolve(directory, 'key.pem');
+  if (secure) await exec('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-keyout', keyPath, '-out', certPath]);
+  const certificate = secure ? await readFile(certPath) : undefined;
+  let diagnostics = '';
+  const children: ChildProcess[] = [];
+  const start = (file: string, args: string[], extra = {}) => {
+    const child = spawn(file, args, { env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(child);
+    child.on('error', error => { diagnostics += error.message; });
+    for (const output of [child.stdout, child.stderr]) output?.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-16000); });
+    return child;
+  };
+  const cli = async (...args: string[]) => (await exec(binary, args, { env, timeout: 10000 })).stdout;
+  const wait = async (check: () => Promise<unknown>) => {
+    for (let attempt = 0; attempt < 100; attempt++) { try { if (await check()) return; } catch {} await new Promise(r => setTimeout(r, 100)); }
+    throw new Error(`Fixture did not start: ${diagnostics}`);
+  };
+  const stop = async (child: ChildProcess) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>(done => {
+      child.once('exit', () => { clearTimeout(timer); done(); });
+      const timer = setTimeout(() => child.kill('SIGKILL'), 4000); child.kill('SIGTERM');
+    });
+  };
+  let gateway: ChildProcess;
+  const startGateway = async () => {
+    gateway = start(process.execPath, ['--import', 'tsx', 'server/index.ts'], { WERDR_SETTINGS_FILE: resolve(directory, 'settings.json'), WERDR_NOTIFICATION_FILE: resolve(directory, 'notifications.json'), WERDR_MACHINE_PLATFORM_FILE: resolve(directory, 'machine-platforms.json'), WERDR_SESSION_FILE: resolve(directory, 'browser-sessions.json'), WERDR_CERT_FILE: secure ? certPath : '', WERDR_KEY_FILE: secure ? keyPath : '', WERDR_BOOT_ASSET_DIR: process.env.WERDR_TEST_BOOT_ASSET_DIR || '', WERDR_BOOT_FONT_DIR: process.env.WERDR_TEST_BOOT_FONT_DIR || '', WERDR_CREDENTIALS_FILE: passwordLogin ? credentialsPath : '', WERDR_HOST: '127.0.0.1', WERDR_ALLOWED_HOSTS: 'localhost', WERDR_PORT: String(port), WERDR_TOKEN_FILE: resolve(directory, 'token') });
+    await wait(async () => secure ? new Promise<boolean>((resolve, reject) => { httpsGet(url, { ca: certificate }, response => { response.resume(); resolve(response.statusCode === 200); }).on('error', reject); }) : (await fetch(url)).ok);
+  };
+  const close = async () => {
+    try {
+      const { result } = JSON.parse(await cli('api', 'snapshot'));
+      // Closing a repository parent also closes its linked worktree workspaces.
+      for (const workspace of result.snapshot.workspaces) await cli('workspace', 'close', workspace.workspace_id, '--group').catch(() => {});
+    } catch {}
+    for (const child of [...children].reverse()) await stop(child);
+    await rm(directory, { recursive: true, force: true });
+  };
+  try {
+    start(binary, ['server']);
+    await wait(async () => !!(await cli('api', 'snapshot')));
+    const status = JSON.parse(await cli('status', 'server', '--json'));
+    const appDirectory = relative(directory, dirname(status.socket));
+    if (!['herdr', 'herdr-dev'].includes(appDirectory)) throw new Error('Fixture server socket escaped its isolated application directory.');
+    const catalogDirectory = resolve(directory, 'state', appDirectory, 'client');
+    await startGateway();
+    return { url, cli, directory, catalogDirectory, username, password, certificate, token: (await readFile(resolve(directory, 'token'), 'utf8')).trim(), close, diagnostics: () => diagnostics,
+      stopGateway: () => stop(gateway), startGateway,
+      restartGateway: async () => { await stop(gateway); await startGateway(); } };
+  } catch (error) { await close(); throw error; }
+}

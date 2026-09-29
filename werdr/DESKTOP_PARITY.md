@@ -1,0 +1,488 @@
+# Herdr desktop parity
+
+The goal is desktop parity with the native herdr experience, including behavior and visual hierarchy.
+The reference is the native source and runtime pinned by `werdr/runtime.json`, including the multi-machine client.
+A passing browser suite alone does not establish parity.
+Each capability below needs native-reference evidence, implemented browser interaction, and verification of its actual behavior.
+
+## Deployment status, 2026-09-29
+
+The Linux gateway host and both saved Windows hosts now run the owning runtime from fork commit `91dcee6fc065dca75493531f03c4806a953c5da7`.
+The browser gateway and terminal companions are deployed from that same commit, integrating upstream through `fb8b9e2e`.
+The immutable archive passed 242 browser cases, a separate older-owner compatibility case, and installed-companion verification on both Windows hosts.
+Full Linux checks passed 4,165 tests with 16 skips, and Windows-native checks passed 3,526 tests with 12 skips before signed ConPTY release packaging.
+This deployment includes dead-key composition and setup-console reflow fixes, native unavailable-worktree restoration, duplicate-parent close semantics, and Windows local-server permission diagnostics.
+The owner upgrade used explicit authorization to terminate existing werdr sessions, not live handoff.
+Private settings and the saved-machine catalog were preserved, and independent process checks confirmed unrelated Windows owners were unchanged.
+Earlier references below to pending owner deployment describe the historical state of those individual feature checks.
+Deployment removes that adoption prerequisite but does not establish complete desktop parity or verify every newly available feature in production.
+
+The deployed runtime includes the Windows full-row erase correction that clears stale incoming soft-wrap boundaries.
+A packaged-runtime comparison with unchanged gateway and terminal companions reproduced marker corruption on the previous owner and preserved it on the new owner.
+The new owner passed the same seeded PowerShell prediction, desktop reload, phone resize and subsequent-input case in isolated sessions on both Windows hosts.
+After the `91dcee6f` deployment, browser checks passed through the live gateway on all three hosts for desktop and phone input, resize, reload and test-workspace cleanup.
+The live Windows checks explicitly launched PowerShell 7 in disposable workspaces to exercise long history predictions, preserved the original marker after subsequent input, and verified cursor placement after phone shrink and desktop growth.
+Phone screenshots were inspected on both Windows hosts; these checks did not change persistent shell settings.
+Full Linux and Windows native checks passed before publishing the runtime, along with render-scaling checks.
+Lossless live transfer, OS-level keyboard layout and IME acceptance, the remaining onboarding matrix, and complete native-reference visual parity remain separate acceptance work.
+
+## Post-deployment Windows terminal acceptance
+
+Isolated named sessions on both Windows hosts exercised the deployed owner with the unchanged deployed gateway and terminal companion.
+Browser input and rendered output retained accented Latin text, Japanese, emoji and a combining accent through desktop and phone reloads.
+Resizing during a 100-line Unicode output stream retained every numbered line exactly once, and native scrollback returned to the live bottom correctly.
+Alternate-screen output survived a phone reload, and returning to the primary screen recovered its hidden marker.
+Restarting the isolated gateway preserved the shell PID and a shell variable; independent browser contexts required explicit takeover before the second viewer could write.
+Exact pane closure terminated the selected shell while preserving a sibling shell.
+All test owners were stopped and their named sessions deleted after evidence was archived.
+These checks used the throwaway-session and wmux isolation procedures and did not restart production owners.
+
+Earlier wire evidence showed a desktop terminal settled at 129 columns reconnecting at 130 columns, and a phone terminal settled at 40 columns reconnecting at 41 columns.
+The deployed browser now reads validated native screen metadata before initial fitting, with a bounded optional read, stale-attachment cancellation and terminal-identity checking.
+Desktop and phone regressions cover primary and alternate geometry without inferring screen state from prior connections.
+The correction passed the expanded Windows matrix on both hosts with explicit assertions that desktop, phone and alternate-screen reloads begin at their settled width.
+Expanded Windows validation also exposed a dropped rapid resize during the fitting library's 50 ms guard.
+The deployed browser uses its dimension measurement directly so each observer delivery retains the latest requested geometry, with a consecutive-animation-frame regression.
+The immutable gateway archive passed all 237 browser tests, package checks, and the older-runtime compatibility test before activation.
+Live rollout checks on all three hosts asserted exact initial dimensions on desktop and phone reloads, retained text and input, and unchanged owner boot identity.
+Both Windows hosts also passed the seeded PowerShell prediction and post-resize cursor checks; their phone screenshots were inspected.
+The gateway update preserved owner and shell identities, the native catalog, private preferences and assets, and cleanup removed only the test workspaces.
+The alternate-screen fixture also does not establish full-screen application redraw behavior, complete semantic color/theme parity, or OS-level keyboard layout and IME acceptance.
+
+## Acceptance matrix
+
+| Capability | Required browser behavior | Current evidence |
+| --- | --- | --- |
+| Fleet and session ownership | Host-scoped identity, independent reconnect, durable native processes, explicit takeover and closure | Initial selection restoration validates scoped URLs and saved IDs against the pinned native endpoint before attaching; generation-aware HTTP/WebSocket ordering prevents stale snapshots from reversing selection; existing fleet and controller tests; prolonged gateway-outage test verifies exhausted retries recover for every visible pane without page reload, forced takeover, or loss of native shell state |
+| Desktop layout | Render native split tree simultaneously; preserve ratios; drag and keyboard resize; zoom, directional focus, swap, move, reorder | Implemented native split tree, independent controllers, drag and keyboard ratios, zoom, directional focus/resize/swap, pane moves and workspace/tab ordering; isolated browser tests exercise input, stable terminal DOM, phone fallback and gateway restart |
+| Visual hierarchy | Native semantic palette, compact cell rhythm, borders and active pane cues, configurable sidebar sections and contextual hints | Partial: native semantic palette, configurable split/outer/shared borders with native label precedence, top/bottom desktop tabs, and independently scrolling workspace/agent sections with a draggable saved split; native agent and workspace row tokens, per-agent layouts and conditional styles are implemented; workspace rows are deployed; new Git metadata still requires owning-runtime adoption, and contextual hints remain |
+| Themes | All native theme choices, custom semantic overrides, light/dark/system selection and live preview/cancel | Implemented palette extraction, preview/cancel, system switching and custom colors; package and browser tests cover these behaviors |
+| Preferences | Durable user settings with device overrides, sidebar geometry/group state/sorting, status indicators, tab/border behavior, shortcuts and confirmations | Partial: settings store, appearance, font/device override, sidebar width/density and workspace/agent split, agent order, indicators, confirmations, pane borders/gaps/labels, tab placement and notification controls; host-scoped worktree grouping and durable collapse state are implemented; configurable native-style prefix and built-in action bindings now use a migrated version-fourteen store, including standalone native configuration reload and visible notification targeting; configured host commands are implemented against the candidate runtime and await owning-runtime rollout |
+| Terminal interaction | Native copy mode and search, selection/copy, scrollback editing, links, mouse behavior and image paste | Partial: native scrollbars with stable one-column gutters, alternate-screen reclamation, keyboard and pointer scrolling, saved settings, and isolated metadata subscriptions; native full-scrollback copy/search with revision-checked character/line selections, word/paragraph motions, repeat search, clipboard feedback and scroll restoration; normal mouse selection copies on release or retains a range for explicit copy, supports native URL/path word selection, drag autoscroll and retained scrolling, and paints readable native selection colors through Ghostty; isolated browser tests cover Unicode, combining characters, wrapped matches, content changes, queued-operation cancellation, clipboard denial and phone controls; native host-editor invocation with full-history export, overlay focus restoration, reload, early-exit recovery and temporary-file cleanup; native plugin link activation and safe HTTP/HTTPS opening with revision/viewport checks, OSC targets, blocked-tab fallback and delayed non-link drag preservation; application mouse press/drag/release and wheel coordinates/modifiers follow native mode records; Kitty press/repeat/release/reset uses the native encoder, with browser checks for modifier changes and focus loss; native image paste and drop support advertises companion capabilities, bounds files to 16 MiB, preserves queued input and host bytes, cancels stale file reads, and uses native staging cleanup; complete keyboard layout/protocol coverage remains |
+| Workspace navigation | Native workspace/tab/pane actions, pickers, keyboard navigation and context menus | Partial: create/rename/close plus searchable host-qualified workspace/tab/pane palette entries, keyboard result navigation, live removal and terminal focus restoration; unit tests verify duplicate-label identity and stale-target rejection, and browser tests cover desktop/phone switching without remounting the selected pane; workspace/tab/pane chrome context menus add rename, close, new tab, split and zoom with keyboard access, stale-target dismissal and attach-focus protection; pane menus also clear manual names and swap explicit native pane identities, with browser layout verification; native worktree-group navigation, selected-child retention, collapsed attention status, search reveal, durable collapse/expand, explicit group closure, and scoped create/open/delete checkout menus are implemented and tested; ordinary Git workspace menus now discover native repository context on demand, preserve keyboard focus during discovery, and open scoped worktree actions; configurable prefix navigation, indexed tabs/workspaces/agents and persistent resize mode are implemented; native Navigate preview/confirm, directional pane movement, scoped bindings, a phone switcher, and configurable last-pane toggling across tabs/workspaces are implemented; terminal-content and keyboard pane menus now include native right-click ownership with configurable exact-match modifier passthrough |
+| Worktrees | Native list/create/open/remove flows with host and repository scope and native errors | Implemented native repository picker and create/open/remove; isolated Git browser test verifies branch and checkout identity, dirty removal rejection, explicit force, normal native checkout hooks, and repository retention |
+| Agents | Start/prompt/rename, native ordering/views, detail/status metadata and attention navigation | Partial: basic actions and fleet list, native status priority with newest transitions first within each host, workspace/tab/title/cwd search and tooltips, and next/previous blocked-agent navigation in native snapshot order; native agent row tokens, per-agent layouts, metadata labels and first-match conditional styles are implemented; native custom views and custom-tab-label metadata are implemented in the candidate runtime; live runtime adoption remains |
+| Notifications | Native attention/completion semantics, configurable delivery/delay/position/sound and clipboard feedback | Native semantic subscriptions, bounded client queue, delayed state validation, active-tab suppression, visible-target navigation, native durations, four positions and built-in sounds are implemented; older runtimes use a conservative status-transition fallback; independent clipboard feedback with six positions, two-second lifetime, notification avoidance, and durable enable/disable preferences is implemented; private custom MP3 selection, event overrides, preview/cancel/reset, durable storage and fallback are implemented; deployment and semantic runtime adoption remain |
+| Integrations | Native readiness list and explicit installation/uninstallation with results | Implemented all native targets, individual and recommended installs, uninstall confirmation and native results; isolated agent-config browser tests verify install/reinstall/uninstall, preservation of unrelated settings and native failures |
+| Plugins | Native management, actions, logs and plugin pane lifecycle | Partial: native linking/unlinking, enable/disable, manifest inspection, selected-context actions, logs, and overlay/split/tab/zoomed panes; isolated native tests verify command outcomes, input, closure, focus restoration and gateway restart; GitHub installation now preserves the native manifest preview, explicit confirmation, ref/provenance, build results and failed-replacement rollback, with managed uninstall and bounded owner-scoped job history; popup surfaces are implemented against the candidate runtime and await owning-runtime rollout |
+| Host onboarding | Shared native catalog, explicit compatibility/install prompts and repair, no forced runtime replacement | Controlled subprocess tests cover owner isolation and cancellation/revocation/shutdown during pending Windows probes; live isolated Windows checks cover ready registration, disabled-entry repair and unavailable-binary decline; POSIX checks cover current/older-compatible registration and repair plus explicit refusal for missing, incompatible and broken installations; broader Windows compatibility and successful-install recovery remain incomplete |
+| Runtime configuration | Explicit host-scoped shell/cwd/scrollback/worktree/resume settings and validated reload | Browser controls preserve unrelated TOML, reject stale revisions, save atomically, and report native reload results; isolated POSIX browser tests and a live isolated Windows session verify new-pane cwd, invalid input, concurrent edits and save/reload partial outcomes; Windows proof uses the candidate companion, not production runtime adoption |
+| Desktop ergonomics | Keyboard help, focus restoration, accessible forms, context menus, responsive fallback, no terminal remount during chrome changes | Partial: responsive console dialogs, native fallback focus after closure, command-palette readiness updates preserve search and keyboard focus, and a delayed split-response test verifies that later input in navigation keeps focus; contextual shortcut help and held-key protection are implemented and tested; remaining ergonomics still need verification |
+| Delivery | Reviewed commits, verified remotes, pinned deployment, native panes preserved and live POSIX/Windows validation | Required for final result |
+
+## Verification
+
+Read-only API checks confirm that all three deployed owners advertise command catalog/execution, popup sessions, semantic notifications, workspace Git status, passive metadata and atomic idle stop.
+Live agent-view checks on all three hosts verified native ordering, dynamic blocked-state membership, source-scoped clearing and browser updates without reload.
+Live custom-tab checks verified automatic single-tab label omission and custom label rendering through a cancelled local settings preview.
+An empty custom name remains custom in the native reference, and the browser displayed its native fallback label.
+These probes retained owner boot identity, preserved pre-existing panes, closed their recorded test workspaces, and left saved browser preferences unchanged.
+They establish the agent-view and tab-label behavior, not the remaining live acceptance of every advertised capability.
+
+Live semantic-notification probes passed through the deployed gateway on all three hosts.
+They verified literal custom text, requested positioning and dismissal, attention notices with exact machine/pane/terminal targets, completion delivery, cancellation after work resumes, and no re-alert after browser reload.
+The delayed case used a cancelled browser settings preview; saved preferences remained byte-for-byte unchanged.
+Cleanup preserved original pane and owner identities and marked only the probe's own notices read.
+This does not establish live update-event delivery, OS desktop-notification behavior, or the complete custom-audio matrix.
+
+Live workspace Git metadata passed on all three deployed owners with zero browser terminal-attachment attempts.
+A temporary repository on each host progressed from one commit ahead to two, then to two ahead and one behind; the browser updated its branch and counts and retained distinct ahead/behind colors.
+Each probe used a cancelled workspace-row settings preview, closed only its recorded test workspace, and verified unchanged saved preferences, pre-existing pane identities and owner boot identity.
+This establishes passive Git refresh through the deployed gateway on Linux and both Windows hosts.
+
+Isolated owners on both Windows hosts using the installed runtime passed configured shell target identity, pane placement and input, popup geometry and phone resize, exact closure, retained underlying pane and popup process exit.
+The phone screenshot exposed wrapping popup toolbar controls; the browser now hides recovery controls while connected and uses accessible compact controls in narrow popups.
+The browser regression also disconnects a minimum-size popup and verifies keyboard access to each recovery control before retrying.
+This browser repair is deployed after immutable-archive verification passed all 237 browser cases, older-runtime compatibility and both Windows companion checks.
+Activation preserved native owner, pane and shell identities and saved configuration records on all three hosts.
+Isolated owner checks do not establish configured-command behavior on the production owners, whose catalogs are empty.
+
+Controlled Windows onboarding subprocess tests now cover successful installation, installer failure, and an installer success sentinel followed by an incompatible runtime.
+Only the verified-compatible result registers a new host.
+Repair tests retain a disabled entry's original catalog identity and contents, including when post-install compatibility fails.
+These fixtures never install a runtime and do not replace the remaining live onboarding compatibility matrix.
+POSIX setup now uses job-specific staging labels for new hosts as well as repairs, so failed or cancelled native preparation can remove only its still-owned temporary registration.
+Final publication is explicitly non-cancellable: the browser hides response/cancel controls, and shutdown drains setup work before its forced-exit timer begins.
+Publication is verified by the captured native host identity, including recovery when a catalog write succeeds but its acknowledgement fails.
+Regression tests cover cancellation, revocation and shutdown after native registration, cancellation during platform persistence and rename, failed publication, externally adopted entries and unrelated matching-label additions.
+These changes provide cancellation-safe ownership boundaries, not cross-process native catalog locking or crash-atomic updates across the catalog and platform files.
+This fix is deployed after immutable-archive verification passed 238 browser cases, older-runtime compatibility and both Windows companion checks.
+Real SSH/browser acceptance passed current and older-compatible POSIX registration and repair, both Windows registrations, and cancellation after native POSIX registration; cancellation removed only the temporary catalog entry and retained the remote runtime until explicit test cleanup.
+The gateway supervisor now allows two minutes for graceful shutdown so its former eight-second limit cannot interrupt bounded setup finalization.
+Post-deployment desktop/phone input, resize, reload and cursor checks passed on all three hosts; cleanup preserved original runtime, pane and shell identities and protected configuration records.
+
+Live onboarding through the management service passed against both compatible Windows endpoints with an isolated local catalog.
+Each endpoint registered without an installation prompt, and its owner boot and pane identities plus the production catalog remained unchanged.
+A real POSIX SSH host-key rejection also produced the prerequisite error without prompting for installation or modifying the isolated catalog.
+The deployed browser host-management form also registered both compatible Windows endpoints through an isolated gateway/catalog, with readable completion dialogs and accessible controls at desktop and phone sizes.
+The browser surfaced a real POSIX SSH prerequisite failure with host-key/login guidance, no installation prompt and no catalog mutation.
+These browser checks opened no terminal connections and left the production catalog unchanged.
+Compatible POSIX onboarding also passed through a real, loopback-only OpenSSH server using ephemeral credentials, pinned host trust, the installed owning-runtime binary and isolated local/remote configuration and state.
+Native setup started and registered the unique named session without an installation prompt; cleanup stopped and deleted that session, and the production catalog remained byte-identical.
+The deployed browser form passed registration and repair against the same real POSIX SSH/native path in a separate unique session.
+After disabling the newly registered host through the browser, repair preserved the entire saved catalog byte-for-byte, including the original host identity and disabled state, with no temporary registration left behind.
+Desktop completion controls and phone dialog bounds were checked, the phone screenshot was inspected, and no terminal connections were opened.
+This verifies the real POSIX SSH/native setup path, not production-host authentication or installation on older, incompatible and partially installed endpoints.
+The same browser registration and disabled-repair flow passed against the checksum-pinned upstream `0.8.2-preview.2026-09-06-9e9bc8a14466` runtime over real isolated SSH.
+Native discovery accepted its compatible endpoint without an upgrade prompt; direct process inspection verified that the owner used the pinned older executable and retained its PID and process start identity through repair.
+The disabled catalog remained byte-identical, and cleanup stopped and deleted only the test session.
+This covers an older compatible endpoint, not replacement of an incompatible one.
+The candidate browser also passed real SSH checks against isolated POSIX containers with no Herdr installation and the official incompatible Herdr 0.7.0 binary.
+Both show an explicit installation prompt; declining leaves the remote filesystem unchanged, creates no saved host and preserves the production catalog byte-for-byte.
+A partial-install fixture with an executable whose interpreter is absent surfaces the failed remote-server inspection and a default-No continuation prompt.
+Declining that prompt likewise preserves the remote filesystem and catalogs without opening a terminal connection.
+The long diagnostic exposed a phone-reflow issue in the setup console; resize-aware following now keeps the final prompt visible while preserving deliberate scrollback reading.
+The mounted-browser regression covers narrowing, height changes, scrollback retention and return to following the latest output.
+These checks prove safe refusal, not successful installation or recovery of a running incompatible owner.
+Both Windows hosts also pass the browser refusal path with deliberately incomplete executables in unique temporary directories, without modifying the production executable path or Scheduled Task.
+The explicit default-No installation prompt leads to cancellation on decline, no saved host and no terminal attachment.
+Cleanup verifies the fixture bytes are unchanged, removes only the exact temporary files and directories, and confirms all pre-existing Herdr process identities are unchanged.
+This covers an incomplete executable, not every possible partial installation or Windows compatibility failure.
+
+Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
+Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
+A newly created shell adopted a directory containing spaces and Unicode, while the existing shell retained its PID.
+Stopping only the disposable runtime verified that a subsequent browser save reports durable file success separately from reload failure.
+Desktop and phone screenshots were inspected; long Windows paths in failure messages now wrap without horizontal overflow and the close action remains reachable.
+The settings implementation is unchanged between that companion and the tested source branch; this evidence does not establish production owning-runtime adoption or the rest of Windows terminal acceptance.
+`web/test/runtime-settings.spec.ts` retains regression coverage for Unicode/space-containing cwd, competing saves, invalid paths and phone reload-warning layout.
+
+`web/test/selection-restore.spec.ts` verifies fresh links absent from cached metadata, missing and contradictory IDs, unknown hosts, scoped URLs with saved descendants, newer navigation during a delayed read, transient read failures, and an older initial WebSocket snapshot arriving after HTTP restoration.
+Assertions cover selected IDs and the absence of unrelated terminal attachments.
+Unit tests cover endpoint replacement, gateway generations, old-stream deltas, stop invalidation, and terminal replacement or empty-to-populated cache races.
+`web/test/shortcuts.spec.ts` verifies native prefix commands, double-prefix forwarding in terminal and copy modes, held-key suppression, persistent resizing, indexed tab selection, IME bypass, editable-control isolation, remapping, preview cancellation, gateway restart, offline help, and delayed native layout responses.
+Navigate browser cases verify request-free preview, stable-ID confirmation, invalid digits, preview-targeted rename, Copy cancellation and commit, and delayed attachment of a previously hidden pane.
+Phone cases cover workspaces, tabs, creation, menus, empty-session return, unavailable hosts, agent targets, scroll isolation, and restored typing after cancellation or rotation.
+Controlled selection-response tests keep empty Navigate open when verification confirms the unchanged empty host selection, while still dismissing it when verification resolves a real pane.
+This prevents a late verification response from hiding the phone switcher between opening it and clicking its first menu action.
+`web/test/navigate-scale.spec.ts` profiles preview handling at fixed desktop and phone geometry with one and fifteen populated workspaces, while asserting retained controls, terminal identity, and unchanged selection.
+A forced move-response race verifies destination selection after automatic native fallback, while explicit navigation round trips and newer commands supersede older focus replies.
+The keyboard catalog is compared with native `KeysConfig` defaults, while mode tests cover modifiers, unknown suffixes, configured Escape prefixes, alias normalization, unsafe bindings, and repeats whose original press belongs to terminal input.
+Existing Kitty, copy-mode, layout, context-menu, and reconnect tests remain characterization coverage for this browser-owned input layer.
+Help keeps its heading and close control visible on desktop and phone layouts.
+Contextual Prefix, Navigate and Resize hints use configured bindings and native semantic key, description and mode-label colors.
+The desktop hint overlay is anchored to the terminal surface, keeping footer controls unobscured without resizing or remounting the terminal.
+Mobile Navigate exposes touch and keyboard hints inside its own switcher instead of relying on the hidden desktop overlay.
+Copy hints distinguish selection, search cancellation, Escape clearing and exit while retaining the mouse-first toolbar.
+`web/test/mode-hints.test.ts` covers hint state and remapped labels, while `web/test/mode-hints.spec.ts` checks dark/light desktop and phone layouts, footer separation, focus and retained terminal identity.
+These checks and browser screenshots do not establish complete native-reference visual parity across every mode and palette.
+Configured native commands are implemented and verified against the candidate runtime as described below.
+Complete keyboard-layout/protocol coverage remains outstanding.
+`web/test/native-keyboard-ime.spec.ts` compares browser routing with the bundled native encoder for navigation, editing, function, keypad and international physical keys under Kitty flags 1 and 31 and modifyOtherKeys level 2.
+The matrix covers press, repeat and release, plain and Ctrl+Shift input, and normal and application cursor/keypad modes.
+These synthetic DOM checks complement the existing Unicode and AltGraph cases but do not establish OS-level layout or IME composition acceptance.
+An isolated authenticated Xvfb display with headed Chromium and XTest physical key events verifies US `KeyY` to `y`, German `KeyY` to `z`, French `KeyA` to `q`, and German AltGr+Q to `@` with native Kitty press/release bytes.
+The same OS-level probe exposed a US international dead-key regression: acute followed by E produced protocol-encoded `e` instead of `é`, while an unhandled control textarea correctly composed `é`.
+The browser keyboard adapter now keeps dead-key sequences browser-owned until text commit, including intermediate modifiers, and prevents the terminal fallback encoder from consuming them in legacy mode.
+The mounted terminal passes the physical acute-plus-E sequence in legacy, Kitty flags 31, and modifyOtherKeys level 2 modes, emitting exactly one `é`.
+Unit and mounted-browser regressions cover commit, cancellation, focus reset, protocol changes, and recovery to ordinary key encoding.
+An additional isolated IBus session using Cangjie 3 commits `日` from physical A then Space in both the control textarea and mounted terminal under those three modes.
+The IME check uses a private D-Bus connection, isolated configuration directories and the private X display; it does not change the user's desktop input method.
+This evidence is Linux X11-specific and covers one CJK input method; Windows layouts and broader IME behavior remain unverified.
+Detach uses the native `prefix+q` default, closes this browser's controllers and fleet connection, and provides explicit Resume without closing native panes or revoking authentication.
+Its request epoch cancels delayed reads and actions, fences stale authentication failures, and keeps online/visibility wakeups idle.
+Resume validates the preserved endpoint and terminal identity through a fresh snapshot, including after an expired login; missing or replaced targets require explicit selection.
+The version-eleven migration retains custom bindings and leaves Detach unbound if its new default conflicts.
+`web/test/detach.spec.ts` covers delayed session/settings/fleet/layout/action replies, idle wakeups, repeated detach/resume, failed resume, expired authentication, removed targets, desktop/phone controls, and an independent viewer owning another native terminal.
+
+Use isolated native runtimes for destructive actions and never mutate user panes to make a test pass.
+Compare desktop screenshots at fixed geometry against native layouts and theme tokens.
+Exercise multiple panes, host changes, browser reconnect, gateway restart, keyboard and mouse interactions, and independent viewers.
+Keep phone operation and the existing authentication/boot collection working while adding desktop behavior.
+Exercise settings persistence, validation, concurrent edits, invalid/future stores, and preview cancellation.
+The sidebar split follows the native 50% default and 10%-90% bounds, with minimum section heights, keyboard adjustment, cancelled-drag recovery, conflict rollback, and a scrolling phone drawer.
+`web/test/sidebar.spec.ts` verifies independent section scrolling, saved geometry across gateway restart, concurrent preference preservation, and stable terminal identity and input.
+`web/test/pane-chrome.spec.ts` verifies shared and borderless splits, zoom, bottom tabs, saved preferences, phone fallback, and copy controls outside terminal pixels.
+Copy-mode tests also verify that searches submitted during initial frame recovery resume correctly and that Escape cancels pending searches.
+`web/test/mouse-selection.spec.ts` verifies native inclusive ranges, wide and combining glyphs, URL/path double-clicks, copy-on-select persistence, clipboard shortcuts and denial, delayed-read cancellation, and selection across native scrollback.
+Dark and light pixel assertions check the painted selection background, while native-reference unit cases verify the contrasting foreground.
+`web/test/image-paste.spec.ts` verifies maximum-size image bytes, native owner-only staging and cleanup, real clipboard paste without extra terminal keystrokes, file drops, unchanged text paste, unsupported clients, rejected files, and delayed-read cancellation.
+The image-capable companion uses the existing native clipboard message and is tested against the pinned old runtime; it does not require a native runtime replacement.
+`web/test/workspace-groups.spec.ts` verifies native repository groups, active-child retention, keyboard and pointer collapse/expand, search, gateway restart, concurrent settings, scoped worktree creation/opening/deletion, dirty-checkout protection, explicit group closure, retained unrelated terminals, and desktop/phone geometry.
+Group closure preserves checkouts; deletion remains a separate native action.
+The candidate integration through upstream `fb8b9e2e` retains saved worktree membership when a checkout is temporarily unavailable and keeps duplicate repository parents separate from linked children.
+The browser mirrors that hierarchy, keeps all parents visible when collapsed and excludes sibling-parent attention from each parent's collapsed status.
+Ordinary duplicate-parent closure remains individual; an explicit group action still closes the repository group.
+Menu and command actions retain their displayed close scope so a later topology change cannot silently promote individual closure to group closure.
+Native adversarial-identity tests and browser cases with confirmations enabled and disabled cover those distinctions.
+The merged candidate still requires Windows-native validation and deployment; the running owners do not acquire these changes from documentation or browser-only updates.
+Group-save conflicts survive metadata refreshes and terminal input, while deterministic timer tests verify notice replacement, expiry, and context clearing.
+`web/test/status-line.spec.ts` verifies that a late native-action failure identifies its original host after selection changes.
+The ordinary Git workspace case verifies native discovery without attached worktree metadata, an outside-Git menu, delayed results after menu replacement and closure, stable keyboard focus and terminal identity, desktop/phone menu bounds, and checkout creation from an unfocused workspace.
+Repository discovery uses the existing host-scoped `worktree.list` API and does not require replacement of the native runtime.
+The crowded-rail test also verifies that selection and drawer opening reveal the active worktree, while metadata refreshes preserve manual scrolling and terminal identity.
+Unit cases cover native status priority, missing parents, native ordering, duplicate labels, and host/target/session isolation.
+Agent row preferences use the native `sidebar.agents` field and rule format, including built-in fields, `$custom` metadata, canonical per-agent overrides, blank-line gaps, and explicit color/bold/dim settings.
+The browser keeps these client presentation preferences in its version-ten store with migration, revision conflicts, bounded validation, and preview/cancel.
+`web/test/agent-rows.spec.ts` verifies real native metadata updates, conditional styling, literal text rendering, missing-field omission, stable terminal and row identities, save conflicts, gateway restart, and desktop/phone geometry.
+Unit cases compare native defaults and canonical agent vocabulary, ASCII case folding, full finite-number parsing, first-match rule precedence, and native fair column allocation with rightmost-field retention in narrow rows.
+The candidate runtime from `953505e9` exposes optional tab `custom_label` metadata and an `agent_view` projection in `session.snapshot`.
+`agent.view.get` returns the same definition and ordered public pane IDs, while explicit `agent.view.changed` subscriptions report definition changes without changing older set/clear response shapes or frozen terminal-client codecs.
+The browser preserves native view membership and ordering within each host, applies search/status filters afterward, and follows ordinary focus and agent-status events for dynamic filters.
+Single automatic tab labels are omitted only when the runtime explicitly identifies them; older runtimes retain the label and do not receive unsupported view subscriptions.
+`web/test/agent-entries.spec.ts` verifies external native set/get/clear, source-guarded clearing, empty matches, status-dependent membership, dynamic current-workspace filtering, and ordinary older-runtime ordering.
+The capability case starts an isolated candidate runtime through `WERDR_TERMINAL_CLIENT_BIN` or `WERDR_TEST_HERDR_BIN`.
+Native runtime adoption and live use of this metadata remain outstanding.
+Plugin selection context is read from the same revision-checked native range before actions become available.
+`web/test/plugin-install.spec.ts` exercises real native Git checkouts, declined previews without build execution, explicit installation, action execution, failed replacement, managed uninstall with preserved user configuration, browser reload, session revocation, gateway restart, and independent-browser isolation.
+The installer preserves interactive CLI behavior over POSIX and Windows SSH; isolated checks on both Windows hosts verify preview, decline, native build execution, Git provenance, and uninstall.
+The MIT-licensed `web/test/fixtures/github-install` plugin provides fixed-output native actions for live installation checks from an exact published source commit.
+`web/test/scrollbar.spec.ts` verifies native history offsets, thumb dragging, rapid keyboard input, screen transitions, initial geometry, settings migration and preview, gateway restart, phone layout, and optional-capability fallback.
+The optional `PaneScrollInfo.alternate_screen_active` field requires the fork runtime from `9c2dd302` or newer.
+Older endpoints remain usable without a guessed scrollbar gutter.
+Native API and subscription tests verify atomic screen/scroll geometry and mode-change events even when history size is unchanged.
+Scroll subscriptions are limited to attached panes, do not read terminal text or invalidate fleet snapshots, and cannot follow a reassigned host identity.
+Native rollout and live verification for these new scrollbars remain outstanding.
+The ordinary browser fixture uses the pinned runtime in `werdr/runtime.json` unless `WERDR_TEST_HERDR_BIN` explicitly selects another binary.
+The three scrollbar capability tests instead start an isolated server from `WERDR_TERMINAL_CLIENT_BIN`, falling back to `WERDR_TEST_HERDR_BIN` when no companion override is configured.
+The older-endpoint scrollbar test remains on the ordinary fixture.
+This matrix verifies new runtime capabilities separately while retaining coverage of the deployed runtime's compatibility; it does not activate the candidate runtime on any live host.
+Test native capability failures and remote isolation rather than masking unsupported operations as success.
+Run the package check and relevant browser tests during editing, then the full archive deployment checks and live verification before completion.
+Keep this matrix incomplete until each row has direct evidence.
+
+## Lifecycle action audit
+
+The native reference for these remaining bindings is `src/client/shell/actions.rs`, with defaults in `src/config/model.rs`.
+Visible notification targeting uses the native `prefix+o` default.
+Standalone configuration reload now uses the native default and reports host and browser results independently.
+Detach is implemented with the native default and explicit browser resume.
+Last-pane switching is implemented with the native unbound default and conservative connection-reset behavior.
+
+| Action | Native behavior | Browser acceptance requirement |
+| --- | --- | --- |
+| `detach` (`prefix+q`) | Sets the client detach outcome without closing a pane or stopping the runtime | Suspend this browser's terminal connections and reconnect work, preserve native sessions, and provide an explicit return path; verify independent viewers and unchanged native process identities |
+| `reload_config` (`prefix+shift+r`) | Requests `server.reload_config` on the active endpoint and separately reloads client configuration | Scope the native request to the selected host, refresh browser preferences separately, retain input and selection, and report either failure without implying both reloads succeeded |
+| `open_notification_target` (`prefix+o`) | Consumes the currently visible notification, promotes the queue, and focuses its pane across endpoints; an offline pane target retains the notification and displays an unavailable notice | Uses the visible toast identity and native FIFO policy; offline targets retain the toast, target resolution validates endpoint and terminal identity, and targetless notices dismiss without selection |
+| `last_pane` (unbound) | Focuses the previous valid pane in the active endpoint snapshot, including another tab or workspace; ignores a missing or already-focused target | Track reconciled browser selection, revalidate the complete target against the current host snapshot, and verify toggling, closure, delayed focus responses, endpoint changes, and reconnects |
+
+Native last-pane history is updated by focused-pane transitions in `src/client/shell/state.rs` and cleared by endpoint projection reset, including native boot changes.
+The browser intentionally owns its selection, so following unrelated global native focus changes would violate the existing independent-viewer behavior.
+The candidate public `SessionSnapshot` and browser `Snapshot` expose optional `runtime_boot_id`, an OS-random identity created once per runtime and never persisted or transferred during handoff.
+Browser last-pane history is suspended while disconnected and resumes only when an online snapshot confirms the same endpoint and boot identity.
+A changed boot, endpoint, logout, or detach clears history, even if pane and terminal IDs are reused.
+Older runtimes without boot identity retain conservative connection-scoped invalidation.
+This capability requires owning-runtime adoption; a gateway or companion deployment alone does not enable it on older endpoints.
+Gateway event generation is not native boot identity.
+
+### Right-click routing
+
+Terminal-content menus follow native pane ownership independently of application mouse-reporting mode.
+An unmodified right click reaches an application only when its pane owns right clicks and mouse reporting is enabled.
+The menu can change native ownership through `pane.input.set` when the runtime supplies optional `right_click_passthrough` metadata.
+Older endpoints without this metadata retain menu access and do not offer the ownership toggle.
+Browser settings version 17 adds an exact-match right-click passthrough modifier, defaulting to off.
+Control, Alt, and browser Meta combinations are supported; Meta means Command on macOS and the Windows key where the browser exposes it.
+Native Hyper and separate terminal Meta are not browser-representable and are not offered as equivalent choices.
+The routing chord is stripped for the complete application gesture, including drag and release outside the pane.
+Shift retains menu access, and ContextMenu or Shift+F10 opens the menu without forwarding the action key to the terminal.
+Application mouse reporting must be enabled even when a passthrough modifier is configured.
+The settings control supports preview, cancel, durable save, and gateway restart without changing native terminal identity.
+Focused browser tests cover routing, native ownership changes, key reporting, modifier mismatches, drag/release, persistence, and desktop/phone menu bounds.
+The owning runtime must adopt the new metadata projection before its ownership toggle becomes available; companion updates alone do not provide this capability.
+
+The browser activity implementation uses `src/client/shell/notification_policy.rs` as its queue and delivery reference.
+The durable activity list and the currently visible notification have separate identities and lifetimes.
+The target shortcut consumes only the visible toast, promotes its successor, and uses current native pane ancestry after validating the original endpoint and terminal.
+The existing runtime-settings save flow also does not establish a standalone reload binding: that action must reload existing configuration without writing it.
+
+Notification targeting is implemented for browser toasts; native semantic event delivery requires a capable owning runtime.
+The reload action invokes the selected endpoint's existing `server.reload_config` method without writing configuration, while refreshing browser preferences independently.
+Offline, partial, failed, unsupported, and malformed native outcomes do not imply browser reload failure, and browser read failures do not hide a successful native result.
+Settings previews opened while a read is pending remain intact, duplicate reloads are suppressed, and detach or authentication changes discard old results.
+`web/test/configuration-reload.spec.ts` verifies actual new-terminal cwd adoption, byte-for-byte configuration preservation, typed input and terminal identity, separate failures, offline host scope, preview focus, detach/resume races, and visible status tokens on phones.
+The version-twelve settings migration preserves existing keys and considers the Detach and Reload defaults independently when upgrading older stores.
+Reload passed live desktop and phone verification on the POSIX host and both Windows hosts, preserving configuration files, preferences, terminal connections, pending input, and existing pane identities.
+Detach passed isolated lifecycle and browser tests plus live POSIX and Windows verification, with existing native identities and settings preserved.
+Last-pane unit and browser tests cover split/tab/workspace toggling, unchanged selections, preview isolation, current ancestry, closure, reused terminal identity, settings migration, and gateway or unloaded-host transitions.
+Exact retention across a reconnect to the same native boot remains unproven until the public API exposes native boot identity; conservative resets preserve safety but do not establish that part of native parity.
+
+## Semantic notifications
+
+The optional `semantic_notifications` capability advertises the explicit `notification.semantic` JSON subscription.
+It carries the same native attention, completion, custom and update events as the TUI, adding terminal identity without changing frozen terminal-client codecs.
+Subscriptions have bounded per-connection queues, no replay and scoped cleanup; a browser-only subscriber can receive `notification.show` without attaching a terminal client or creating a workspace.
+Native custom-notification results and rate limiting count accepted delivery to a live sink.
+The gateway uses semantic events exclusively when advertised, while older runtimes retain a conservative transition fallback that requires public `Done` completion state.
+Neither a reconnect snapshot nor restored activity history creates a fresh toast.
+The version-two activity store preserves old rows as non-navigable history because their original terminal and endpoint identities cannot be reconstructed safely.
+Queued persistence from a retired connection cannot create a late browser alert.
+
+The browser keeps one visible notification and at most eight queued notifications, supersedes earlier events for the same endpoint and pane, and gives promoted entries a fresh native lifetime.
+Custom messages bypass delay; completion always validates `Done`, with a one-second receipt-based grace and 50 ms rechecks for a missing or still-working projection.
+Delayed attention requires `Blocked` when its deadline arrives.
+In-app suppression uses the selected tab, with workspace fallback; desktop and completion-sound suppression additionally require browser focus.
+Attention sounds remain eligible in the active tab, following native policy.
+Notifications already accepted into the visible queue retain native queue semantics when preferences change; the new delivery policy applies when pending events become eligible.
+Detach, logout and gateway-generation replacement cancel transient presentation independently of durable activity.
+
+New browser profiles use native defaults: delivery off, a one-second agent delay, bottom-right positioning, and 8/5/3/5-second attention/completion/update/custom lifetimes.
+Desktop delivery uses browser notifications and requires browser-local permission and opt-in; native terminal-emulator delivery has no separate browser destination.
+The version-thirteen migration preserves earlier delivery, custom duration, disabled toasts, revision and keybindings, leaving `prefix+o` unbound when another action already owns it.
+Built-in sound files come directly from the native assets and are served as audio; browser playback remains subject to browser audio policy.
+Clipboard feedback follows `ClientShellState::show_copy_feedback` and `ui::copy_feedback_rect`: enabled by default, a two-second client-local success message, and all six top/bottom left/center/right positions within the terminal surface.
+Copy-mode and mouse-selection success use an explicit callback instead of a status-line message; errors retain their existing visible reporting even when success feedback is disabled.
+The feedback uses the native green border, panel/text palette, and compact monospaced layout, moves aside for an intersecting notification, and clears when its surface is retired or the browser detaches.
+The version-fifteen settings migration retains earlier settings and adds independent clipboard preferences; preview cancellation and gateway restart preserve their saved values.
+`web/test/clipboard-feedback.spec.ts` verifies actual clipboard contents, all six desktop positions, phone bounds, stable terminal canvas identity and focus, expiry, preference cancellation/restart, visible clipboard rejection, native-notification overlap, and detach cleanup.
+Per-agent sound preferences now follow native `SoundConfig::allows` and its 21 configurable agents, including Droid's default OFF and the global sound switch taking precedence over agent ON.
+The sidebar and notification policy share canonical agent-name resolution, while visual notification delivery remains independent of sound overrides.
+Version-sixteen settings migration preserves existing preferences and adds the native agent defaults; the settings editor supports preview/cancel and desktop/phone layouts.
+Native-source contract tests compare the supported keys and defaults directly with Rust configuration, and native-backed browser tests cover mute/enable, visual delivery, cancellation, global mute, and restart persistence.
+Custom notification sounds use browser-selected MP3 files instead of machine-specific paths.
+The editor supports a global source and separate done/request overrides, local decoding and playback previews, and per-source reset.
+Files remain local until Save; Cancel releases temporary preview URLs and aborts pending uploads.
+Event overrides take precedence over the global source, while an unavailable or unplayable selected asset falls back to the bundled event sound.
+Browser autoplay permissions still apply, and permission rejection does not trigger another playback attempt.
+The authenticated gateway stores exact MP3 bytes under content-hash identities in owner-only storage, with a 2 MiB per-file limit and bounded total storage.
+Unreferenced uploads expire after 24 hours; cleanup and settings saves share a serialization boundary so referenced assets are retained.
+Version-eighteen settings migration preserves earlier preferences and adds nullable sound references without embedding file bytes or local paths in settings.
+Browser tests verify real selected bytes and playback, event/global precedence, missing and invalid audio fallback, permission rejection, restart, preview-default cancellation, late decoding, delayed uploads, revision conflicts, and edits during a committed request.
+Package tests cover storage integrity, owner-only permissions, bounded allocation and retention, cleanup/save serialization, playback cancellation and migration.
+Deployment remains pending.
+
+`web/test/notification-policy.test.ts` verifies queue order and overflow, supersession, delayed validation, focus suppression, offline retention, pane moves, replaced terminal and endpoint rejection, delivery modes and legacy history.
+`web/test/notifications.spec.ts` verifies real native custom delivery without a terminal client, literal text, native audio bytes, desktop/phone positions, visible-target shortcuts, offline retention, unchanged terminal identity and pending input, resumed-work cancellation, detach/resume, and durable history without re-alerting.
+Native tests verify mixed JSON/TUI delivery, report-agent completion projection, truthful browser-only custom results, bounded queues, no replay, disconnect cleanup and frozen-codec compatibility.
+The deployed native runtimes remain unchanged until the lossless rollout gate below is satisfied.
+
+## Windows resize recovery
+
+Restoring Copy mode's native scroll offset before shrinking the terminal could leave the live Windows viewport empty.
+The Windows recent-output cache tracked the last viewport row, preserving unused blank rows during reflow and pushing live text into history.
+That observer is now released before geometry changes, and cache recovery scans only available history.
+Resize recovery also reads actual terminal text and ANSI instead of consulting cached output that can mask an empty screen.
+The regression checks visible retention, no artificial scrollback, and a single copy of the output after resize.
+It fails on Windows before the fix and passes afterward; Linux also passes, and existing blank-screen and scrolled-history resize tests remain covered.
+An isolated real PowerShell comparison reproduces the loss in the official runtime and verifies retention without duplicate history in the fixed build.
+This fix requires adoption by the owning native runtime; the deployed Windows runtimes remain unchanged while their live sessions require preservation.
+
+## Workspace row metadata
+
+The candidate workspace API exposes optional `custom_label`, `branch`, and `git_ahead_behind` fields from the same cached workspace state used by the native sidebar.
+Unknown Git metadata stays absent, while known zero ahead/behind counts remain distinct from absence.
+Schema compatibility tests cover older endpoints without these fields, and native projection tests preserve manual labels while exposing branch and count changes.
+Shared browser validation now supports native workspace tokens, `$custom` metadata, row gaps, styles, and first-match rules without changing existing agent rows.
+The browser renderer and previewable settings editor support native workspace rows using the shared agent/workspace layout engine.
+Host identity, worktree tree prefixes, and Navigate indices remain outside configurable tokens.
+Native child labels preserve explicit names, while automatic labels use the branch without its `worktree/` prefix; grouped children suppress duplicate Git details.
+Git counts retain fixed widths, separate ahead/behind colors, and explicit foreground, bold, and dim styling.
+Settings version 14 adds workspace defaults without changing saved agent rows, notification behavior, keybindings, revision, or collapsed groups.
+The settings request limit accommodates both bounded row configurations alongside saved groups and keybindings; other request limits remain unchanged.
+The candidate advertises `workspace_git_status`; capable clients request `include_git_status` on their existing `workspace.updated` subscription to keep the shared background Git refresh active independently of native sidebar settings.
+Connection-scoped interest is released on disconnect, and changed cached Git facts publish workspace updates without terminal attachment or per-request Git commands.
+Older endpoints receive the original subscription shape and continue to omit unknown Git facts.
+Native checks cover shared interest lifetime, headless refresh without terminal clients, unchanged-refresh event suppression, and changed workspace updates; gateway tests cover capability negotiation.
+The isolated workspace-row browser test uses a candidate release runtime from `WERDR_WORKSPACE_ROWS_NATIVE_BIN`, falling back to `target/release/herdr` after `cargo build --release --locked`.
+It exercises live Git changes with native Git rows disabled, custom metadata, conditional styles, worktree labels, preview/cancel/save, gateway restart, narrow rails, phone layout, and bounded large settings requests.
+The workspace browser changes are deployed from published source `08d2bc3c92d32a1ea5859b8fee673bc4d9261140` after all 158 package tests and 207 browser tests passed in its immutable archive.
+Live desktop and phone checks passed on the POSIX host and both Windows hosts for row context, custom metadata, conditional styles, preview cancellation, pending input, and terminal identity.
+The version-fourteen migration matched its rehearsal exactly, and all existing pane identities, the native runtime process, and prior preferences were preserved.
+The native candidate remains staged as a client and isolated test runtime; existing owning runtimes continue to supply only their available fields.
+Their Windows phone resize artifacts also remain until the separately verified native repair can be adopted without losing sessions.
+
+## Configured command bindings
+
+The native reference is `src/app/custom_commands.rs` and `src/input/keybindings.rs`.
+Configured shell, pane, popup, and plugin-action commands belong to the owning runtime.
+Browser preferences must not copy or execute their command text.
+The candidate exposes `command.list` and `command.manifest_changed` under the optional `command_catalog` capability.
+The catalog contains ordered opaque IDs, binding labels, action kinds, and descriptions using API-owned types; published client-shell codecs and `command.invoke` retain their existing shapes.
+Every registry rotation emits an invalidation, including a failed configuration reload that retains the prior definitions but issues fresh IDs.
+The gateway subscribes before reading the catalog, discards superseded reads and responses from retired endpoints, and retries optional failures independently without marking compatible hosts offline.
+Ordinary pane metadata never triggers a catalog read.
+The pure shortcut resolver follows native precedence using effective browser bindings: ordinary builtins, custom commands in manifest order, then indexed builtins.
+It retains Copy and Navigate scope, composition bypass, held-key suppression, and cancellation when the catalog changes.
+Native tests verify secret-free ordered metadata, unchanged focus, empty-fleet reload invalidation, unknown future actions, and existing stale-ID rejection.
+Gateway tests cover concurrent reload, endpoint replacement, unsupported servers, failed subscriptions and reads, retry recovery, late responses, disposal, and host isolation.
+The foundation passed full native checks with 3,285 tests and two platform skips, Windows cross-target lint and test compilation, and 167 browser package tests with typechecking and build.
+This work is not deployed.
+Browser dispatch now consumes the candidate command catalog through the command palette and configured bindings.
+The candidate adds capability-gated `command.execute`, validating the complete workspace/tab/pane/terminal target and selection revision before changing focus.
+Its producer returns the created pane or popup identity, shell-start acknowledgement, or plugin invocation ID without exposing executable text or plugin output.
+The original `command.invoke` reply remains unchanged.
+Popup ownership is assigned by the producer before publication and survives tab and workspace reordering; removing the owning tab closes its popup.
+Browser dispatch consumes these exact results because a later global-focus read can observe another client's action.
+Popup commands additionally require their singleton terminal's metadata, rendering, input, ownership, and close path; plugin actions may open these popups too.
+Browser dispatch preserves scoped workspace/tab/pane identities and selected-text coordinates with their authoritative content revision, reports stale IDs without automatic retry or label-based remapping, and has verified native command outcomes on desktop and phone.
+
+
+The candidate exposes `popup.get`, `popup.close_exact`, and `plugin.popup.open` under the optional `popup_sessions` capability, with `popup.changed` invalidation events.
+The browser subscribes before reading popup metadata and attaches to the exact terminal and owning tab through the existing native terminal transport.
+Popup input remains application input, including Escape and prefix keys; exact closure cannot close a replacement popup.
+The native plugin popup operation validates its full source identity and prepares its context without changing focus, then focuses only after successful process creation.
+Regression tests verify unchanged layout and previous focus after invalid environment data or a missing executable.
+Isolated desktop and phone popup tests verify native cell geometry, minimum dimensions, resize, input, process exit, stale closure, and preservation of the underlying terminal.
+The configured-command browser test verifies empty-workspace shell execution, scoped shell/pane/popup/plugin outcomes despite foreign native focus, and stale-ID rejection after configuration reload.
+The release-candidate browser test also verifies mouse-selected text through the command palette and configured popup invocation at phone dimensions.
+All four configuration-reload cases pass against that release candidate, as do the native Kitty keyboard and mouse protocol tests with the candidate terminal companion.
+Copy-mode selections pass through configured bindings and the command palette.
+A delayed-request test changes native output before command execution and verifies stale-revision rejection without invoking the plugin.
+Navigate-mode execution follows the focused terminal while another workspace is only previewed, matching the desktop client command target.
+Popup launch holds browser input behind a modal pending state until the popup arrives or the request fails; a delayed-request test verifies that typed characters cannot reach the underlying pane.
+The pending state expires one second after a successful reply if popup discovery has not arrived, matching the desktop timeout.
+This candidate passes all 175 browser package tests and the native suite of 3,296 tests with two platform skips, plus targeted release-candidate command, popup, plugin, configuration, copy, selection, shortcut, and native-input browser checks.
+
+## Native runtime rollout gate
+
+Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.
+
+A passive endpoint metadata reader cannot safely bypass this rollout gate on the current production runtimes.
+Their `surface_interest` support prevents surface activation but still permits default-workspace creation during attachment and geometry repair during disconnection.
+The candidate now advertises a separate `passive_metadata` capability after eliminating these attachment and teardown side effects, and `herdr api projection [--watch]` requires that capability before connecting.
+The reader exposes native ordering and custom-label facts without fabricating a view definition; the public snapshot and view API remain authoritative.
+This capability is not deployed to production runtimes, and browser integration of this reader is not enabled.
+Keep the optional-capability fallback until the owning runtime advertises the field.
+A gateway restart and a native runtime replacement have different process-lifetime consequences.
+
+The current native live handoff is not evidence of a lossless upgrade.
+The candidate rejects legacy handoff before disconnecting clients when a live runtime is detached, a popup exists, or workspace attachment identities/layouts are ambiguous or lack terminal metadata.
+This prevents the legacy pane-only manifest from silently omitting a runtime that exporter shutdown would otherwise dispose.
+Rejection preserves the current actor, client connection and public socket, and tests verify subsequent input delivery and preflight acceptance after reattachment.
+This topology safeguard does not preserve detached metadata or change legacy restoration of panes without live runtimes, and it does not establish a complete runtime state cut.
+Internal owner events now pass through one bounded, sequenced admission channel, including detector, child-exit and background-worker publications.
+Private capture samples a process-local, channel-identity-bound admission cutoff and applies exactly that finite prefix, retaining staged events and later publications in order.
+Sequence assignment occurs only after capacity reservation and shares a short lock with publication; cancellation before publication consumes no sequence.
+This is a publication boundary, not producer quiescence, handler completion, an external-effect journal or a transferable session capsule.
+The additional work is per admitted internal event, not per terminal byte, render, pane layout or attached client.
+Finite background workers register before spawning and remain registered through operation completion and result publication.
+Private capture rejects active workers, detects registrations that begin and finish during capture, and retains uncertainty after a started worker is cancelled or panics without acknowledging completion.
+An unstarted registration can be safely cancelled, while sequence-exhaustion publication failure prevents capture even if a wrapper reports normal return.
+The ledger covers Git refresh, plugin commands, worktree add/remove/read, status commands, update checks, manifest updates and restore timers.
+This tracks worker lifetimes, not persistent subprocess descendants, direct API ingress or ownership of external effects; uncertain workers require a future explicit reconciliation path before capture can proceed.
+Private terminal capture also retains each runtime's exact exit-record identity and rejects observed child-wait outcomes or imported-reader termination, including outcomes whose owner notification has not yet been published.
+Checks before capture, around serialization and after acknowledged cleanup are non-consuming and cover detached runtimes in a batch; rejection retains the original runtime and normal exit handling authority.
+An exit may occur immediately after the last observation, so successful capture is not proof of child liveness or frozen/transferred wait authority.
+The deployed runtimes limit exported history to 8 KiB per pane and omit it for panes with persisted agent sessions.
+The candidate now preserves all retained primary-screen history for both ordinary and resumable-agent panes.
+It rejects a manifest above the existing 16 MiB encoded transport limit before spawning the importer, rolls back the paused readers, and never truncates history to fit.
+An isolated handoff test reproduces the old loss of the first 296 of 400 lines and verifies that the candidate retains every line, Unicode text, ANSI color, and subsequent input.
+The resumable-agent handoff test verifies all 400 history lines while retaining its existing agent-session identity checks.
+These changes do not recover history already omitted by an older exporting runtime.
+`PaneRuntime::handoff_history_ansi()` still omits alternate-screen history, and complete terminal parser-state restoration remains unverified.
+The candidate now has a read-only `Terminal::screen_vt` export for an explicit primary or alternate screen through a tracked libghostty-vt C API patch.
+Tests verify retained inactive primary history, unchanged active-screen identity and cursor, rejection of missing/invalid screens, and reconstruction of both buffers with ANSI style and subsequent input.
+A restoration regression exposed lost pending SS2/SS3 character-set shifts; the candidate now preserves both shifts on primary and alternate screens, including exactly one shifted character and unchanged source behavior.
+The export includes current screen-level formatting state but deliberately does not claim to preserve saved cursors, terminal-global modes, or parser continuation.
+It is not yet wired into runtime handoff; those remaining state components need an explicit restore contract before the alternate-screen rollout gate can close.
+The handoff implementation transfers Unix file descriptors and does not provide a Windows ConPTY transfer path.
+Service supervision must preserve both the imported runtime and existing shell processes when the exporting runtime exits; moving only the new runtime outside a service control group is insufficient.
+
+Do not replace these checks with a pane-count check followed by `server.stop`.
+The existing stop method has no atomic idle condition, so a concurrent native client can create a pane between observation and shutdown.
+The candidate now advertises `stop_if_idle` and implements the distinct `server.stop_if_idle` operation, also available as `herdr server stop-if-idle`.
+The runtime owner checks terminal metadata, panes, runtimes, detached commands, plugin commands, and pending worktree operations before atomically committing shutdown.
+Queued API creation is rejected after that commit, and the response writer gets a bounded opportunity to flush before process exit.
+Unit tests cover queued creation, busy rejection, pending work, and capability compatibility; isolated socket/CLI tests verify empty-server exit and preservation of a busy shell PID and variables.
+The installed Linux runtime also passed an isolated systemd probe using the deployed supervisor's restart and process-group policies.
+Busy rejection retained the owner boot and pane; idle shutdown succeeded after workspace closure, and `Restart=always` started a fresh empty owner with an incremented restart count.
+The probe stopped and removed only its test service/session and verified that the production owner identity remained unchanged.
+This confirms that idle shutdown alone does not hold a maintenance window open: an idle upgrade must also control supervisor restarts.
+Both Windows hosts passed isolated scheduled-task probes using their production principals and restart settings, with test-only configuration and no logon trigger.
+Busy shutdown retained the owner and pane; clean idle shutdown returned task result zero and stayed stopped for more than the configured one-minute failure-restart interval.
+Independent checks confirmed removal of the test tasks and named sessions while the production tasks stayed running.
+These probes cover clean exit and restart policy, not a concurrent logon or a complete idle-upgrade orchestration.
+Older production runtimes do not gain this operation from a companion update; unsupported callers must not fall back to unconditional stop.
+This enables a future idle-only upgrade path but does not replace the live-transfer and supervision requirements.
+Before adopting a live transfer, verify process identity, workspace/tab/pane identity, complete retained history, primary and alternate screens, pending output, input, and supervisor recovery in an isolated service instance.
+Until those conditions are established on each target platform, native rollout remains outstanding even when isolated feature tests pass.

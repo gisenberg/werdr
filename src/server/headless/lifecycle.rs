@@ -1,31 +1,141 @@
 use super::*;
 
-const LIVE_HANDOFF_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(6);
+const SHUTDOWN_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(6);
 
-pub(super) fn wait_for_live_handoff_response_write(
+pub(super) fn wait_for_shutdown_response_write(
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    operation: &str,
 ) {
     let Some(response_write_complete) = response_write_complete else {
         return;
     };
 
-    match response_write_complete.recv_timeout(LIVE_HANDOFF_RESPONSE_WRITE_TIMEOUT) {
+    match response_write_complete.recv_timeout(SHUTDOWN_RESPONSE_WRITE_TIMEOUT) {
         Ok(()) => {}
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            warn!("timed out waiting for live handoff response write; old server exiting");
+            warn!(
+                operation,
+                "timed out waiting for shutdown response write; server exiting"
+            );
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            warn!("live handoff response writer disconnected; old server exiting");
+            warn!(
+                operation,
+                "shutdown response writer disconnected; server exiting"
+            );
         }
     }
 }
 
 impl HeadlessServer {
+    /// Check and commit on the runtime owner thread, without draining events or
+    /// creating a default workspace between the check and the shutdown fence.
+    pub(super) fn handle_stop_if_idle(&mut self, msg: api::ApiRequestMessage) -> bool {
+        self.app.reap_finished_detached_processes();
+        let busy = !self.app.state.terminals.is_empty()
+            || self.app.terminal_runtimes.len() != 0
+            || self
+                .app
+                .state
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.tabs.iter().any(|tab| !tab.panes.is_empty()))
+            || self.app.state.popup_pane.is_some()
+            || self.app.state.plugin_commands_in_flight != 0
+            || !self.app.detached_process_children.is_empty()
+            || !self.app.pending_api_worktree_creates.is_empty()
+            || !self.app.pending_api_worktree_removes.is_empty()
+            || !self.app.pending_api_worktree_remove_paths.is_empty()
+            || !self.app.pending_worktree_remove_runtime_exits.is_empty()
+            || !self.app.pending_worktree_remove_runtime_restores.is_empty()
+            || self.handoff_in_progress;
+        let response = if busy {
+            serde_json::to_string(&api::schema::ErrorResponse {
+                id: msg.request.id,
+                error: api::schema::ErrorBody {
+                    code: "server_busy".into(),
+                    message: "server has sessions or pending work; shutdown was not started".into(),
+                },
+            })
+        } else {
+            // This also sets should_quit before any queued API/client event can
+            // be dispatched. Cleanup rejects queued requests and connections.
+            self.initiate_shutdown();
+            serde_json::to_string(&api::schema::SuccessResponse {
+                id: msg.request.id,
+                result: api::schema::ResponseResult::Ok {},
+            })
+        }
+        .unwrap_or_else(|_| "{}".to_string());
+        let _ = msg.respond_to.send(response);
+        if !busy {
+            wait_for_shutdown_response_write(msg.response_write_complete, "stop_if_idle");
+        }
+        !busy
+    }
+
+    #[cfg(unix)]
+    pub(super) fn legacy_handoff_topology(
+        &self,
+    ) -> io::Result<HashMap<crate::terminal::TerminalId, u32>> {
+        let reject = |reason: &str| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("legacy live handoff cannot preserve {reason}"),
+            )
+        };
+        if self.app.state.popup_pane.is_some() {
+            return Err(reject("popup ownership"));
+        }
+        let mut pane_by_terminal = HashMap::new();
+        let mut pane_ids = HashSet::new();
+        for workspace in &self.app.state.workspaces {
+            for tab in &workspace.tabs {
+                let leaves = tab.layout.pane_ids();
+                if leaves.len() != tab.panes.len() {
+                    return Err(reject("a layout/pane-map mismatch"));
+                }
+                for pane_id in leaves {
+                    if !pane_ids.insert(pane_id) {
+                        return Err(reject("duplicate pane identities"));
+                    }
+                    let pane = tab
+                        .panes
+                        .get(&pane_id)
+                        .ok_or_else(|| reject("a layout leaf without a pane"))?;
+                    let terminal_id = &pane.attached_terminal_id;
+                    if !self.app.state.terminals.contains_key(terminal_id) {
+                        return Err(reject("an attachment without terminal metadata"));
+                    }
+                    if pane_by_terminal
+                        .insert(terminal_id.clone(), pane_id.raw())
+                        .is_some()
+                    {
+                        return Err(reject("multiple attachments to one terminal"));
+                    }
+                }
+            }
+        }
+        if self
+            .app
+            .terminal_runtimes
+            .iter()
+            .any(|(terminal_id, _)| !pane_by_terminal.contains_key(terminal_id))
+        {
+            return Err(reject("a detached terminal runtime"));
+        }
+        Ok(pane_by_terminal)
+    }
+
     #[cfg(unix)]
     pub(super) fn perform_live_handoff(
         &mut self,
         params: crate::api::schema::ServerLiveHandoffParams,
     ) -> io::Result<()> {
+        // The legacy manifest represents workspace panes only. Validate before
+        // touching sockets or clients, and never silently dispose an omitted
+        // runtime at commit. This does not establish a lossless state cut.
+        let pane_by_terminal = self.legacy_handoff_topology()?;
         info!("starting live handoff");
         let import_exe = params.import_exe.as_deref().map(std::path::PathBuf::from);
         let socket_path = crate::server::handoff::handoff_socket_path();
@@ -44,25 +154,6 @@ impl HeadlessServer {
                 return Err(err);
             }
         };
-
-        let mut pane_by_terminal = HashMap::new();
-        for ws in &self.app.state.workspaces {
-            for tab in &ws.tabs {
-                for (pane_id, pane) in &tab.panes {
-                    pane_by_terminal.insert(pane.attached_terminal_id.clone(), pane_id.raw());
-                }
-            }
-        }
-        if pane_by_terminal.len() > crate::server::handoff::MAX_FDS_PER_HANDOFF {
-            let _ = std::fs::remove_file(&socket_path);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "live handoff supports at most {} panes in one update; close panes or restart herdr normally",
-                    crate::server::handoff::MAX_FDS_PER_HANDOFF
-                ),
-            ));
-        }
 
         self.handoff_in_progress = true;
         self.disconnect_all_clients_for_handoff();
@@ -87,23 +178,33 @@ impl HeadlessServer {
             self.app.state.selected,
         );
 
-        let mut handoff_entries = Vec::new();
-        for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
-            let Some(pane_id) = pane_by_terminal.get(terminal_id).copied() else {
-                continue;
-            };
-            let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
-            let has_agent_session = self
-                .app
-                .state
-                .terminals
-                .get(terminal_id)
-                .is_some_and(|terminal| terminal.persisted_agent_session.is_some());
-            if !has_agent_session {
+        let handoff_entries = self
+            .app
+            .terminal_runtimes
+            .iter()
+            .map(|(terminal_id, runtime)| {
+                let pane_id = pane_by_terminal
+                    .get(terminal_id)
+                    .copied()
+                    .ok_or_else(|| io::Error::other("handoff runtime topology changed"))?;
+                let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
                 handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
+                handoff_runtime.agent_state = self
+                    .app
+                    .state
+                    .terminals
+                    .get(terminal_id)
+                    .and_then(|terminal| terminal.handoff_agent_state());
+                Ok((terminal_id.clone(), handoff_runtime))
+            })
+            .collect::<io::Result<Vec<_>>>();
+        let handoff_entries = match handoff_entries {
+            Ok(entries) => entries,
+            Err(err) => {
+                self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+                return Err(err);
             }
-            handoff_entries.push((terminal_id.clone(), handoff_runtime));
-        }
+        };
 
         let panes = handoff_entries
             .iter()
@@ -116,6 +217,10 @@ impl HeadlessServer {
             params.expected_version,
             self.api_window_title.clone(),
         );
+        if let Err(err) = crate::server::handoff::validate_manifest_size(&manifest) {
+            self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+            return Err(err);
+        }
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
             &socket_path,
@@ -134,7 +239,7 @@ impl HeadlessServer {
         let duplicate_result = (|| {
             for (terminal_id, _) in &handoff_entries {
                 let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
-                    continue;
+                    return Err(io::Error::other("handoff runtime disappeared"));
                 };
                 fds.push(runtime.duplicate_handoff_fd()?);
             }
@@ -216,9 +321,6 @@ impl HeadlessServer {
         }
 
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
-            if !pane_by_terminal.contains_key(&terminal_id) {
-                continue;
-            }
             debug!(terminal = %terminal_id, "preserving pane runtime for handoff");
             runtime.preserve_for_handoff();
         }

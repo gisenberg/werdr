@@ -45,6 +45,7 @@ impl App {
         SessionSnapshot {
             version: crate::build_info::version(),
             protocol: crate::protocol::PROTOCOL_VERSION,
+            runtime_boot_id: self.runtime_boot_id.clone(),
             focused_workspace_id,
             focused_tab_id,
             focused_pane_id,
@@ -53,6 +54,7 @@ impl App {
             panes: self.collect_panes_for_workspace(None).unwrap_or_default(),
             layouts,
             agents: self.collect_agent_infos(),
+            agent_view: Some(self.agent_view_info()),
         }
     }
 }
@@ -77,6 +79,41 @@ mod tests {
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app
+    }
+
+    #[test]
+    fn runtime_boot_identity_is_stable_per_app_and_changes_for_replacement() {
+        let app = app_with_two_tabs();
+        let first = app.session_snapshot();
+        let boot = first
+            .runtime_boot_id
+            .as_deref()
+            .expect("OS entropy available");
+        assert_eq!(boot.len(), 32);
+        assert!(boot.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(
+            first.runtime_boot_id,
+            app.session_snapshot().runtime_boot_id
+        );
+        assert_ne!(
+            first.runtime_boot_id,
+            app_with_two_tabs().session_snapshot().runtime_boot_id
+        );
+    }
+
+    #[test]
+    fn missing_runtime_boot_identity_keeps_snapshot_compatible() {
+        let mut app = app_with_two_tabs();
+        app.runtime_boot_id = None;
+        let snapshot = app.session_snapshot();
+        let mut value = serde_json::to_value(&snapshot).unwrap();
+        assert!(value.get("runtime_boot_id").is_none());
+        let restored: crate::api::schema::SessionSnapshot =
+            serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored.runtime_boot_id, None);
+        value["runtime_boot_id"] = serde_json::Value::Null;
+        let restored: crate::api::schema::SessionSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.runtime_boot_id, None);
     }
 
     #[test]

@@ -63,6 +63,14 @@ pub struct WorkspaceInfo {
     pub workspace_id: String,
     pub number: usize,
     pub label: String,
+    /// Whether the label was explicitly supplied rather than derived from cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_label: Option<bool>,
+    /// Cached native Git metadata; absence does not imply a clean repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ahead_behind: Option<(usize, usize)>,
     pub focused: bool,
     pub pane_count: usize,
     pub tab_count: usize,

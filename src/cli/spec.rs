@@ -12,6 +12,7 @@ pub(super) fn command() -> Command {
         .disable_version_flag(true)
         .arg(help_flag())
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
+        .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
         .arg(
             option("remote-keybindings", "MODE")
@@ -159,6 +160,9 @@ fn server_command() -> Command {
     Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
+        .subcommand(
+            Command::new("stop-if-idle").about("Stop only when no sessions or pending work remain"),
+        )
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
         .subcommand(
             Command::new("agent-manifests")
@@ -180,6 +184,11 @@ fn api_command() -> Command {
     Command::new("api")
         .about("Inspect socket API metadata and live runtime state")
         .subcommand(Command::new("snapshot").about("Print the live session snapshot"))
+        .subcommand(
+            Command::new("projection")
+                .about("Read passive compatibility metadata")
+                .arg(flag("watch")),
+        )
         .subcommand(
             Command::new("schema")
                 .about("Print or write the bundled API schema")
@@ -645,6 +654,7 @@ fn report_agent_command() -> Command {
         .arg(option("seq", "N"))
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
+        .arg(resume_argv_arg())
 }
 
 fn report_agent_session_command() -> Command {
@@ -657,6 +667,15 @@ fn report_agent_session_command() -> Command {
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
         .arg(option("session-start-source", "SOURCE"))
+        .arg(resume_argv_arg())
+}
+
+fn resume_argv_arg() -> Arg {
+    Arg::new("resume_argv")
+        .value_name("RESUME_ARG")
+        .num_args(0..)
+        .last(true)
+        .help("Command that resumes this session after a Herdr restart; starts with a plain command name")
 }
 
 fn release_agent_command() -> Command {
@@ -894,10 +913,12 @@ fn integration_target_arg() -> Arg {
 }
 
 fn integration_target_values() -> Vec<&'static str> {
-    crate::api::schema::IntegrationTarget::ALL
+    let mut values: Vec<&'static str> = crate::api::schema::IntegrationTarget::ALL
         .into_iter()
         .map(crate::integration::integration_target_label)
-        .collect()
+        .collect();
+    values.extend_from_slice(crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS);
+    values
 }
 
 fn id_command(name: &'static str, id: &'static str, about: &'static str) -> Command {
@@ -1120,6 +1141,15 @@ mod tests {
     fn spec_matches_all_integration_targets() {
         let cmd = super::command();
         let install = command_path(&cmd, &["integration", "install"]);
+        let mut expected: Vec<String> = crate::api::schema::IntegrationTarget::ALL
+            .map(crate::integration::integration_target_label)
+            .map(str::to_string)
+            .to_vec();
+        expected.extend(
+            crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS
+                .iter()
+                .map(|label| (*label).to_string()),
+        );
         assert_eq!(
             argument(install, "target")
                 .get_value_parser()
@@ -1127,9 +1157,7 @@ mod tests {
                 .unwrap()
                 .map(|value| value.get_name().to_string())
                 .collect::<Vec<_>>(),
-            crate::api::schema::IntegrationTarget::ALL
-                .map(crate::integration::integration_target_label)
-                .map(str::to_string)
+            expected
         );
     }
 

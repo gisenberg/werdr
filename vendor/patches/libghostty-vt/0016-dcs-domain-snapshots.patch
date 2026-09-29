@@ -1,0 +1,339 @@
+diff --git a/vendor/libghostty-vt/src/terminal/dcs.zig b/vendor/libghostty-vt/src/terminal/dcs.zig
+index a76ab31b..9594d016 100644
+--- a/vendor/libghostty-vt/src/terminal/dcs.zig
++++ b/vendor/libghostty-vt/src/terminal/dcs.zig
+@@ -7,6 +7,12 @@ const DCS = terminal.DCS;
+ 
+ const log = std.log.scoped(.terminal_dcs);
+ 
++pub const snapshot = @import("dcs_snapshot.zig");
++
++test {
++    _ = snapshot;
++}
++
+ /// DCS command handler. This should be hooked into a terminal.Stream handler.
+ /// The hook/put/unhook functions are meant to be called from the
+ /// terminal.stream dcsHook, dcsPut, and dcsUnhook functions, respectively.
+diff --git a/vendor/libghostty-vt/src/terminal/dcs_snapshot.zig b/vendor/libghostty-vt/src/terminal/dcs_snapshot.zig
+new file mode 100644
+index 00000000..79bda7c5
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/dcs_snapshot.zig
+@@ -0,0 +1,316 @@
++//! Authoritative DCS state, including commands discarded after allocation failure.
++//! Apply after outer parser continuation replay, without replaying DCS effects.
++const std = @import("std");
++const options = @import("terminal_options");
++const dcs = @import("dcs.zig");
++const Allocator = std.mem.Allocator;
++pub const Error = error{ InvalidSnapshot, LimitExceeded, OutOfMemory };
++const magic = "DCSST1";
++const header_len = 32;
++
++const View = struct {
++    tag: u8,
++    max_bytes: usize,
++    tmux_tag: u8 = 0,
++    tmux_max_bytes: usize = 0,
++    bytes: []const u8 = "",
++};
++
++fn view(handler: *const dcs.Handler) Error!View {
++    var result: View = .{ .tag = 0, .max_bytes = handler.max_bytes };
++    switch (handler.state) {
++        .inactive => {},
++        .ignore => result.tag = 1,
++        .xtgettcap => |*buffer| {
++            result.tag = 2;
++            result.bytes = buffer.writer.buffer[0..buffer.writer.end];
++        },
++        .decrqss => |*buffer| {
++            if (buffer.len > buffer.data.len) return error.InvalidSnapshot;
++            result.tag = 3;
++            result.bytes = buffer.data[0..buffer.len];
++        },
++        .tmux => |*parser| if (comptime options.tmux_control_mode) {
++            result.tag = 4;
++            result.tmux_max_bytes = parser.max_bytes;
++            result.tmux_tag = switch (parser.state) {
++                .idle => 0,
++                .broken => 1,
++                .notification => 2,
++                .block => 3,
++            };
++            // The native broken state has already freed its buffer.
++            if (parser.state != .broken) result.bytes = parser.buffer.writer.buffer[0..parser.buffer.writer.end];
++            if (parser.state == .notification and result.bytes.len == 0) return error.InvalidSnapshot;
++        } else return error.InvalidSnapshot,
++    }
++    return result;
++}
++
++/// Limit bounds encoded bytes, not allocator overhead or retained capacities.
++/// Max-byte policies may be below current content after a policy change.
++pub fn encode(alloc: Allocator, handler: *const dcs.Handler, limit: usize) Error![]u8 {
++    const v = try view(handler);
++    const len = std.math.add(usize, header_len, v.bytes.len) catch return error.LimitExceeded;
++    if (len > limit) return error.LimitExceeded;
++    const bytes = try alloc.alloc(u8, len);
++    @memcpy(bytes[0..6], magic);
++    bytes[6] = v.tag;
++    std.mem.writeInt(u64, bytes[7..15], v.max_bytes, .little);
++    bytes[15] = v.tmux_tag;
++    std.mem.writeInt(u64, bytes[16..24], v.tmux_max_bytes, .little);
++    std.mem.writeInt(u64, bytes[24..32], v.bytes.len, .little);
++    @memcpy(bytes[header_len..], v.bytes);
++    return bytes;
++}
++
++fn preflight(bytes: []const u8, limit: usize) Error!View {
++    if (bytes.len > limit) return error.LimitExceeded;
++    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..6], magic)) return error.InvalidSnapshot;
++    const len = std.math.cast(usize, std.mem.readInt(u64, bytes[24..32], .little)) orelse return error.InvalidSnapshot;
++    if (len != bytes.len - header_len) return error.InvalidSnapshot;
++    const v: View = .{
++        .tag = bytes[6],
++        .max_bytes = std.math.cast(usize, std.mem.readInt(u64, bytes[7..15], .little)) orelse return error.InvalidSnapshot,
++        .tmux_tag = bytes[15],
++        .tmux_max_bytes = std.math.cast(usize, std.mem.readInt(u64, bytes[16..24], .little)) orelse return error.InvalidSnapshot,
++        .bytes = bytes[header_len..],
++    };
++    if (v.tag != 4 and (v.tmux_tag != 0 or v.tmux_max_bytes != 0)) return error.InvalidSnapshot;
++    switch (v.tag) {
++        0, 1 => if (len != 0) return error.InvalidSnapshot,
++        2 => {},
++        3 => if (len > 2) return error.InvalidSnapshot,
++        4 => {
++            if (!options.tmux_control_mode or v.tmux_tag > 3) return error.InvalidSnapshot;
++            if (v.tmux_tag == 1 and len != 0) return error.InvalidSnapshot;
++            if (v.tmux_tag == 2 and len == 0) return error.InvalidSnapshot;
++        },
++        else => return error.InvalidSnapshot,
++    }
++    return v;
++}
++
++fn copyBuffer(alloc: Allocator, bytes: []const u8) Error!std.Io.Writer.Allocating {
++    var buffer = try std.Io.Writer.Allocating.initCapacity(alloc, bytes.len);
++    @memcpy(buffer.writer.buffer[0..bytes.len], bytes);
++    buffer.writer.end = bytes.len;
++    return buffer;
++}
++
++/// Produces an owned handler; call deinit even after applying subsequent input.
++/// Does not execute commands, consume outer continuation or copy source pointers.
++pub fn decode(alloc: Allocator, bytes: []const u8, limit: usize) Error!dcs.Handler {
++    const v = try preflight(bytes, limit);
++    var result: dcs.Handler = .{ .max_bytes = v.max_bytes };
++    switch (v.tag) {
++        0 => {},
++        1 => result.state = .ignore,
++        2 => result.state = .{ .xtgettcap = try copyBuffer(alloc, v.bytes) },
++        3 => {
++            result.state = .{ .decrqss = .{ .len = @intCast(v.bytes.len) } };
++            @memcpy(result.state.decrqss.data[0..v.bytes.len], v.bytes);
++        },
++        4 => if (comptime options.tmux_control_mode) {
++            result.state = .{ .tmux = .{
++                .state = switch (v.tmux_tag) {
++                    0 => .idle,
++                    1 => .broken,
++                    2 => .notification,
++                    3 => .block,
++                    else => unreachable,
++                },
++                .max_bytes = v.tmux_max_bytes,
++                .buffer = if (v.tmux_tag == 1) .init(alloc) else try copyBuffer(alloc, v.bytes),
++            } };
++        } else unreachable,
++        else => unreachable,
++    }
++    return result;
++}
++
++fn expectEquivalent(a: *const dcs.Handler, b: *const dcs.Handler) !void {
++    const alloc = std.testing.allocator;
++    const left = try encode(alloc, a, 1 << 20);
++    defer alloc.free(left);
++    const right = try encode(alloc, b, 1 << 20);
++    defer alloc.free(right);
++    try std.testing.expectEqualSlices(u8, left, right);
++}
++
++fn roundtrip(source: *const dcs.Handler) !dcs.Handler {
++    const alloc = std.testing.allocator;
++    const bytes = try encode(alloc, source, 1 << 20);
++    defer alloc.free(bytes);
++    const restored = try decode(alloc, bytes, bytes.len);
++    try expectEquivalent(source, &restored);
++    return restored;
++}
++
++test "dcs snapshot every XTGETTCAP cut and future command" {
++    const testing = std.testing;
++    const payload = "544e;436f;ff00";
++    for (0..payload.len + 1) |cut| {
++        var source: dcs.Handler = .{};
++        defer source.deinit();
++        _ = source.hook(testing.allocator, .{ .intermediates = "+", .params = &.{}, .final = 'q' });
++        for (payload[0..cut]) |byte| _ = source.put(byte);
++        var restored = try roundtrip(&source);
++        defer restored.deinit();
++        for (payload[cut..]) |byte| {
++            _ = source.put(byte);
++            _ = restored.put(byte);
++        }
++        try expectEquivalent(&source, &restored);
++        var a = source.unhook().?;
++        defer a.deinit();
++        var b = restored.unhook().?;
++        defer b.deinit();
++        try testing.expectEqualStrings("544E;436F;FF00", a.xtgettcap.data.written());
++        try testing.expectEqualSlices(u8, a.xtgettcap.data.written(), b.xtgettcap.data.written());
++        try expectEquivalent(&source, &restored);
++    }
++}
++
++test "dcs snapshot allocation failure ignore is not resurrected" {
++    const testing = std.testing;
++    var source: dcs.Handler = .{};
++    defer source.deinit();
++    _ = source.hook(testing.failing_allocator, .{ .intermediates = "+", .params = &.{}, .final = 'q' });
++    try testing.expect(source.state == .ignore);
++    var restored = try roundtrip(&source);
++    defer restored.deinit();
++    for ("544e") |byte| {
++        try testing.expect(source.put(byte) == null);
++        try testing.expect(restored.put(byte) == null);
++    }
++    try testing.expect(source.unhook() == null);
++    try testing.expect(restored.unhook() == null);
++    // Successful replay would instead create a live query.
++    _ = restored.hook(testing.allocator, .{ .intermediates = "+", .params = &.{}, .final = 'q' });
++    for ("544e") |byte| _ = restored.put(byte);
++    var reply = restored.unhook().?;
++    defer reply.deinit();
++    try testing.expect(reply == .xtgettcap);
++}
++
++test "dcs snapshot DECRQSS initialized prefix and overflow" {
++    const testing = std.testing;
++    for ([_][]const u8{ "", "m", " q", "bad" }) |payload| {
++        var source: dcs.Handler = .{};
++        defer source.deinit();
++        _ = source.hook(testing.allocator, .{ .intermediates = "$", .params = &.{}, .final = 'q' });
++        for (payload) |byte| _ = source.put(byte);
++        var restored = try roundtrip(&source);
++        defer restored.deinit();
++        const a = source.unhook();
++        const b = restored.unhook();
++        try testing.expectEqual(a == null, b == null);
++        if (a) |command| try testing.expectEqual(command.decrqss, b.?.decrqss);
++    }
++}
++
++fn decodeWithAllocator(alloc: Allocator, bytes: []const u8) !void {
++    var restored = try decode(alloc, bytes, bytes.len);
++    defer restored.deinit();
++}
++
++test "dcs snapshot policy shrink allocation failures and malformed input" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    var source: dcs.Handler = .{};
++    defer source.deinit();
++    _ = source.hook(alloc, .{ .intermediates = "+", .params = &.{}, .final = 'q' });
++    for ("544e") |byte| _ = source.put(byte);
++    source.max_bytes = 1;
++    const bytes = try encode(alloc, &source, 4096);
++    defer alloc.free(bytes);
++    try testing.checkAllAllocationFailures(alloc, decodeWithAllocator, .{bytes});
++    for (0..bytes.len) |cut| try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes[0..cut], bytes.len));
++    try testing.expectError(error.LimitExceeded, encode(testing.failing_allocator, &source, bytes.len - 1));
++    try testing.expectError(error.LimitExceeded, decode(testing.failing_allocator, bytes, bytes.len - 1));
++    for ([_]usize{ 0, 6, 15, 16, 24 }) |offset| {
++        const old = bytes[offset];
++        bytes[offset] = 255;
++        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, bytes.len));
++        bytes[offset] = old;
++    }
++    var restored = try roundtrip(&source);
++    defer restored.deinit();
++    _ = source.put('x');
++    _ = restored.put('x');
++    try testing.expect(restored.state == .ignore);
++    try expectEquivalent(&source, &restored);
++}
++
++test "dcs snapshot writer growth failure preserves ignore" {
++    const testing = std.testing;
++    var failing = testing.FailingAllocator.init(testing.allocator, .{});
++    var source: dcs.Handler = .{};
++    defer source.deinit();
++    _ = source.hook(failing.allocator(), .{ .intermediates = "+", .params = &.{}, .final = 'q' });
++    const capacity = source.state.xtgettcap.writer.buffer.len;
++    for (0..capacity) |_| _ = source.put('a');
++    failing.fail_index = failing.alloc_index;
++    failing.resize_fail_index = failing.resize_index;
++    _ = source.put('b');
++    try testing.expect(source.state == .ignore);
++    var restored = try roundtrip(&source);
++    defer restored.deinit();
++    try testing.expect(restored.unhook() == null);
++}
++
++test "dcs snapshot tmux states and retained idle limit" {
++    if (comptime !options.tmux_control_mode) return error.SkipZigTest;
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    for ([_][]const u8{ "%", "%begin 1 2 3\nabc", "%client-detached client\n", "bad" }) |prefix| {
++        var source: dcs.Handler = .{};
++        defer source.deinit();
++        _ = source.hook(alloc, .{ .intermediates = "", .params = &.{1000}, .final = 'p' });
++        for (prefix) |byte| _ = source.put(byte);
++        var restored = try roundtrip(&source);
++        defer restored.deinit();
++        const bytes = try encode(alloc, &source, 4096);
++        defer alloc.free(bytes);
++        try testing.checkAllAllocationFailures(alloc, decodeWithAllocator, .{bytes});
++        // Compare state and full emitted commands at every future byte.
++        for ("\n%end 1 2 3\n%exit\n") |byte| {
++            const a = source.put(byte);
++            const b = restored.put(byte);
++            try testing.expectEqual(a == null, b == null);
++            if (a) |value| try testing.expectEqualDeep(value.tmux, b.?.tmux);
++            try expectEquivalent(&source, &restored);
++        }
++    }
++    var source: dcs.Handler = .{};
++    defer source.deinit();
++    _ = source.hook(alloc, .{ .intermediates = "", .params = &.{1000}, .final = 'p' });
++    for ("%client-detached client\n") |byte| _ = source.put(byte);
++    try testing.expect(source.state.tmux.state == .idle);
++    try testing.expect(source.state.tmux.buffer.written().len > 0);
++    source.state.tmux.max_bytes = source.state.tmux.buffer.written().len;
++    var restored = try roundtrip(&source);
++    defer restored.deinit();
++    _ = source.put('%');
++    _ = restored.put('%');
++    try testing.expect(restored.state == .ignore);
++    try expectEquivalent(&source, &restored);
++}
++
++test "dcs snapshot tmux malformed and unsupported states reject before allocation" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const source: dcs.Handler = .{};
++    const bytes = try encode(alloc, &source, 4096);
++    defer alloc.free(bytes);
++    bytes[6] = 4;
++    bytes[15] = 2; // A notification cannot have an empty buffer.
++    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, bytes.len));
++    bytes[15] = 255;
++    try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, bytes.len));
++    if (!options.tmux_control_mode) {
++        bytes[15] = 0;
++        try testing.expectError(error.InvalidSnapshot, decode(testing.failing_allocator, bytes, bytes.len));
++    }
++}

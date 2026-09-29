@@ -7,8 +7,9 @@ use tracing::info;
 
 use crate::ipc::LocalStream;
 use crate::protocol::{
-    self, AttachScrollDirection, AttachScrollSource, ClientMessage, RenderEncoding, ServerMessage,
-    MAX_GRAPHICS_FRAME_SIZE,
+    self, AttachScrollDirection, AttachScrollSource, ClientMessage, ClientMouseButton,
+    ClientMouseKind, ClientMousePosition, RenderEncoding, ServerMessage,
+    MAX_CLIPBOARD_IMAGE_PAYLOAD, MAX_GRAPHICS_FRAME_SIZE,
 };
 use crate::server::socket_paths::client_socket_path;
 
@@ -19,7 +20,7 @@ pub fn run_terminal_session_observe(target: String, cols: u16, rows: u16) -> io:
     let mut stream =
         connect_terminal_session_stream(target.clone(), cols, rows, "observing terminal session")?;
     write_to_server(&mut stream, &ClientMessage::ObserveTerminal { target })?;
-    write_terminal_session_output(stream)
+    write_terminal_session_output(stream, false)
 }
 
 /// Runs a writable terminal session controller.
@@ -66,7 +67,7 @@ pub fn run_terminal_session_control(
         let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
     });
 
-    write_terminal_session_output(stream)
+    write_terminal_session_output(stream, true)
 }
 
 fn connect_terminal_session_stream(
@@ -100,6 +101,7 @@ fn connect_terminal_session_stream(
         false,
         false,
         true,
+        true,
     ) {
         Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
         Ok(handshake) => {
@@ -119,40 +121,72 @@ fn connect_terminal_session_stream(
     Ok(stream)
 }
 
-fn write_terminal_session_output(mut stream: LocalStream) -> io::Result<()> {
+fn write_terminal_session_output(mut stream: LocalStream, controlling: bool) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
+    if controlling {
+        serde_json::to_writer(
+            &mut stdout,
+            &serde_json::json!({
+                "type": "terminal.capabilities",
+                "clipboard_image_max_bytes": MAX_CLIPBOARD_IMAGE_PAYLOAD,
+            }),
+        )?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
     loop {
         match protocol::read_message(&mut stream, MAX_GRAPHICS_FRAME_SIZE) {
-            Ok(ServerMessage::Terminal(frame)) => {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&frame.bytes);
-                let line = serde_json::json!({
-                    "type": "terminal.frame",
-                    "seq": frame.seq,
-                    "encoding": "ansi",
-                    "width": frame.width,
-                    "height": frame.height,
-                    "full": frame.full,
-                    "bytes": encoded,
-                });
-                serde_json::to_writer(&mut stdout, &line)?;
-                stdout.write_all(b"\n")?;
-                stdout.flush()?;
+            Ok(message) => {
+                let closed = matches!(message, ServerMessage::ServerShutdown { .. });
+                if let Some(line) = terminal_session_record(message) {
+                    serde_json::to_writer(&mut stdout, &line)?;
+                    stdout.write_all(b"\n")?;
+                    stdout.flush()?;
+                }
+                if closed {
+                    return Ok(());
+                }
             }
-            Ok(ServerMessage::ServerShutdown { reason }) => {
-                let line = serde_json::json!({
-                    "type": "terminal.closed",
-                    "reason": reason,
-                });
-                serde_json::to_writer(&mut stdout, &line)?;
-                stdout.write_all(b"\n")?;
-                stdout.flush()?;
-                return Ok(());
-            }
-            Ok(ServerMessage::Graphics { .. }) => {}
-            Ok(_) => {}
             Err(protocol::FramingError::UnexpectedEof) => return Ok(()),
             Err(err) => return Err(io::Error::other(err.to_string())),
         }
+    }
+}
+
+/// Translate existing private messages into optional, ordered JSON stream records.
+/// Keep presentation state beside frames so consumers apply mode changes in order.
+fn terminal_session_record(message: ServerMessage) -> Option<serde_json::Value> {
+    match message {
+        ServerMessage::Terminal(frame) => Some(serde_json::json!({
+            "type": "terminal.frame",
+            "seq": frame.seq,
+            "encoding": "ansi",
+            "width": frame.width,
+            "height": frame.height,
+            "full": frame.full,
+            "bytes": base64::engine::general_purpose::STANDARD.encode(&frame.bytes),
+        })),
+        ServerMessage::MouseCapture {
+            enabled,
+            sgr_pixels,
+        } => Some(serde_json::json!({
+            "type": "terminal.mouse",
+            "enabled": enabled,
+            "sgr_pixels": sgr_pixels,
+        })),
+        ServerMessage::DirectTerminalKeyboardProtocol {
+            flags,
+            modify_other_keys_level,
+        } => Some(serde_json::json!({
+            "type": "terminal.keyboard",
+            "flags": flags,
+            "modify_other_keys_level": modify_other_keys_level,
+        })),
+        ServerMessage::ServerShutdown { reason } => Some(serde_json::json!({
+            "type": "terminal.closed",
+            "reason": reason,
+        })),
+        _ => None,
     }
 }
 
@@ -164,6 +198,8 @@ enum TerminalControlCommand {
         text: Option<String>,
         bytes: Option<String>,
     },
+    #[serde(rename = "terminal.image")]
+    Image { extension: String, bytes: String },
     #[serde(rename = "terminal.resize")]
     Resize {
         cols: u16,
@@ -186,8 +222,36 @@ enum TerminalControlCommand {
         #[serde(default)]
         modifiers: u8,
     },
+    #[serde(rename = "terminal.mouse")]
+    Mouse {
+        action: TerminalControlMouseAction,
+        #[serde(default)]
+        button: TerminalControlMouseButton,
+        column: u16,
+        row: u16,
+        #[serde(default)]
+        modifiers: u8,
+    },
     #[serde(rename = "terminal.release")]
     Release {},
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TerminalControlMouseAction {
+    Down,
+    Up,
+    Drag,
+    Move,
+}
+
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TerminalControlMouseButton {
+    #[default]
+    Left,
+    Right,
+    Middle,
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
@@ -221,6 +285,25 @@ pub(super) fn terminal_control_command_from_json(raw: &str) -> Result<ClientMess
                 (None, None) => Vec::new(),
             };
             Ok(ClientMessage::Input { data })
+        }
+        TerminalControlCommand::Image { extension, bytes } => {
+            if !matches!(extension.as_str(), "png" | "jpg" | "gif" | "webp" | "bmp") {
+                return Err("unsupported terminal.image extension".into());
+            }
+            if bytes.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD.div_ceil(3) * 4 {
+                return Err("terminal.image exceeds the native size limit".into());
+            }
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(bytes)
+                .map_err(|err| format!("invalid terminal.image bytes: {err}"))?;
+            if data.is_empty() || data.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD {
+                return Err("terminal.image must contain 1 to 16777216 bytes".into());
+            }
+            Ok(ClientMessage::ClipboardImage {
+                target: protocol::ClientClipboardImageTarget::DirectTerminal,
+                extension,
+                data,
+            })
         }
         TerminalControlCommand::Resize {
             cols,
@@ -272,6 +355,128 @@ pub(super) fn terminal_control_command_from_json(raw: &str) -> Result<ClientMess
                 modifiers,
             })
         }
+        TerminalControlCommand::Mouse {
+            action,
+            button,
+            column,
+            row,
+            modifiers,
+        } => {
+            let button = match button {
+                TerminalControlMouseButton::Left => ClientMouseButton::Left,
+                TerminalControlMouseButton::Right => ClientMouseButton::Right,
+                TerminalControlMouseButton::Middle => ClientMouseButton::Middle,
+            };
+            let kind = match action {
+                TerminalControlMouseAction::Down => ClientMouseKind::Down(button),
+                TerminalControlMouseAction::Up => ClientMouseKind::Up(button),
+                TerminalControlMouseAction::Drag => ClientMouseKind::Drag(button),
+                TerminalControlMouseAction::Move => ClientMouseKind::Moved,
+            };
+            // The server encodes the event for the pane's mouse mode and drops it
+            // when the application has not enabled mouse reporting.
+            Ok(ClientMessage::AttachMouse {
+                kind,
+                position: ClientMousePosition::Cell { column, row },
+                geometry: None,
+                modifiers,
+                lines: 1,
+            })
+        }
         TerminalControlCommand::Release {} => Ok(ClientMessage::Detach),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_image_commands_use_only_the_attached_terminal() {
+        let message = terminal_control_command_from_json(
+            r#"{"type":"terminal.image","extension":"png","bytes":"AAH/","target":"other"}"#,
+        )
+        .unwrap();
+        assert!(matches!(message, ClientMessage::ClipboardImage {
+            target: protocol::ClientClipboardImageTarget::DirectTerminal,
+            extension, data,
+        } if extension == "png" && data == [0, 1, 255]));
+        for raw in [
+            r#"{"type":"terminal.image","extension":"sh","bytes":"AA=="}"#,
+            r#"{"type":"terminal.image","extension":"png","bytes":""}"#,
+            r#"{"type":"terminal.image","extension":"png","bytes":"invalid!"}"#,
+        ] {
+            assert!(terminal_control_command_from_json(raw).is_err());
+        }
+        let oversized = serde_json::json!({
+            "type": "terminal.image", "extension": "png",
+            "bytes": "A".repeat(MAX_CLIPBOARD_IMAGE_PAYLOAD.div_ceil(3) * 4 + 4),
+        });
+        assert!(terminal_control_command_from_json(&oversized.to_string()).is_err());
+    }
+
+    #[test]
+    fn terminal_session_preserves_frame_bytes_and_shutdown() {
+        let bytes = vec![0, 27, b'[', b'm', 255];
+        assert_eq!(
+            terminal_session_record(ServerMessage::Terminal(crate::protocol::TerminalFrame {
+                seq: 42,
+                width: 80,
+                height: 24,
+                full: true,
+                bytes: bytes.clone(),
+            })),
+            Some(serde_json::json!({
+                "type": "terminal.frame", "seq": 42, "encoding": "ansi",
+                "width": 80, "height": 24, "full": true,
+                "bytes": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }))
+        );
+        assert_eq!(
+            terminal_session_record(ServerMessage::ServerShutdown {
+                reason: Some("detached".into())
+            }),
+            Some(serde_json::json!({ "type": "terminal.closed", "reason": "detached" }))
+        );
+        assert!(terminal_session_record(ServerMessage::ReloadSoundConfig).is_none());
+    }
+
+    #[test]
+    fn terminal_session_preserves_mouse_enable_and_reset() {
+        for enabled in [true, false] {
+            assert_eq!(
+                terminal_session_record(ServerMessage::MouseCapture {
+                    enabled,
+                    sgr_pixels: false,
+                }),
+                Some(serde_json::json!({
+                    "type": "terminal.mouse", "enabled": enabled, "sgr_pixels": false,
+                }))
+            );
+        }
+        assert_eq!(
+            terminal_session_record(ServerMessage::MouseCapture {
+                enabled: true,
+                sgr_pixels: true,
+            })
+            .unwrap()["sgr_pixels"],
+            true
+        );
+    }
+
+    #[test]
+    fn terminal_session_preserves_exact_keyboard_flags_and_reset() {
+        for (flags, level) in [(31, 2), (1, 1), (0, 0)] {
+            assert_eq!(
+                terminal_session_record(ServerMessage::DirectTerminalKeyboardProtocol {
+                    flags,
+                    modify_other_keys_level: level,
+                }),
+                Some(serde_json::json!({
+                    "type": "terminal.keyboard", "flags": flags,
+                    "modify_other_keys_level": level,
+                }))
+            );
+        }
     }
 }

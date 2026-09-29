@@ -12,6 +12,10 @@ use tracing::{debug, warn};
 
 use crate::pty::fd;
 
+mod capture_pause;
+pub(crate) use capture_pause::CapturePause;
+use capture_pause::{CaptureRequest, GateOwner};
+
 // Actor handle methods must call wake_actor() after queuing work. The idle
 // timeout is only a fallback for missed wakes; PTY and wake readiness drive
 // normal responsiveness.
@@ -82,10 +86,19 @@ enum PtyIoDataCommand {
 }
 
 enum PtyIoControlCommand {
+    Capture(CaptureRequest),
+    ResumeCapture {
+        generation: u64,
+        reply: Option<tokio::sync::oneshot::Sender<std::io::Result<()>>>,
+    },
     BeginHandoff(std_mpsc::Sender<std::io::Result<()>>),
     DuplicateForHandoff(std_mpsc::Sender<std::io::Result<RawFd>>),
     ForegroundProcessGroup(std_mpsc::Sender<Option<u32>>),
-    RollbackHandoff(std_mpsc::Sender<std::io::Result<()>>),
+    RollbackHandoff {
+        generation: u64,
+        gate: Arc<Mutex<UserWriteGate>>,
+        reply: std_mpsc::Sender<std::io::Result<()>>,
+    },
     ReleaseAfterCommit(std_mpsc::Sender<std::io::Result<()>>),
     Shutdown,
 }
@@ -102,7 +115,21 @@ pub(crate) struct PtyIoActorHandle {
 
 #[derive(Debug)]
 struct UserWriteGate {
-    accepting: bool,
+    owner: GateOwner,
+    generation: u64,
+}
+
+impl UserWriteGate {
+    fn new(accepting: bool) -> Self {
+        Self {
+            owner: if accepting {
+                GateOwner::Running
+            } else {
+                GateOwner::Legacy(0)
+            },
+            generation: 0,
+        }
+    }
 }
 
 impl PtyIoActorHandle {
@@ -114,7 +141,7 @@ impl PtyIoActorHandle {
             .user_writes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !user_writes.accepting {
+        if user_writes.owner != GateOwner::Running {
             return Err(mpsc::error::TrySendError::Closed(bytes));
         }
         match self
@@ -150,7 +177,7 @@ impl PtyIoActorHandle {
             .user_writes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !user_writes.accepting {
+        if user_writes.owner != GateOwner::Running {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "pty actor closed",
@@ -244,39 +271,45 @@ impl PtyIoActorHandle {
 
     pub(crate) fn begin_handoff(&self, timeout: Duration) -> std::io::Result<()> {
         let (reply_tx, reply_rx) = std_mpsc::channel();
-        {
+        let generation = {
             let mut user_writes = self
                 .user_writes
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !user_writes.accepting {
+            if user_writes.owner != GateOwner::Running {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
                     "PTY handoff is already in progress",
                 ));
             }
-            user_writes.accepting = false;
+            let generation = user_writes
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| std::io::Error::other("PTY handoff generation exhausted"))?;
+            user_writes.generation = generation;
+            user_writes.owner = GateOwner::Legacy(generation);
             if self
                 .control_tx
                 .send(PtyIoControlCommand::BeginHandoff(reply_tx))
                 .is_err()
             {
-                user_writes.accepting = true;
+                user_writes.owner = GateOwner::Closed;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "pty actor closed",
                 ));
             }
             self.wake_actor();
-        }
+            generation
+        };
         match reply_rx.recv_timeout(timeout) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                let _ = self.rollback_handoff();
+                let _ = self.rollback_handoff_generation(generation);
                 Err(err)
             }
             Err(_) => {
-                let _ = self.rollback_handoff();
+                let _ = self.rollback_handoff_generation(generation);
                 Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "timed out waiting for PTY actor to quiesce",
@@ -309,25 +342,41 @@ impl PtyIoActorHandle {
     }
 
     pub(crate) fn rollback_handoff(&self) -> std::io::Result<()> {
+        let owner = self
+            .user_writes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .owner;
+        match owner {
+            GateOwner::Running => Ok(()),
+            GateOwner::Legacy(generation) => self.rollback_handoff_generation(generation),
+            GateOwner::Capture(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "private capture owns the PTY pause",
+            )),
+            GateOwner::Closed => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "pty actor closed",
+            )),
+        }
+    }
+
+    fn rollback_handoff_generation(&self, generation: u64) -> std::io::Result<()> {
         let (reply_tx, reply_rx) = std_mpsc::channel();
         self.control_tx
-            .send(PtyIoControlCommand::RollbackHandoff(reply_tx))
+            .send(PtyIoControlCommand::RollbackHandoff {
+                generation,
+                gate: self.user_writes.clone(),
+                reply: reply_tx,
+            })
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed"))?;
         self.wake_actor();
-        let result = reply_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
+        reply_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "timed out waiting for PTY handoff rollback",
             )
-        })?;
-        if result.is_ok() {
-            let mut user_writes = self
-                .user_writes
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            user_writes.accepting = true;
-        }
-        result
+        })?
     }
 
     pub(crate) fn release_after_commit(&self) -> std::io::Result<()> {
@@ -336,7 +385,7 @@ impl PtyIoActorHandle {
                 .user_writes
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            user_writes.accepting = false;
+            user_writes.owner = GateOwner::Closed;
         }
         let (reply_tx, reply_rx) = std_mpsc::channel();
         self.control_tx
@@ -357,7 +406,7 @@ impl PtyIoActorHandle {
                 .user_writes
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            user_writes.accepting = false;
+            user_writes.owner = GateOwner::Closed;
         }
         if self.control_tx.send(PtyIoControlCommand::Shutdown).is_ok() {
             self.wake_actor();
@@ -388,9 +437,7 @@ impl PtyIoActor {
         let (data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
         let (control_tx, control_rx) = std_mpsc::channel();
         let wake_pipe = fd::create_wake_pipe()?;
-        let user_writes = Arc::new(Mutex::new(UserWriteGate {
-            accepting: !config.initially_quiesced,
-        }));
+        let user_writes = Arc::new(Mutex::new(UserWriteGate::new(!config.initially_quiesced)));
         let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
         let response_order = Arc::new(Mutex::new(()));
         let handle = PtyIoActorHandle {
@@ -416,6 +463,7 @@ impl PtyIoActor {
             current_write_offset: 0,
             active_submission: None,
             pending_handoff: None,
+            capture: None,
             wake_read_fd: wake_pipe.read_fd,
             controls,
             response_order,
@@ -450,6 +498,7 @@ struct PtyIoActorRunner {
     current_write_offset: usize,
     active_submission: Option<ActiveSubmission>,
     pending_handoff: Option<std_mpsc::Sender<std::io::Result<()>>>,
+    capture: Option<CaptureRequest>,
     wake_read_fd: OwnedFd,
     controls: Arc<Mutex<SharedPtyControls>>,
     response_order: Arc<Mutex<()>>,
@@ -523,7 +572,17 @@ impl PtyIoActorRunner {
                 }
             }
             self.schedule_submission_enter();
+            self.advance_capture();
             if self.active_submission.is_none() && self.pending_handoff.is_some() {
+                continue;
+            }
+            if self
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.reply.is_some())
+                && self.active_submission.is_none()
+                && !self.data_rx.is_empty()
+            {
                 continue;
             }
 
@@ -570,6 +629,7 @@ impl PtyIoActorRunner {
             }
         }
 
+        self.close_capture();
         self.close_input_queue();
         if let Some(on_reader_exit) = self.on_reader_exit.take() {
             on_reader_exit();
@@ -673,6 +733,13 @@ impl PtyIoActorRunner {
 
     fn handle_control_command(&mut self, command: PtyIoControlCommand) -> bool {
         match command {
+            PtyIoControlCommand::Capture(request) => self.start_capture(request),
+            PtyIoControlCommand::ResumeCapture { generation, reply } => {
+                let result = self.resume_capture(generation);
+                if let Some(reply) = reply {
+                    let _ = reply.send(result);
+                }
+            }
             PtyIoControlCommand::BeginHandoff(reply) => {
                 self.defer_or_begin_handoff(reply);
             }
@@ -691,7 +758,25 @@ impl PtyIoActorRunner {
                     crate::platform::foreground_process_group_id_for_tty_fd(self.file.as_raw_fd());
                 let _ = reply.send(result);
             }
-            PtyIoControlCommand::RollbackHandoff(reply) => {
+            PtyIoControlCommand::RollbackHandoff {
+                generation,
+                gate,
+                reply,
+            } => {
+                let mut gate = gate.lock().unwrap_or_else(|p| p.into_inner());
+                if gate.owner != GateOwner::Legacy(generation) {
+                    let result =
+                        if gate.owner == GateOwner::Closed || self.state == ActorState::Released {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                "pty actor closed",
+                            ))
+                        } else {
+                            Ok(())
+                        };
+                    let _ = reply.send(result);
+                    return false;
+                }
                 self.pending_handoff.take();
                 let result = if self.state == ActorState::Released {
                     Err(std::io::Error::new(
@@ -700,6 +785,7 @@ impl PtyIoActorRunner {
                     ))
                 } else {
                     self.state = ActorState::Running;
+                    gate.owner = GateOwner::Running;
                     Ok(())
                 };
                 let _ = reply.send(result);
@@ -898,18 +984,31 @@ impl PtyIoActorRunner {
     }
 
     fn poll_timeout_ms(&self) -> i32 {
+        let capture_timeout = self
+            .capture
+            .as_ref()
+            .filter(|capture| capture.reply.is_some())
+            .map(|capture| {
+                capture
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .max(1)
+                    .min(ACTOR_IDLE_POLL_MS as u128) as i32
+            })
+            .unwrap_or(ACTOR_IDLE_POLL_MS);
         let Some(ActiveSubmission {
             phase: SubmissionPhase::WaitingUntil(deadline),
             ..
         }) = self.active_submission.as_ref()
         else {
-            return ACTOR_IDLE_POLL_MS;
+            return capture_timeout;
         };
         deadline
             .saturating_duration_since(Instant::now())
             .as_millis()
             .max(1)
-            .min(ACTOR_IDLE_POLL_MS as u128) as i32
+            .min(capture_timeout as u128) as i32
     }
 
     fn fail_active_submission(&mut self, err: std::io::Error) {
@@ -1087,7 +1186,7 @@ mod tests {
         (handle, peer, read_rx)
     }
 
-    fn actor_runner_for_unit_test() -> (PtyIoActorRunner, UnixStream) {
+    pub(super) fn actor_runner_for_unit_test() -> (PtyIoActorRunner, UnixStream) {
         let (actor_socket, peer) = UnixStream::pair().expect("socket pair");
         actor_socket
             .set_nonblocking(true)
@@ -1106,6 +1205,7 @@ mod tests {
             current_write_offset: 0,
             active_submission: None,
             pending_handoff: None,
+            capture: None,
             wake_read_fd: wake_pipe.read_fd,
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
@@ -1615,7 +1715,7 @@ mod tests {
             data_tx,
             control_tx,
             wake,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+            user_writes: Arc::new(Mutex::new(UserWriteGate::new(true))),
             controls: Arc::clone(&controls),
             response_order: Arc::new(Mutex::new(())),
         };
@@ -1677,6 +1777,7 @@ mod tests {
             current_write_offset: 0,
             active_submission: None,
             pending_handoff: None,
+            capture: None,
             wake_read_fd: wake_pipe.read_fd,
             controls: Arc::clone(&controls),
             response_order: Arc::clone(&response_order),
@@ -1694,7 +1795,7 @@ mod tests {
             data_tx,
             control_tx,
             wake: wake_pipe.writer,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+            user_writes: Arc::new(Mutex::new(UserWriteGate::new(true))),
             controls,
             response_order,
         };
@@ -1763,7 +1864,7 @@ mod tests {
             data_tx,
             control_tx,
             wake,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+            user_writes: Arc::new(Mutex::new(UserWriteGate::new(true))),
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
         };
@@ -1786,7 +1887,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_handoff_drains_user_writes_already_in_command_queue() {
+    fn begin_handoff_drains_partial_writes_queued_input_and_terminal_replies() {
         let (actor_socket, mut peer) = UnixStream::pair().expect("socket pair");
         actor_socket
             .set_nonblocking(true)
@@ -1810,6 +1911,7 @@ mod tests {
             current_write_offset: 0,
             active_submission: None,
             pending_handoff: None,
+            capture: None,
             wake_read_fd: fd::create_wake_pipe().expect("wake pipe").read_fd,
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
@@ -1818,12 +1920,31 @@ mod tests {
             poll_observer: None,
         };
 
+        // The already-written prefix must not be sent again, and replies
+        // waiting outside the terminal core must arrive before quiesce ACK.
+        runner.enqueue_write(Bytes::from_static(b"xxpending"));
+        runner.current_write_offset = 2;
+        runner
+            .controls
+            .lock()
+            .expect("controls lock")
+            .terminal_responses
+            .push(Bytes::from_static(b"reply"));
         runner.begin_handoff().expect("handoff drains queued write");
 
-        let mut buf = [0u8; 17];
+        let expected = b"pendingqueued-before-ackreply";
+        let mut buf = [0u8; b"pendingqueued-before-ackreply".len()];
         peer.read_exact(&mut buf)
             .expect("queued write reaches peer before quiesce ack");
-        assert_eq!(&buf, b"queued-before-ack");
+        assert_eq!(&buf, expected);
+        assert!(runner.pending_writes.is_empty());
+        assert_eq!(runner.current_write_offset, 0);
+        assert!(runner
+            .controls
+            .lock()
+            .expect("controls lock")
+            .terminal_responses
+            .is_empty());
         assert_eq!(runner.state, ActorState::Quiesced);
     }
 

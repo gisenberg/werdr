@@ -1,0 +1,153 @@
+diff --git a/lib/selection-manager.test.ts b/lib/selection-manager.test.ts
+index 1e4e6d7..06aa8b7 100644
+--- a/lib/selection-manager.test.ts
++++ b/lib/selection-manager.test.ts
+@@ -514,6 +514,60 @@ describe('SelectionManager', () => {
+   });
+ 
+   describe('select() API', () => {
++    test('programmatic selections follow the visible viewport after scrollback accumulates', async () => {
++      if (!container) throw new Error('Selection tests require a DOM');
++      const term = await createIsolatedTerminal({ cols: 20, rows: 4, scrollback: 1000 });
++      term.open(container);
++      try {
++        for (let row = 0; row < 20; row++) term.write(`ROW_${String(row).padStart(2, '0')}\r\n`);
++        const manager = (term as any).selectionManager;
++        expect(term.wasmTerm!.getScrollbackLength()).toBeGreaterThan(4);
++        for (const offset of [0, 5]) {
++          (term as any).viewportY = offset;
++          term.select(0, 1, 6);
++          expect(term.getSelection()).toBe(`ROW_${String(18 - offset).padStart(2, '0')}`);
++          expect(manager.getSelectionCoords()).toEqual({
++            startCol: 0,
++            startRow: 1,
++            endCol: 5,
++            endRow: 1,
++          });
++          manager.clearDirtySelectionRows();
++          term.select(0, 2, 6);
++          expect(manager.getDirtySelectionRows().has(1)).toBe(true);
++          term.selectAll();
++          expect(manager.getSelectionCoords()).toEqual({
++            startCol: 0,
++            startRow: 0,
++            endCol: 19,
++            endRow: 3,
++          });
++        }
++      } finally {
++        term.dispose();
++      }
++    });
++
++    test('programmatic selection bounds oversized and invalid lengths', async () => {
++      if (!container) throw new Error('Selection tests require a DOM');
++      const term = await createIsolatedTerminal({ cols: 20, rows: 4 });
++      term.open(container);
++      try {
++        term.select(18, 2, Number.MAX_SAFE_INTEGER);
++        expect(term.getSelectionPosition()).toEqual({
++          start: { x: 18, y: 2 },
++          end: { x: 19, y: 3 },
++        });
++        for (const length of [0, -1, Infinity, NaN]) {
++          term.select(0, 0, 1);
++          term.select(0, 0, length);
++          expect(term.hasSelection()).toBe(false);
++        }
++      } finally {
++        term.dispose();
++      }
++    });
++
+     test('select() creates selection at specified position', async () => {
+       if (!container) return;
+ 
+diff --git a/lib/selection-manager.ts b/lib/selection-manager.ts
+index 7028a1f..65c535e 100644
+--- a/lib/selection-manager.ts
++++ b/lib/selection-manager.ts
+@@ -268,9 +268,12 @@ export class SelectionManager {
+    */
+   selectAll(): void {
+     const dims = this.wasmTerm.getDimensions();
+-    const viewportY = this.getViewportY();
+-    this.selectionStart = { col: 0, absoluteRow: viewportY };
+-    this.selectionEnd = { col: dims.cols - 1, absoluteRow: viewportY + dims.rows - 1 };
++    this.markCurrentSelectionDirty();
++    this.selectionStart = { col: 0, absoluteRow: this.viewportRowToAbsolute(0) };
++    this.selectionEnd = {
++      col: dims.cols - 1,
++      absoluteRow: this.viewportRowToAbsolute(dims.rows - 1),
++    };
+     this.requestRender();
+     this.selectionChangedEmitter.fire();
+   }
+@@ -280,28 +283,32 @@ export class SelectionManager {
+    * xterm.js compatible API
+    */
+   select(column: number, row: number, length: number): void {
++    if (
++      !Number.isFinite(column) ||
++      !Number.isFinite(row) ||
++      !Number.isFinite(length) ||
++      length < 1
++    ) {
++      this.clearSelection();
++      return;
++    }
+     // Clamp to valid ranges
+     const dims = this.wasmTerm.getDimensions();
+-    row = Math.max(0, Math.min(row, dims.rows - 1));
+-    column = Math.max(0, Math.min(column, dims.cols - 1));
++    row = Math.max(0, Math.min(Math.floor(row), dims.rows - 1));
++    column = Math.max(0, Math.min(Math.floor(column), dims.cols - 1));
+ 
+-    // Calculate end position
+-    let endRow = row;
+-    let endCol = column + length - 1;
+-
+-    // Handle wrapping if selection extends past end of line
+-    while (endCol >= dims.cols) {
+-      endCol -= dims.cols;
+-      endRow++;
+-    }
+-
+-    // Clamp end row
+-    endRow = Math.min(endRow, dims.rows - 1);
++    // Bound the selected interval before deriving its final row and column.
++    const endCell = Math.min(
++      row * dims.cols + column + Math.floor(length) - 1,
++      dims.rows * dims.cols - 1
++    );
++    const endRow = Math.floor(endCell / dims.cols);
++    const endCol = endCell % dims.cols;
+ 
+     // Convert viewport rows to absolute rows
+-    const viewportY = this.getViewportY();
+-    this.selectionStart = { col: column, absoluteRow: viewportY + row };
+-    this.selectionEnd = { col: endCol, absoluteRow: viewportY + endRow };
++    this.markCurrentSelectionDirty();
++    this.selectionStart = { col: column, absoluteRow: this.viewportRowToAbsolute(row) };
++    this.selectionEnd = { col: endCol, absoluteRow: this.viewportRowToAbsolute(endRow) };
+     this.requestRender();
+     this.selectionChangedEmitter.fire();
+   }
+@@ -323,6 +330,7 @@ export class SelectionManager {
+     }
+ 
+     // Convert viewport rows to absolute rows
++    this.markCurrentSelectionDirty();
+     this.selectionStart = { col: 0, absoluteRow: this.viewportRowToAbsolute(start) };
+     this.selectionEnd = { col: dims.cols - 1, absoluteRow: this.viewportRowToAbsolute(end) };
+     this.requestRender();
+@@ -334,8 +342,7 @@ export class SelectionManager {
+    * xterm.js compatible API
+    */
+   getSelectionPosition():
+-    | { start: { x: number; y: number }; end: { x: number; y: number } }
+-    | undefined {
++    { start: { x: number; y: number }; end: { x: number; y: number } } | undefined {
+     const coords = this.normalizeSelection();
+     if (!coords) return undefined;
+ 

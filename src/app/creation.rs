@@ -222,6 +222,7 @@ impl App {
             workspace_id: self.public_workspace_id(ws_idx),
             number: tab.number,
             label: ws.tab_display_name(tab_idx)?,
+            custom_label: Some(!tab.is_auto_named()),
             focused: self.state.active == Some(ws_idx) && ws.active_tab == tab_idx,
             pane_count: tab.panes.len(),
             agent_status: pane_agent_status(agg_state, seen),
@@ -316,8 +317,9 @@ impl App {
         let scroll = self
             .state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
-            .and_then(|runtime| runtime.scroll_metrics())
-            .map(|metrics| crate::api::schema::PaneScrollInfo {
+            .and_then(|runtime| runtime.scroll_state())
+            .map(|(metrics, alternate)| crate::api::schema::PaneScrollInfo {
+                alternate_screen_active: Some(alternate),
                 offset_from_bottom: metrics.offset_from_bottom as u64,
                 max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
                 viewport_rows: metrics.viewport_rows as u64,
@@ -334,12 +336,14 @@ impl App {
             workspace_id: self.public_workspace_id(ws_idx),
             tab_id: self.public_tab_id(ws_idx, tab_idx)?,
             focused,
+            right_click_passthrough: Some(pane.right_click_passthrough),
             cwd: ws.tabs[tab_idx]
                 .cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
                 .map(|cwd| cwd.display().to_string()),
             foreground_cwd: ws.tabs[tab_idx]
                 .foreground_cwd_for_pane(pane_id, &self.terminal_runtimes)
                 .map(|cwd| cwd.display().to_string()),
+            restore_error: terminal.restore_error.clone(),
             label: terminal.manual_label.clone(),
             agent: terminal.effective_agent_label().map(str::to_string),
             title: presentation.title,
@@ -382,6 +386,9 @@ impl App {
             workspace_id: self.public_workspace_id(index),
             number: index + 1,
             label: ws.display_name_from(&self.state.terminals, &self.terminal_runtimes),
+            custom_label: Some(ws.custom_name.is_some()),
+            branch: ws.branch(),
+            git_ahead_behind: ws.git_ahead_behind(),
             focused: self.state.active == Some(index),
             pane_count: ws.public_pane_numbers.len(),
             tab_count: ws.tabs.len(),
