@@ -1612,6 +1612,27 @@ pub fn cursorResetWrap(self: *Screen) void {
     }
 }
 
+/// Detach a fully erased cursor row from its predecessor's logical line.
+/// Use the page pin so the predecessor can be in history or another page.
+pub fn cursorResetWrapContinuation(self: *Screen) void {
+    if (!self.cursor.page_row.wrap_continuation) return;
+    self.cursor.page_row.wrap_continuation = false;
+    self.cursorMarkDirty();
+
+    const previous = self.cursor.page_pin.up(1) orelse return;
+    const row = previous.rowAndCell().row;
+    row.wrap = false;
+    previous.markDirty();
+
+    // A wide character that moved into the now-erased row may have left
+    // a spacer at the predecessor's right margin. It no longer spans rows.
+    const cells = previous.cells(.all);
+    const last = previous.node.cols() - 1;
+    if (cells[last].wide == .spacer_head) {
+        self.clearCells(previous.node.page(), row, cells[last..][0..1]);
+    }
+}
+
 /// Options for scrolling the viewport of the terminal grid. The reason
 /// we have this in addition to PageList.Scroll is because we have additional
 /// scroll behaviors that are not part of the PageList.Scroll enum.
@@ -12278,6 +12299,46 @@ test "Screen: cursorScrollRegionUp recycled row has default metadata" {
         defer alloc.free(contents);
         try testing.expectEqualStrings("2EFGH\n3IJKL\n\n4MNOP\n5QRST", contents);
     }
+}
+
+test "Screen: erased continuation detaches cross-page predecessor" {
+    const testing = std.testing;
+    var s = try init(testing.io, testing.allocator, .{
+        .cols = 10,
+        .rows = 5,
+        .max_scrollback_bytes = 10,
+    });
+    defer s.deinit();
+
+    const first_page_size = s.pages.pages.first.?.capacity().rows;
+    s.pages.pages.first.?.page().pauseIntegrityChecks(true);
+    for (0..first_page_size - 3) |_| try s.testWriteString("\n");
+    s.pages.pages.first.?.page().pauseIntegrityChecks(false);
+    try s.testWriteString("1A\n2B\n3C\n4D\n5E");
+
+    var checked = false;
+    for (0..5) |y| {
+        s.cursorAbsolute(0, @intCast(y));
+        const previous = s.cursor.page_pin.up(1) orelse continue;
+        if (previous.node == s.cursor.page_pin.node) continue;
+        const row = previous.rowAndCell().row;
+        row.wrap = true;
+        row.dirty = false;
+        s.cursor.page_row.wrap_continuation = true;
+        s.cursor.page_row.dirty = false;
+        const before = previous.cells(.all)[0];
+
+        s.cursorResetWrapContinuation();
+
+        try testing.expect(!row.wrap);
+        try testing.expect(!s.cursor.page_row.wrap_continuation);
+        try testing.expect(row.dirty);
+        try testing.expect(s.cursor.page_row.dirty);
+        try testing.expectEqual(before, previous.cells(.all)[0]);
+        checked = true;
+        break;
+    }
+    try testing.expect(checked);
 }
 
 test "Screen: cursorScrollRegionUp cross-page recycled row has default metadata" {

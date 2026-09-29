@@ -3,6 +3,40 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
+## 0029 erased row wrap boundary
+
+status: active, native Windows and live candidate validation pending
+
+patch: `vendor/patches/libghostty-vt/0029-erased-row-wrap-boundary.patch`
+
+herdr issue: none; fork Windows terminal acceptance regression
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+
+reason: Fully erasing a continuation row previously retained its incoming soft-wrap link.
+After ConPTY erased a long shell prediction, later independent output inherited that link and reflow joined it to the preceding command row.
+Full nonselective line erasure now severs both sides of that incoming link, including a predecessor in history or another page.
+Wide-character margin spacers and dirty metadata are updated without erasing predecessor text.
+Partial and protected erasures retain their incoming continuation, and cursor movement and automatic wrapping are unchanged.
+
+verification: The reduced Rust regression failed before the fix and passed afterward.
+The native cross-page predecessor test passes.
+All five wrapper boundary tests and the native eraseLine suite pass.
+The complete captured ConPTY stream replays with the marker intact after desktop/phone resizing and subsequent input.
+Full `just check` passes, including 4,162 Rust tests, Windows cross-target lint and vendor reverse-apply checks.
+Native Windows packaging and live candidate validation remain pending.
+
+remove when: upstream supplies equivalent full-row erasure wrap-boundary handling and the protected, partial, wide, history, page-boundary and captured ConPTY regressions pass without this patch.
+
 ## 0028 fixed-origin resize
 
 status: active, Windows resize correction pending live candidate validation

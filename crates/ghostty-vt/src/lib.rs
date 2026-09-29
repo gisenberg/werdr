@@ -4689,6 +4689,117 @@ mod tests {
     }
 
     #[test]
+    fn full_line_erase_detaches_removed_prediction_before_resize() {
+        for erase in ["\x1b[K", "\x1b[2K"] {
+            let mut terminal = Terminal::new(129, 42, 100).unwrap();
+            // A long shell prediction wraps, then gets replaced by a short
+            // command. ConPTY paints padding and erases the continuation.
+            terminal.write("suggestion ".repeat(18).as_bytes());
+            terminal.write(format!("\x1b[1;1Hcmd{}\x1b[2;1H{erase}", " ".repeat(126)).as_bytes());
+            let rows = terminal.screen_text_rows().unwrap();
+            assert!(!rows[0].soft_wrapped, "{erase:?}");
+            assert!(!rows[1].wrap_continuation, "{erase:?}");
+            terminal.write(b"\x1b[1;4H\r\nMARKER\r\nPS> ");
+            for width in [130, 129, 41, 40, 130] {
+                terminal.resize_preserve_active(width, 38, 0, 0).unwrap();
+                assert_eq!(
+                    terminal
+                        .read_text_viewport((0, 1), (width - 1, 1), true)
+                        .unwrap(),
+                    "MARKER",
+                    "{erase:?}, width={width}"
+                );
+            }
+            terminal.write(b"\x1b[3;5Hnext\r\nAFTER\r\nPS> ");
+            assert_eq!(
+                terminal.read_text_viewport((0, 1), (129, 1), true).unwrap(),
+                "MARKER"
+            );
+        }
+    }
+
+    #[test]
+    fn full_line_erase_preserves_partial_and_protected_continuations() {
+        for (position, erase, protected) in [
+            ("\x1b[2;2H", "\x1b[K", false),
+            ("\x1b[2;2H", "\x1b[1K", false),
+            ("\x1b[2;1H", "\x1b[?2K", true),
+        ] {
+            let mut terminal = Terminal::new(5, 4, 100).unwrap();
+            if protected {
+                terminal.write(b"\x1b[1\"q");
+            }
+            terminal.write(b"abcdefgh");
+            terminal.write(position.as_bytes());
+            terminal.write(erase.as_bytes());
+            let rows = terminal.screen_text_rows().unwrap();
+            assert!(rows[0].soft_wrapped, "{position:?} {erase:?}");
+            assert!(rows[1].wrap_continuation, "{position:?} {erase:?}");
+            if protected {
+                assert_eq!(
+                    terminal.read_text_viewport((0, 1), (4, 1), true).unwrap(),
+                    "fgh"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_line_erase_cleans_wide_boundary_on_both_screens() {
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(5, 4, 100).unwrap();
+            if alternate {
+                terminal.write(b"\x1b[?1049h");
+            }
+            terminal.write("abcd界x".as_bytes());
+            terminal.write(b"\x1b[3;2H\x1b7\x1b[2;1H\x1b[41m\x1b[2K\x1b8");
+            let rows = terminal.screen_text_rows().unwrap();
+            assert!(!rows[0].soft_wrapped);
+            assert!(!rows[1].wrap_continuation);
+            assert_eq!(rows[0].cells[4].wide, CellWide::Narrow);
+            assert_eq!(terminal.cursor_y().unwrap(), 2);
+            assert_eq!(
+                terminal.read_text_viewport((0, 0), (4, 0), true).unwrap(),
+                "abcd"
+            );
+            let erased = terminal.read_ansi_viewport((0, 1), (4, 1), false).unwrap();
+            let mut reference = Terminal::new(5, 4, 100).unwrap();
+            reference.write(b"\x1b[2;1H\x1b[41m\x1b[2K");
+            assert_eq!(
+                erased,
+                reference.read_ansi_viewport((0, 1), (4, 1), false).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn full_line_erase_detaches_history_predecessor_without_erasing_it() {
+        let mut terminal = Terminal::new(5, 3, 100).unwrap();
+        terminal.write(b"abcdefghijklmnop");
+        assert_eq!(terminal.scrollback_rows().unwrap(), 1);
+        terminal.write(b"\x1b[1;1H\x1b[2K");
+        let rows = terminal.screen_text_rows().unwrap();
+        assert!(!rows[0].soft_wrapped);
+        assert!(!rows[1].wrap_continuation);
+        assert_eq!(rows[0].cells[0].graphemes, vec![u32::from('a')]);
+        assert_eq!(rows[0].cells[4].graphemes, vec![u32::from('e')]);
+    }
+
+    #[test]
+    fn full_line_erase_does_not_change_movement_or_genuine_autowrap() {
+        let mut terminal = Terminal::new(5, 4, 100).unwrap();
+        terminal.write(b"abcdefgh\x1b[1;2H\r\n");
+        let rows = terminal.screen_text_rows().unwrap();
+        assert!(rows[0].soft_wrapped);
+        assert!(rows[1].wrap_continuation);
+        terminal.resize(10, 4, 0, 0).unwrap();
+        assert_eq!(
+            terminal.read_text_viewport((0, 0), (9, 0), true).unwrap(),
+            "abcdefgh"
+        );
+    }
+
+    #[test]
     fn fixed_origin_padding_preserves_cursor_wraps_and_interior_spaces() {
         let cases = [
             (format!("prefix{}", " ".repeat(105)), 2),

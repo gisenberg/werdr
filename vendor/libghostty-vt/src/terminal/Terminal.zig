@@ -3557,6 +3557,14 @@ pub fn eraseLine(
     // If we're not respecting protected attributes, we can use a fast-path
     // to fill the entire line.
     if (!protected) {
+        // Fully replacing a continuation row must also sever its incoming
+        // wrap link. Otherwise later independent output joins the erased
+        // logical line during reflow (for example, a removed shell prediction).
+        // Partial and selective erasures can retain content from that line.
+        if (start == 0 and end == self.cols) {
+            self.screens.active.cursorResetWrap();
+            self.screens.active.cursorResetWrapContinuation();
+        }
         self.screens.active.clearCells(
             self.screens.active.cursor.page_pin.node.page(),
             self.screens.active.cursor.page_row,
