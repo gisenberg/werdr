@@ -83,3 +83,17 @@ The werdr4 library was built with Node 22.22.2, TypeScript 5.9.3 and Vite 4.5.14
 Build and package from source as above with the new version and include `LICENSE`; do not edit generated bundles or rebuild WASM.
 Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
 Remove this patch when the adopted upstream package preserves glyph ink within its cell metrics and the painted-glyph regression passes.
+
+## Werdr cursor appearance invalidation
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr5.tgz`, version `0.4.1-pr169.faf6fbd.werdr5`.
+Its SHA-256 is `fa0e2249535abd09368b081899188f188200f22f461f5ebbc3df33386efec58e`.
+Apply `werdr-cursor-invalidation.patch` after the eight patches above.
+Cursor-only visibility and shape changes previously left the old cursor pixels painted when no terminal cells or cursor coordinates changed.
+The renderer now tracks the previous cursor appearance and repaints its row on those transitions, without painting active-buffer rows over a scrolled-back viewport.
+The browser regression in `web/test/terminal-cursor.spec.ts` checks actual pixels for show, hide, shape changes, and synchronized-output deferral with cursor blinking disabled.
+The hide regression fails against werdr4 and passes against werdr5.
+This is a scalar comparison per render, with row repainting only when cursor appearance changes; it does not add work to per-cell loops.
+Build and package from source as above with Node 22.22.2, TypeScript 5.9.3, Vite 4.5.14 and npm 11.18.0; do not edit generated bundles or rebuild WASM.
+Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove this patch when the adopted upstream package correctly erases cursor-only appearance changes and the painted-cursor regression passes.

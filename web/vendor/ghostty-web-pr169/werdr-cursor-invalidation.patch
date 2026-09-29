@@ -1,0 +1,75 @@
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -154,7 +154,11 @@
+   // Cursor blinking state
+   private cursorVisible: boolean = true;
+   private cursorBlinkInterval?: number;
+-  private lastCursorPosition: { x: number; y: number } = { x: 0, y: 0 };
++  private lastCursorState: ReturnType<IRenderable['getCursor']> = {
++    x: 0,
++    y: 0,
++    visible: false,
++  };
+
+   // Hook called whenever the renderer's own internal state (today: cursor
+   // blink toggle) changes such that the next frame would look different.
+@@ -507,10 +511,15 @@
+       this.lastViewportY = viewportY;
+     }
+
+-    // Check if cursor position changed or if blinking (need to redraw cursor line)
+-    const cursorMoved =
+-      cursor.x !== this.lastCursorPosition.x || cursor.y !== this.lastCursorPosition.y;
+-    if (cursorMoved || this.cursorBlink) {
++    // Cursor-only mode updates need to erase the previous painted cursor even
++    // when no cell or position changed. Never paint active rows over scrollback.
++    const cursorStyle = cursor.style ?? this.cursorStyle;
++    const cursorChanged =
++      cursor.x !== this.lastCursorState.x ||
++      cursor.y !== this.lastCursorState.y ||
++      cursor.visible !== this.lastCursorState.visible ||
++      cursorStyle !== this.lastCursorState.style;
++    if (viewportY === 0 && (cursorChanged || this.cursorBlink)) {
+       // Mark cursor lines as needing redraw
+       if (!forceAll && !buffer.isRowDirty(cursor.y)) {
+         // Need to redraw cursor line
+@@ -519,7 +528,7 @@
+           this.renderLine(line, cursor.y, dims.cols);
+         }
+       }
+-      if (cursorMoved && !forceAll) {
++      if (cursorChanged && !forceAll) {
+         // Always redraw the OLD cursor row to erase the previous cursor
+         // glyph, whether or not the row is dirty and whether or not it
+         // differs from the new cursor row (issue #122: ghost cursor
+@@ -530,9 +539,9 @@
+         // when the cursor moved across unchanged cells. A double redraw
+         // when the row is both dirty AND cursor-moved is a trivial perf
+         // cost compared to the visual correctness gain.).
+-        const line = getActiveLine(this.lastCursorPosition.y);
++        const line = getActiveLine(this.lastCursorState.y);
+         if (line) {
+-          this.renderLine(line, this.lastCursorPosition.y, dims.cols);
++          this.renderLine(line, this.lastCursorState.y, dims.cols);
+         }
+       }
+     }
+@@ -719,7 +728,6 @@
+     // Render cursor (only if we're at the bottom, not scrolled)
+     if (viewportY === 0 && cursor.visible && this.cursorVisible) {
+       // Use cursor style from buffer if provided, otherwise use renderer default
+-      const cursorStyle = cursor.style ?? this.cursorStyle;
+       this.renderCursor(cursor.x, cursor.y, cursorStyle, getActiveLine(cursor.y));
+     }
+
+@@ -728,8 +736,8 @@
+       this.renderScrollbar(viewportY, scrollbackLength, dims.rows, scrollbarOpacity);
+     }
+
+-    // Update last cursor position
+-    this.lastCursorPosition = { x: cursor.x, y: cursor.y };
++    // Remember the appearance that this frame painted, including hidden cursors.
++    this.lastCursorState = { ...cursor, style: cursorStyle };
+
+     // ALWAYS clear dirty flags after rendering, regardless of forceAll.
+     // This is critical - if we don't clear after a full redraw, the dirty
