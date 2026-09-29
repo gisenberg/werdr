@@ -17,7 +17,7 @@ fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
 #[tokio::test]
 async fn legacy_handoff_rejects_detached_actor_before_disconnecting_or_pausing() {
     let (mut server, terminal_id, pane_id) = fixture();
-    let (writer, control, _render) = test_client_writer();
+    let writer = ClientWriter::test_paused();
     server.handle_server_event(ServerEvent::ClientShellConnected {
         surface_reuse: false,
         surface_delta: false,
@@ -32,9 +32,9 @@ async fn legacy_handoff_rejects_detached_actor_before_disconnecting_or_pausing()
         endpoint_keybindings: false,
         mouse_capture: false,
         surface_active: true,
-        writer,
+        writer: writer.clone(),
     });
-    while control.try_recv().is_ok() {}
+    writer.test_drain();
     let (runtime, actor, mut peer, _reads) = TerminalRuntime::test_for_draft_capture_with_actor();
     let identity = runtime.capture_identity();
     let detached_id = TerminalId::alloc();
@@ -53,7 +53,7 @@ async fn legacy_handoff_rejects_detached_actor_before_disconnecting_or_pausing()
     assert!(!server.handoff_in_progress);
     assert!(!server.shutting_down);
     assert!(server.clients.contains_key(&6));
-    assert!(control.try_recv().is_err());
+    assert!(writer.test_drain().is_empty());
     assert_eq!(
         socket_file_identity(&server.client_socket_path).unwrap(),
         socket_identity
