@@ -54,6 +54,11 @@ test('auth, native controls, terminal input, mobile layout and gateway restart p
   await page.getByRole('button', { name: '[H] HOSTS', exact: true }).click();
   await expect(page.locator('#rail')).toBeVisible();
   await page.getByRole('button', { name: '[H] HOSTS', exact: true }).click();
+  // Tab creation and the phone resize can still be attaching asynchronously.
+  // Capture a painted terminal, not the temporary attachment shield.
+  await expect(page.locator('#rail')).toBeHidden();
+  await expect(page.locator('#shield')).toBeHidden();
+  await expect(page.locator('.pane-active canvas').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/mobile.png' });
   // Return to the shell whose environment this test owns. Selection now survives reload.
   await page.locator('#tabs button').first().click();
