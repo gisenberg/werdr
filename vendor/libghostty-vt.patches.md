@@ -3,7 +3,7 @@
 This file tracks intentional local changes applied on top of the vendored `libghostty-vt` source.
 Remove a patch only when the vendored source commit contains the upstream behavior and the listed verification still passes.
 
-## 0028 fixed-origin row growth
+## 0028 fixed-origin resize
 
 status: active, Windows resize correction pending live candidate validation
 
@@ -32,13 +32,20 @@ Pulling retained history into the active screen moves the prompt away from those
 An opt-in per-resize policy appends blank rows instead, retaining history and tracked cursor positions without changing the original resize API or default policy.
 The additive C entry point still uses the stream resize handler, preserving in-band size replies.
 Both screens receive the policy, including the hidden primary screen.
+Column reflow tracks the old active top, treats history and active content as separate reflow domains, and fills newly vacant active rows with blanks rather than history.
+Splitting a soft wrap at that boundary retains historical cell content but intentionally removes its logical-line connection to active content.
+Cursor preservation counts wrapping only within the tracked active domain.
 
 verification: The bottom-cursor regression failed before implementation with expected row 2, actual row 4.
 The native `zig build test-lib-vt -Demit-lib-vt=true -Dtest-filter=resize` suite passed after implementation.
 The Rust wrapper regression verifies absolute cursor writes, retained history and size-report/DSR replies.
 Full `just check` passed, including Windows cross-target lint and vendor reverse-apply validation.
 Additional native tests passed for saved-cursor retention across page growth under a history-line limit and combined wrapped Unicode width/height growth.
-Native Windows tests and live candidate verification remain pending.
+The row-growth revision passed native Windows checks, but live validation exposed a remaining one-row width-reflow mismatch.
+The column-policy regression failed before implementation with expected cursor row 2, actual row 3.
+The expanded column tests pass for history-free reference equivalence, wrapped boundary content and flags, repeated width cycles, wide characters, blank rows, narrowing, combined geometry changes, hidden primary screens, and saved cursors.
+Full `just check` passed for the expanded policy, including 4,049 Rust tests and Windows cross-target lint.
+Native Windows and live validation of the expanded policy remain pending.
 
 remove when: upstream supplies an equivalent fixed-origin growth policy through its C API, and retained-history, cursor-write, hidden-primary, size-report and live ConPTY resize regressions pass without this patch.
 

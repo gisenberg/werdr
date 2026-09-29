@@ -3987,7 +3987,7 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
 pub const Resize = struct {
     cols: size.CellCountInt,
     rows: size.CellCountInt,
-    /// Keep false for consoles whose row growth retains the active origin.
+    /// Keep false for consoles whose growth and reflow retain the active origin.
     /// This is a per-resize policy, not terminal state or a scrollback limit.
     pull_scrollback: bool = true,
     cell_size_px: ?struct {
@@ -4381,7 +4381,7 @@ test "Terminal: resize preserve active origin includes hidden primary" {
     try testing.expectEqualStrings("one\ntwo\nthree\nfour\nprompt", history);
 }
 
-test "Terminal: resize preserve active origin leaves width reflow unchanged" {
+test "Terminal: resize preserve active origin retains width reflow content" {
     const alloc = testing.allocator;
     for ([_]size.CellCountInt{ 6, 20 }) |cols| {
         var expected = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
@@ -4399,7 +4399,7 @@ test "Terminal: resize preserve active origin leaves width reflow unchanged" {
         defer alloc.free(b);
         try testing.expectEqualStrings(a, b);
         try testing.expectEqual(expected.screens.active.cursor.x, actual.screens.active.cursor.x);
-        try testing.expectEqual(expected.screens.active.cursor.y, actual.screens.active.cursor.y);
+        try testing.expectEqual(if (cols == 20) 2 else expected.screens.active.cursor.y, actual.screens.active.cursor.y);
     }
 }
 
@@ -4456,7 +4456,7 @@ test "Terminal: resize preserve active origin combined wrapped growth" {
     const text = "history\none\ntwo\n羊🐑-wrapped-prompt";
     try t.screens.active.testWriteString(text);
     try reference.screens.active.testWriteString(text);
-    try reference.resize(alloc, .{ .cols = 30, .rows = 4 });
+    try reference.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
     const expected_x = reference.screens.active.cursor.x;
     const expected_y = reference.screens.active.cursor.y;
     const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
@@ -16643,4 +16643,144 @@ test "Terminal: eraseDisplay complete ignores stale prompt on recycled row" {
     t.eraseDisplay(.complete, false);
 
     try testing.expectEqual(t.screens.active.pages.rows, t.screens.active.pages.total_rows);
+}
+
+test "Terminal: fixed origin width reflow matches active buffer without history" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+    defer t.deinit(alloc);
+    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4, .max_scrollback_bytes = 0 });
+    defer reference.deinit(alloc);
+    const text = "history\none\ntwo\nwrapped-command\nOK\nprompt";
+    try t.screens.active.testWriteString(text);
+    try reference.screens.active.testWriteString(text);
+    const original = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(original);
+    const original_reference = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(original_reference);
+    try testing.expectEqualStrings(original_reference, original);
+    try reference.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
+    try t.resize(alloc, .{ .cols = 30, .rows = 4, .pull_scrollback = false });
+    try testing.expectEqual(reference.screens.active.cursor.y, t.screens.active.cursor.y);
+    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(actual);
+    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+    defer alloc.free(expected);
+    try testing.expectEqualStrings(expected, actual);
+}
+
+test "Terminal: fixed origin width reflow retains split history across cycles" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 5, .rows = 3 });
+    defer t.deinit(alloc);
+    try t.screens.active.testWriteString("ABCDEFGHIJ\nK\nL");
+    try testing.expect(t.screens.active.pages.pin(.{ .active = .{} }).?.rowAndCell().row.wrap_continuation);
+    for ([_]size.CellCountInt{ 10, 5, 10, 5, 10 }) |cols| {
+        try t.resize(alloc, .{ .cols = cols, .rows = 3, .pull_scrollback = false });
+        const visible = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+        defer alloc.free(visible);
+        try testing.expectEqualStrings("FGHIJ\nK\nL", visible);
+        const all = try t.screens.active.dumpStringAlloc(alloc, .{ .screen = .{} });
+        defer alloc.free(all);
+        try testing.expectEqualStrings("ABCDE\nFGHIJ\nK\nL", all);
+        const top = t.screens.active.pages.pin(.{ .active = .{} }).?;
+        try testing.expect(!top.rowAndCell().row.wrap_continuation);
+        try testing.expect(!top.up(1).?.rowAndCell().row.wrap);
+        try testing.expectEqual(@as(size.CellCountInt, 2), t.screens.active.cursor.y);
+    }
+}
+
+test "Terminal: fixed origin width reflow boundary matrix" {
+    const alloc = testing.allocator;
+    const fixtures = [_][]const u8{
+        "history\none\ntwo\nwrapped-command\nOK\nprompt",
+        "ABCDEFGHIJ\nK\nL\nM",
+        "AB羊🐑CD羊🐑EF\nK\nL\nM",
+        "history\nold\n\n\n\nprompt",
+        "history\nold\n\n\n\n",
+        "history\nold\nactive\n\n",
+    };
+    for (fixtures) |text| {
+        for ([_]size.CellCountInt{ 5, 10 }) |cols| {
+            for ([_]size.CellCountInt{ 3, 15, 30 }) |new_cols| {
+                for ([_]size.CellCountInt{ 3, 4, 7 }) |rows| {
+                    errdefer std.debug.print("fixture={s}, {d}x4 -> {d}x{d}\n", .{ text, cols, new_cols, rows });
+                    var t = try init(testing.io, alloc, .{ .cols = cols, .rows = 4 });
+                    defer t.deinit(alloc);
+                    var reference = try init(testing.io, alloc, .{
+                        .cols = cols,
+                        .rows = 4,
+                    });
+                    defer reference.deinit(alloc);
+                    try t.screens.active.testWriteString(text);
+                    try reference.screens.active.testWriteString(text);
+                    // Keep identical resize limits, removing only the history
+                    // prefix. A zero-byte limit also changes pruning on resize.
+                    reference.screens.active.pages.eraseHistory(null);
+                    const original = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(original);
+                    const reference_original = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(reference_original);
+                    try testing.expectEqualStrings(reference_original, original);
+                    try reference.resize(alloc, .{ .cols = new_cols, .rows = rows, .pull_scrollback = false });
+                    try t.resize(alloc, .{ .cols = new_cols, .rows = rows, .pull_scrollback = false });
+                    const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(actual);
+                    const expected = try reference.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(expected);
+                    try testing.expectEqualStrings(expected, actual);
+                    try testing.expectEqual(reference.screens.active.cursor.y, t.screens.active.cursor.y);
+                    try testing.expectEqual(reference.screens.active.cursor.x, t.screens.active.cursor.x);
+                }
+            }
+        }
+    }
+}
+
+test "Terminal: fixed origin width reflow cursor above boundary" {
+    const alloc = testing.allocator;
+    for ([_]size.CellCountInt{ 3, 15, 30 }) |cols| {
+        for ([_]size.CellCountInt{ 2, 4, 7 }) |rows| {
+            for ([_]size.CellCountInt{ 0, 1, 3 }) |cursor_y| {
+                for ([_]bool{ false, true }) |hidden| {
+                    errdefer std.debug.print("10x4 -> {d}x{d}, cursor={d}, hidden={}\n", .{ cols, rows, cursor_y, hidden });
+                    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+                    defer t.deinit(alloc);
+                    var reference = try init(testing.io, alloc, .{ .cols = 10, .rows = 4 });
+                    defer reference.deinit(alloc);
+                    const actual_screen = t.screens.active;
+                    const expected_screen = reference.screens.active;
+                    const text = "history\none\ntwo\nwrapped-command\nOK\nprompt";
+                    try actual_screen.testWriteString(text);
+                    try expected_screen.testWriteString(text);
+                    expected_screen.pages.eraseHistory(null);
+                    actual_screen.cursorAbsolute(1, cursor_y);
+                    expected_screen.cursorAbsolute(1, cursor_y);
+                    t.saveCursor();
+                    reference.saveCursor();
+                    if (hidden) {
+                        _ = try t.switchScreen(.alternate);
+                        _ = try reference.switchScreen(.alternate);
+                    }
+                    try t.resize(alloc, .{ .cols = cols, .rows = rows, .pull_scrollback = false });
+                    try reference.resize(alloc, .{ .cols = cols, .rows = rows, .pull_scrollback = false });
+                    const actual = try actual_screen.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(actual);
+                    const expected = try expected_screen.dumpStringAlloc(alloc, .{ .viewport = .{} });
+                    defer alloc.free(expected);
+                    try testing.expectEqualStrings(expected, actual);
+                    try testing.expectEqual(expected_screen.cursor.x, actual_screen.cursor.x);
+                    try testing.expectEqual(expected_screen.cursor.y, actual_screen.cursor.y);
+                    if (hidden) {
+                        _ = try t.switchScreen(.primary);
+                        _ = try reference.switchScreen(.primary);
+                    }
+                    t.restoreCursor();
+                    reference.restoreCursor();
+                    try testing.expectEqual(expected_screen.cursor.x, actual_screen.cursor.x);
+                    try testing.expectEqual(expected_screen.cursor.y, actual_screen.cursor.y);
+                }
+            }
+        }
+    }
 }

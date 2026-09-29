@@ -1236,8 +1236,9 @@ pub const Resize = struct {
     /// be truncated if the new size is smaller than the old size.
     reflow: bool = true,
 
-    /// Allow row growth to pull retained history into the active area.
-    /// Disable when the attached console keeps its active origin on growth.
+    /// Allow resizing to pull retained history into the active area.
+    /// Disable to keep history and active content in separate reflow domains
+    /// and append blank rows when growth or unwrapping creates vacant space.
     pull_scrollback: bool = true,
 
     /// Set this to the current cursor position in the active area. Some
@@ -1305,7 +1306,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
         .gt => {
             // We grow rows after cols so that we can do our unwrapping/reflow
             // before we do a no-reflow grow.
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
             try self.resizeWithoutReflow(opts);
         },
 
@@ -1317,7 +1318,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
                 copy.cols = self.cols;
                 break :opts copy;
             });
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, opts.pull_scrollback);
         },
     }
 
@@ -1342,8 +1343,17 @@ fn resizeCols(
     self: *PageList,
     cols: size.CellCountInt,
     cursor: ?Resize.Cursor,
+    pull_scrollback: bool,
 ) Allocator.Error!void {
     assert(cols != self.cols);
+
+    // A console with a fixed active origin reflows history and the active
+    // buffer separately. Track the boundary before rewriting any source pages.
+    const active_top = if (!pull_scrollback)
+        try self.trackPin(self.pin(.{ .active = .{} }).?)
+    else
+        null;
+    defer if (active_top) |p| self.untrackPin(p);
 
     // If we have a cursor position (x,y), then we try under any col resizing
     // to keep the same number remaining active rows beneath it. This is a
@@ -1465,7 +1475,21 @@ fn resizeCols(
     // Reflow all our rows.
     {
         var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
+        var reached_active_top = false;
         while (it.next()) |row| {
+            if (active_top) |p| {
+                if (!reached_active_top and row.node == p.node and row.y == p.y) {
+                    reached_active_top = true;
+                    // Do not join an active continuation to a history prefix.
+                    // Only change destination metadata, leaving fallible reflow
+                    // independent of mutations to the source rows.
+                    if (row.rowAndCell().row.wrap_continuation) {
+                        reflow_cursor.page_row.wrap = false;
+                        if (reflow_cursor.x > 0 or reflow_cursor.pending_wrap)
+                            reflow_cursor.new_rows = @max(reflow_cursor.new_rows, 1);
+                    }
+                }
+            }
             try reflow_cursor.reflowRow(
                 self,
                 row,
@@ -1525,7 +1549,14 @@ fn resizeCols(
             c.tracked_pin.*,
         ) orelse break :cursor;
 
-        const active_pin = self.pin(.{ .active = .{} });
+        const active_pin = pin: {
+            const current = self.pin(.{ .active = .{} });
+            if (active_top) |p| {
+                if (!p.garbage and current != null and current.?.before(p.*))
+                    break :pin @as(?Pin, p.*);
+            }
+            break :pin current;
+        };
 
         // We need to determine how many rows we wrapped from the original
         // and subtract that from the remaining rows we expect because if
@@ -1533,6 +1564,12 @@ fn resizeCols(
         // the scrollback.
         const wrapped = wrapped: {
             var wrapped: usize = 0;
+
+            // Row shrink can leave the cursor above the preserved origin.
+            // Never iterate upward toward a lower endpoint in that case.
+            if (active_pin) |ap| {
+                if (c.tracked_pin.before(ap)) break :wrapped 0;
+            }
 
             var row_it = c.tracked_pin.rowIterator(.left_up, active_pin);
             while (row_it.next()) |next| {
@@ -1552,6 +1589,17 @@ fn resizeCols(
         while (req_rows > 0) {
             _ = try self.grow();
             req_rows -= 1;
+        }
+    }
+
+    // Unwrapping can otherwise fill the newly vacant active rows with history.
+    // Append blank rows to keep the old origin at zero. If narrowing pushed it
+    // into history, leave it there rather than resurrecting scrolled content.
+    if (active_top) |p| {
+        if (!p.garbage) {
+            if (self.pointFromPin(.active, p.*)) |pt| {
+                for (0..pt.active.y) |_| _ = try self.grow();
+            }
         }
     }
 }

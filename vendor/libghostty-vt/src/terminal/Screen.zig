@@ -2012,7 +2012,7 @@ pub const Resize = struct {
     /// lost from the top of the scrollback.
     reflow: bool = true,
 
-    /// Whether row growth may pull history into the active area.
+    /// Whether growth or column reflow may pull history into the active area.
     pull_scrollback: bool = true,
 
     /// Set this to enable prompt redraw on resize. This signals

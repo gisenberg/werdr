@@ -2084,12 +2084,15 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
                                       uint32_t cell_height_px);
 
 /**
- * Resize without pulling retained history into the active area on row growth.
+ * Resize without pulling retained history into the active area.
  *
  * Like ghostty_terminal_resize(), including column reflow and size reports,
  * but enlargement appends blank rows below the active screen even when the
  * cursor was at the bottom. Both screens use this policy. Retained history
  * remains available, subject to the configured history limits.
+ * Column reflow keeps history and active content in separate domains, splitting
+ * soft wraps at their boundary while retaining historical cell content.
+ * Vacant rows after unwrapping are filled with blanks, not retained history.
  * This per-call policy is intended for fixed-origin consoles such as ConPTY.
  * NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.
  *

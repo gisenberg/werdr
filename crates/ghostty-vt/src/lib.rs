@@ -1074,6 +1074,8 @@ impl Terminal {
 
     /// Resize for a console that appends blank rows instead of pulling history
     /// into the active screen on enlargement, such as ConPTY.
+    /// Column reflow separates history from active content at their boundary,
+    /// preserving historical cells but splitting any soft wrap across it.
     pub fn resize_preserve_active(
         &mut self,
         cols: u16,

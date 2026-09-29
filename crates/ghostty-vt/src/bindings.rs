@@ -3329,7 +3329,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Resize without pulling retained history into the active area on row growth.\n\n Like ghostty_terminal_resize(), including column reflow and size reports,\n but enlargement appends blank rows below the active screen even when the\n cursor was at the bottom. Both screens use this policy. Retained history\n remains available, subject to the configured history limits.\n This per-call policy is intended for fixed-origin consoles such as ConPTY.\n NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.\n\n @ingroup terminal"]
+    #[doc = " Resize without pulling retained history into the active area.\n\n Like ghostty_terminal_resize(), including column reflow and size reports,\n but enlargement appends blank rows below the active screen even when the\n cursor was at the bottom. Both screens use this policy. Retained history\n remains available, subject to the configured history limits.\n Column reflow keeps history and active content in separate domains, splitting\n soft wraps at their boundary while retaining historical cell content.\n Vacant rows after unwrapping are filled with blanks, not retained history.\n This per-call policy is intended for fixed-origin consoles such as ConPTY.\n NULL handles and zero dimensions return GHOSTTY_INVALID_VALUE.\n\n @ingroup terminal"]
     pub fn ghostty_terminal_resize_preserve_active(
         terminal: GhosttyTerminal,
         cols: u16,
