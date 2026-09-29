@@ -109,7 +109,7 @@ mod tests {
         let mut terminal = TerminalState::new(terminal_id.clone(), stale_cwd);
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         state.terminals.insert(terminal_id.clone(), terminal);
-        let (events, _) = tokio::sync::mpsc::channel(4);
+        let (events, _) = crate::events::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
             24,

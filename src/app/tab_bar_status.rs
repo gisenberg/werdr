@@ -420,7 +420,7 @@ impl StatusCommandControl {
 }
 
 fn spawn_status_command(
-    event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    event_tx: crate::events::AppEventSender,
     generation: u64,
     segment_index: usize,
     command: String,
@@ -553,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_command_reports_its_sanitized_last_line() {
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,
@@ -583,7 +583,7 @@ mod tests {
     async fn status_command_timeout_starts_before_task_is_polled() {
         let ran = unique_temp_path("ran-after-timeout");
         let command = format!("printf ran > {}", ran.display());
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,
@@ -614,7 +614,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn status_command_drains_large_output_and_keeps_the_last_line() {
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        let (event_tx, mut event_rx) = crate::events::channel(1);
         spawn_status_command(
             event_tx,
             7,

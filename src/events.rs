@@ -7,6 +7,11 @@ use std::time::Instant;
 
 mod inbox;
 pub(crate) use inbox::OwnerInbox;
+mod admission;
+#[cfg(unix)]
+pub(crate) use admission::AdmissionCut;
+pub(crate) use admission::{channel, AdmissionSender};
+pub(crate) type AppEventSender = AdmissionSender<AppEvent>;
 
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;

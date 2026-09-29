@@ -76,11 +76,7 @@ impl ExitRecord {
         true
     }
 
-    pub(super) async fn notify(
-        &self,
-        pane_id: PaneId,
-        events: &tokio::sync::mpsc::Sender<AppEvent>,
-    ) {
+    pub(super) async fn notify(&self, pane_id: PaneId, events: &crate::events::AppEventSender) {
         if self.evidence().is_none() {
             tracing::error!(
                 pane = pane_id.raw(),
@@ -179,7 +175,7 @@ mod tests {
         use crate::pane::{AgentDetection, PaneLaunchEnv, PaneRuntime};
         for closed in [false, true] {
             let pane_id = PaneId::alloc();
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            let (tx, rx) = crate::events::channel(1);
             tx.send(AppEvent::TerminalBell { pane_id, count: 1 })
                 .await
                 .unwrap();
@@ -245,7 +241,7 @@ mod tests {
         let identity = record.clone();
         let completed = AtomicBool::new(false);
         let pane_id = PaneId::alloc();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, mut rx) = crate::events::channel(1);
         tx.send(AppEvent::TerminalBell { pane_id, count: 1 })
             .await
             .unwrap();
@@ -277,7 +273,7 @@ mod tests {
         let record = ExitRecord::default();
         let completed = AtomicBool::new(false);
         let pane_id = PaneId::alloc();
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = crate::events::channel(1);
         drop(rx);
         let evidence = ExitEvidence::ChildWait(ChildExitReason::WaitFailed);
         assert!(record.record(evidence, &completed));
@@ -294,7 +290,7 @@ mod tests {
         let record = ExitRecord::default();
         let completed = AtomicBool::new(false);
         let pane_id = PaneId::alloc();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, mut rx) = crate::events::channel(1);
         assert!(record.record(ExitEvidence::ImportedReaderEnded, &completed));
         record.notify(pane_id, &tx).await;
         assert_eq!(record.evidence(), Some(ExitEvidence::ImportedReaderEnded));

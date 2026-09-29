@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ratatui::layout::Direction;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 
-use crate::events::AppEvent;
 use crate::layout::{Node, PaneId, TileLayout};
 use crate::pane::{PaneLaunchEnv, PaneState};
 use crate::render_signal::RenderSignal;
@@ -46,7 +45,7 @@ pub struct Tab {
     #[cfg(test)]
     pub runtimes: HashMap<PaneId, TerminalRuntime>,
     pub zoomed: bool,
-    pub events: mpsc::Sender<AppEvent>,
+    pub events: crate::events::AppEventSender,
     pub(crate) render_notify: Arc<Notify>,
     pub(crate) render_dirty: Arc<RenderSignal>,
 }
@@ -64,7 +63,7 @@ impl Tab {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -97,7 +96,7 @@ impl Tab {
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -129,7 +128,7 @@ impl Tab {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         argv: Option<&[String]>,
@@ -435,7 +434,7 @@ impl Tab {
         number: usize,
         custom_name: Option<String>,
         moved: MovedPane,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> Self {

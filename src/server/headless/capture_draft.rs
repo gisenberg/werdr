@@ -30,8 +30,8 @@ impl HeadlessServer {
             .get(terminal_id)
             .ok_or("terminal runtime not found before prefix application")?
             .capture_identity();
-        let prefix_len = self.app.event_rx.len();
-        self.apply_capture_prefix(prefix_len)?;
+        let cut = self.app.event_rx.admission_cut()?;
+        self.apply_capture_prefix(cut)?;
         self.capture_runtime_if_unchanged(terminal_id, &identity)?;
         let result = {
             // Borrow disjoint owner fields. Never apply handlers while the
@@ -98,17 +98,18 @@ impl HeadlessServer {
         }
     }
 
-    /// `count` is sampled once from event_rx.len() by the owner. Do not drain
-    /// until empty: concurrent producers or handlers can append indefinitely.
-    pub(super) fn apply_capture_prefix(&mut self, count: usize) -> Result<(), String> {
+    /// Sample once. Later admissions, including handler-created work, do not
+    /// extend the prefix. Delivery is followed by handling outside the lock.
+    pub(super) fn apply_capture_prefix(
+        &mut self,
+        cut: crate::events::AdmissionCut,
+    ) -> Result<(), String> {
         self.check_capture_shutdown()?;
-        for _ in 0..count {
+        loop {
             self.check_capture_shutdown()?;
-            let event = self
-                .app
-                .event_rx
-                .try_recv()
-                .map_err(|_| "queued event prefix could not be completely applied")?;
+            let Some(event) = self.app.event_rx.try_recv_through(&cut)? else {
+                break;
+            };
             if self.handle_internal_event_with_forwarding(event) {
                 self.app.render_dirty.request_generic();
                 self.app.render_notify.notify_one();

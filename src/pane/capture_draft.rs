@@ -81,10 +81,7 @@ impl PaneRuntime {
 
     pub(crate) fn test_for_draft_capture_with_publishing_detector(
         bytes: &[u8],
-        publication: Option<(
-            tokio::sync::mpsc::Sender<crate::events::AppEvent>,
-            Vec<crate::events::AppEvent>,
-        )>,
+        publication: Option<(crate::events::AppEventSender, Vec<crate::events::AppEvent>)>,
     ) -> (Self, tokio::sync::oneshot::Sender<()>) {
         let mut runtime = Self::test_for_draft_capture(bytes);
         let (controller, mut worker) = super::detection_pause::channel();
@@ -287,8 +284,10 @@ mod tests {
         assert_eq!(&received, b"resumed");
     }
 
-    fn attach_basic_detector(runtime: &mut PaneRuntime) -> mpsc::Receiver<crate::events::AppEvent> {
-        let (events, events_rx) = mpsc::channel(16);
+    fn attach_basic_detector(
+        runtime: &mut PaneRuntime,
+    ) -> crate::events::OwnerInbox<crate::events::AppEvent> {
+        let (events, events_rx) = crate::events::channel(16);
         let (handle, reset, release, controller) = super::super::spawn_basic_detection_task(
             runtime.pane_id,
             runtime.child_pid.clone(),
@@ -343,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn spawned_detector_and_actor_can_be_paused_and_resumed_repeatedly() {
         use crate::pane::{AgentDetection, PaneLaunchEnv};
-        let (events, _event_rx) = mpsc::channel(16);
+        let (events, _event_rx) = crate::events::channel(16);
         let mut runtime = PaneRuntime::spawn_shell_command(
             crate::layout::PaneId::from_raw(42),
             5,
@@ -392,7 +391,7 @@ mod tests {
                 "stty -echo -onlcr; printf '{}'; read -r gate; printf '{}'; read -r gate",
                 octal(prefix), octal(suffix)
             );
-            let (events, _event_rx) = mpsc::channel(128);
+            let (events, _event_rx) = crate::events::channel(128);
             let mut runtime = PaneRuntime::spawn_shell_command(
                 crate::layout::PaneId::from_raw(42),
                 5,

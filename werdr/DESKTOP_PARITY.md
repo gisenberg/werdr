@@ -305,6 +305,11 @@ The candidate rejects legacy handoff before disconnecting clients when a live ru
 This prevents the legacy pane-only manifest from silently omitting a runtime that exporter shutdown would otherwise dispose.
 Rejection preserves the current actor, client connection and public socket, and tests verify subsequent input delivery and preflight acceptance after reattachment.
 This topology safeguard does not preserve detached metadata or change legacy restoration of panes without live runtimes, and it does not establish a complete runtime state cut.
+Internal owner events now pass through one bounded, sequenced admission channel, including detector, child-exit and background-worker publications.
+Private capture samples a process-local, channel-identity-bound admission cutoff and applies exactly that finite prefix, retaining staged events and later publications in order.
+Sequence assignment occurs only after capacity reservation and shares a short lock with publication; cancellation before publication consumes no sequence.
+This is a publication boundary, not producer quiescence, handler completion, an external-effect journal or a transferable session capsule.
+The additional work is per admitted internal event, not per terminal byte, render, pane layout or attached client.
 The deployed runtimes limit exported history to 8 KiB per pane and omit it for panes with persisted agent sessions.
 The candidate now preserves all retained primary-screen history for both ordinary and resumable-agent panes.
 It rejects a manifest above the existing 16 MiB encoded transport limit before spawning the importer, rolls back the paused readers, and never truncates history to fit.

@@ -165,7 +165,7 @@ struct CatalogAgent {
     path: String,
 }
 
-pub(crate) fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+pub(crate) fn auto_update(events: crate::events::AppEventSender) {
     let result = check_and_update();
     let status = match result {
         Ok(output) => {
@@ -709,7 +709,7 @@ path = "codex.toml"
                 ),
             );
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let (tx, mut rx) = crate::events::channel(1);
             auto_update(tx);
 
             let event = rx.try_recv().expect("manifest update event");
@@ -779,7 +779,7 @@ path = "codex.toml"
                 ),
             );
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let (tx, mut rx) = crate::events::channel(1);
             auto_update(tx);
 
             let event = rx.try_recv().expect("manifest update event");
@@ -857,7 +857,7 @@ path = "missing-cursor.toml"
                 ),
             );
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let (tx, mut rx) = crate::events::channel(1);
             auto_update(tx);
 
             let event = rx.try_recv().expect("manifest update event");

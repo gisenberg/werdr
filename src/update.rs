@@ -2345,7 +2345,7 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 
 /// Background update check: only surface availability and release notes.
 /// Runs in a background thread at startup.
-pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+pub fn auto_update(events: crate::events::AppEventSender) {
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
@@ -2423,7 +2423,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
     });
 }
 
-fn auto_update_homebrew(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+fn auto_update_homebrew(events: crate::events::AppEventSender) {
     let version = match check_homebrew_latest() {
         Ok(Some(version)) => version,
         Ok(None) => return,

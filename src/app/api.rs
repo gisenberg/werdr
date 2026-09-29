@@ -1956,7 +1956,7 @@ mod tests {
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         app.state.toast_config.delay_seconds = 0;
 
-        let (events, _) = tokio::sync::mpsc::channel(4);
+        let (events, _) = crate::events::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
             24,
@@ -2049,7 +2049,7 @@ mod tests {
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         app.state.toast_config.delay_seconds = 1;
 
-        let (events, _) = tokio::sync::mpsc::channel(4);
+        let (events, _) = crate::events::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
             24,

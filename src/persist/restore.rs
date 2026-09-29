@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ratatui::layout::Direction;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 use tracing::{error, warn};
 
 use crate::detect::AgentState;
-use crate::events::AppEvent;
 use crate::layout::{Node, PaneId, TileLayout};
 use crate::pane::{PaneLaunchEnv, PaneState};
 use crate::render_signal::RenderSignal;
@@ -39,7 +38,7 @@ struct RestoreRuntimeContext<'a> {
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'a>,
     resume_agents_on_restore: bool,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 }
@@ -72,7 +71,7 @@ pub fn restore(
     default_shell: &str,
     shell_mode: crate::config::ShellModeConfig,
     resume_agents_on_restore: bool,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
@@ -99,7 +98,7 @@ pub fn restore_handoff(
     default_shell: &str,
     shell_mode: crate::config::ShellModeConfig,
     imports: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
@@ -195,7 +194,7 @@ fn restore_with_imports_strict(
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
@@ -235,7 +234,7 @@ fn restore_with_imports(
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
@@ -264,7 +263,7 @@ fn restore_with_imports_and_failures(
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
-    events: mpsc::Sender<AppEvent>,
+    events: crate::events::AppEventSender,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> RestoreFailures<RestoredSession> {
@@ -1383,7 +1382,7 @@ mod tests {
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "keep-my-session".into(),
             });
-            let (events, _rx) = mpsc::channel(32);
+            let (events, _rx) = crate::events::channel(32);
             let (workspaces, terminals, runtimes) = restore(
                 &snapshot,
                 None,
@@ -1488,7 +1487,7 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         };
-        let (events, _event_rx) = mpsc::channel(4);
+        let (events, _event_rx) = crate::events::channel(4);
 
         let (_workspaces, terminals, _runtimes) = restore(
             &snapshot,
@@ -1583,7 +1582,7 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         };
-        let (events, _event_rx) = mpsc::channel(4);
+        let (events, _event_rx) = crate::events::channel(4);
 
         let (workspaces, _terminals, _runtimes) = restore(
             &snapshot,
@@ -1692,7 +1691,7 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         };
-        let (events, _event_rx) = mpsc::channel(4);
+        let (events, _event_rx) = crate::events::channel(4);
 
         let (workspaces, terminals, _runtimes) = restore(
             &snapshot,
@@ -1804,7 +1803,7 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         };
-        let (events, _event_rx) = mpsc::channel(4);
+        let (events, _event_rx) = crate::events::channel(4);
 
         let (_workspaces, terminals, runtimes) = restore(
             &snapshot,
@@ -1843,7 +1842,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             &mut imports,
-            mpsc::channel(4).0,
+            crate::events::channel(4).0,
             Arc::new(Notify::new()),
             Arc::new(RenderSignal::new()),
         )
@@ -1867,7 +1866,7 @@ mod tests {
     async fn live_handoff_preserves_hook_status_until_next_report() {
         for state_before_handoff in [AgentState::Working, AgentState::Blocked] {
             let (snapshot, _) = snapshot_with_saved_pane_history();
-            let (events, _events_rx) = mpsc::channel(32);
+            let (events, _events_rx) = crate::events::channel(32);
             let (workspaces, mut terminals, runtimes) = restore(
                 &snapshot,
                 None,
@@ -1967,7 +1966,7 @@ mod tests {
     #[tokio::test]
     async fn restore_seeds_saved_pane_history_into_runtime() {
         let (snapshot, history) = snapshot_with_saved_pane_history();
-        let (events, _events_rx) = mpsc::channel(8);
+        let (events, _events_rx) = crate::events::channel(8);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(RenderSignal::new());
 
@@ -2005,7 +2004,7 @@ mod tests {
     #[tokio::test]
     async fn restore_without_history_snapshot_keeps_pane_contents_empty() {
         let (snapshot, _history) = snapshot_with_saved_pane_history();
-        let (events, _events_rx) = mpsc::channel(8);
+        let (events, _events_rx) = crate::events::channel(8);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(RenderSignal::new());
 
@@ -2056,7 +2055,7 @@ mod tests {
                     .cwd = std::env::temp_dir();
             }
             let history = serde_json::from_value(value).unwrap();
-            let (events, _rx) = mpsc::channel(8);
+            let (events, _rx) = crate::events::channel(8);
             let (_, _, runtimes) = restore(
                 &snapshot,
                 Some(&history),

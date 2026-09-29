@@ -6,6 +6,7 @@ use bytes::Bytes;
 use ratatui::{layout::Rect, Frame};
 use tokio::sync::{mpsc, Notify};
 
+#[cfg(all(test, unix))]
 use crate::events::AppEvent;
 use crate::layout::PaneId;
 
@@ -107,7 +108,7 @@ impl TerminalRuntime {
 
     #[cfg(all(test, unix))]
     pub(crate) fn test_for_draft_capture_with_publishing_detector(
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         publication: Vec<AppEvent>,
     ) -> (Self, tokio::sync::oneshot::Sender<()>) {
         let (runtime, release) =
@@ -162,7 +163,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -190,7 +191,7 @@ impl TerminalRuntime {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &crate::pane::PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -224,7 +225,7 @@ impl TerminalRuntime {
         shell_config: crate::pane::PaneShellConfig<'_>,
         launch_env: &crate::pane::PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -259,7 +260,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -294,7 +295,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {

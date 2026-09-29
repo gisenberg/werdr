@@ -427,8 +427,8 @@ mod tests {
     async fn capture_real_actor_ack_allows_owner_inbox_to_unblock_publication_and_drain_replies() {
         let (socket, mut peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let (events, receiver) = mpsc::channel(1);
-        let mut inbox = crate::events::OwnerInbox::new(receiver);
+        let (events, receiver) = crate::events::channel(1);
+        let mut inbox = receiver;
         let (entered, started) = oneshot::channel();
         let mut entered = Some(entered);
         let (release, wait) = std_mpsc::channel();

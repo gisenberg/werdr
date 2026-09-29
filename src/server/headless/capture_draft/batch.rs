@@ -26,7 +26,7 @@ impl HeadlessServer {
             .map(|(id, runtime)| (id.clone(), runtime.capture_identity()))
             .collect();
         let attachments = self.capture_attachments();
-        self.apply_capture_prefix(self.app.event_rx.len())?;
+        self.apply_capture_prefix(self.app.event_rx.admission_cut()?)?;
         self.validate_capture_runtime_set(&identities)?;
         if self.capture_attachments() != attachments {
             return Err("terminal attachments changed while applying queued prefix".into());

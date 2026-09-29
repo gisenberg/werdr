@@ -43,7 +43,7 @@ const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
 
 use ratatui::layout::Rect;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 use tracing::info;
 
 use crate::config::Config;
@@ -106,7 +106,7 @@ pub struct App {
     pub(crate) runtime_boot_id: Option<String>,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
-    pub event_tx: mpsc::Sender<AppEvent>,
+    pub event_tx: crate::events::AppEventSender,
     pub(crate) event_rx: crate::events::OwnerInbox<AppEvent>,
     pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
     pub(crate) event_hub: crate::api::EventHub,
@@ -367,8 +367,7 @@ impl App {
     ) -> Self {
         let prefix_keys = config.prefix_keys();
         crate::kitty_graphics::set_enabled(config.kitty_graphics_enabled());
-        let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
-        let event_rx = crate::events::OwnerInbox::new(event_rx);
+        let (event_tx, event_rx) = crate::events::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
 

@@ -251,7 +251,7 @@ fn active_pending_release(
 }
 
 async fn publish_state_changed_event(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: crate::events::AppEventSender,
     pane_id: PaneId,
     agent: Option<Agent>,
     state: AgentState,
@@ -284,7 +284,7 @@ async fn publish_state_changed_event(
 }
 
 async fn publish_agent_process_detected_event(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: crate::events::AppEventSender,
     pane_id: PaneId,
     agent: Agent,
     observed_at: std::time::Instant,
@@ -306,7 +306,7 @@ async fn publish_agent_process_detected_event(
 }
 
 async fn publish_codex_prompt_observation(
-    state_events: &mpsc::Sender<AppEvent>,
+    state_events: &crate::events::AppEventSender,
     pane_id: PaneId,
     agent: Option<Agent>,
     content: &str,
@@ -340,7 +340,7 @@ struct AgentDetectionPublishUpdate {
 }
 
 async fn apply_agent_detection_publish_update(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: crate::events::AppEventSender,
     pane_id: PaneId,
     agent: Option<Agent>,
     update: AgentDetectionPublishUpdate,
@@ -387,7 +387,7 @@ async fn report_self_reported_agent_shell_return(
     pid: u32,
     now: std::time::Instant,
     last_check: &mut Option<std::time::Instant>,
-    state_events: &mpsc::Sender<AppEvent>,
+    state_events: &crate::events::AppEventSender,
     pane_id: PaneId,
 ) {
     if pid == 0 || !active.load(Ordering::Acquire) {
@@ -811,7 +811,7 @@ fn spawn_basic_detection_task(
     detection_content_seq: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     self_reported_agent_active: Arc<AtomicBool>,
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: crate::events::AppEventSender,
 ) -> (
     tokio::task::AbortHandle,
     Arc<Notify>,
@@ -2061,7 +2061,7 @@ fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::PathBuf> {
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
 }
 
-fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &crate::events::AppEventSender) {
     if count == 0 {
         return;
     }
@@ -2079,7 +2079,7 @@ fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
     reported_cwd: &Arc<Mutex<Option<std::path::PathBuf>>>,
-    events: &mpsc::Sender<AppEvent>,
+    events: &crate::events::AppEventSender,
 ) {
     let Some(cwd) = usable_reported_cwd(cwd) else {
         return;
@@ -2247,7 +2247,7 @@ impl PaneRuntime {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -2281,7 +2281,7 @@ impl PaneRuntime {
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -2325,7 +2325,7 @@ impl PaneRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -2363,7 +2363,7 @@ impl PaneRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -2403,7 +2403,7 @@ impl PaneRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -2597,7 +2597,7 @@ impl PaneRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         cmd: CommandBuilder,
@@ -4145,7 +4145,7 @@ mod tests {
         std::fs::create_dir(&cwd).expect("create reported cwd");
 
         let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
-        let (events, _event_rx) = mpsc::channel(1);
+        let (events, _event_rx) = crate::events::channel(1);
         publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
         assert_eq!(
             runtime.reported_cwd.lock().unwrap().as_ref(),
@@ -5890,7 +5890,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn spawned_pty_reader_aggregates_terminal_bells() {
-        let (events, mut event_rx) = mpsc::channel(8);
+        let (events, mut event_rx) = crate::events::channel(8);
         let pane_id = PaneId::from_raw(42);
         let runtime = PaneRuntime::spawn_shell_command(
             pane_id,
@@ -5929,7 +5929,7 @@ mod tests {
 
     #[tokio::test]
     async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
-        let (tx, mut rx) = mpsc::channel(1);
+        let (tx, mut rx) = crate::events::channel(1);
         let pane_id = PaneId::from_raw(42);
 
         tx.try_send(AppEvent::UpdateReady {
@@ -5991,7 +5991,7 @@ mod tests {
 
     #[tokio::test]
     async fn codex_prompt_observation_revokes_on_working_or_skipped_screen() {
-        let (tx, mut rx) = mpsc::channel(4);
+        let (tx, mut rx) = crate::events::channel(4);
         let pane_id = PaneId::from_raw(42);
         let detection = crate::detect::AgentDetection {
             state: AgentState::Unknown,

@@ -234,9 +234,9 @@ async fn batch_staging_exhaustion_retains_fifo_and_releases_acquired_actor() {
     let (mut server, first_id, pane_id) = fixture();
     let (first, actor, _peer, _reads) = TerminalRuntime::test_for_draft_capture_with_actor();
     server.app.terminal_runtimes.insert(first_id, first);
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = crate::events::channel(1);
     server.app.event_tx = sender.clone();
-    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    server.app.event_rx = receiver;
     let event_count = crate::app::APP_EVENT_CHANNEL_CAPACITY + 2;
     let events = (0..event_count)
         .map(|count| AppEvent::TerminalBell {
@@ -302,9 +302,9 @@ async fn batch_pumps_bounded_inbox_and_rejects_observed_effects_without_applying
     let (mut server, first_id, pane_id) = fixture();
     let (first, actor, _peer, _reads) = TerminalRuntime::test_for_draft_capture_with_actor();
     server.app.terminal_runtimes.insert(first_id, first);
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = crate::events::channel(1);
     server.app.event_tx = sender.clone();
-    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    server.app.event_rx = receiver;
     let (second, release) = TerminalRuntime::test_for_draft_capture_with_publishing_detector(
         sender,
         vec![

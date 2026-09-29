@@ -25,9 +25,9 @@ fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
 #[tokio::test]
 async fn capture_stages_blocked_detector_publication_without_running_handlers() {
     let (mut server, terminal_id, pane_id) = fixture();
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = crate::events::channel(1);
     server.app.event_tx = sender.clone();
-    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    server.app.event_rx = receiver;
     let (runtime, release) = TerminalRuntime::test_for_draft_capture_with_publishing_detector(
         sender,
         vec![
@@ -128,9 +128,9 @@ async fn cancelled_capture_retains_staged_events_before_later_publication() {
 #[tokio::test]
 async fn capture_staging_exhaustion_rolls_back_without_losing_blocked_publications() {
     let (mut server, terminal_id, pane_id) = fixture();
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = crate::events::channel(1);
     server.app.event_tx = sender.clone();
-    server.app.event_rx = crate::events::OwnerInbox::new(receiver);
+    server.app.event_rx = receiver;
     let count = crate::app::APP_EVENT_CHANNEL_CAPACITY as u16 + 2;
     let (runtime, release) = TerminalRuntime::test_for_draft_capture_with_publishing_detector(
         sender,
@@ -284,7 +284,7 @@ async fn finite_prefix_leaves_later_events_queued_in_order() {
         .event_tx
         .try_send(AppEvent::TerminalBell { pane_id, count: 1 })
         .unwrap();
-    let count = server.app.event_rx.len();
+    let cut = server.app.event_rx.admission_cut().unwrap();
     // Sample once; later publication must not enlarge the owner operation.
     for count in [2, 3] {
         server
@@ -293,7 +293,7 @@ async fn finite_prefix_leaves_later_events_queued_in_order() {
             .try_send(AppEvent::TerminalBell { pane_id, count })
             .unwrap();
     }
-    server.apply_capture_prefix(count).unwrap();
+    server.apply_capture_prefix(cut).unwrap();
     for expected in [2, 3] {
         let AppEvent::TerminalBell { count, .. } = server.app.event_rx.try_recv().unwrap() else {
             panic!("expected queued bell");
@@ -410,9 +410,11 @@ async fn shutdown_and_incomplete_prefix_fail_without_false_acknowledgement() {
         .event_tx
         .try_send(AppEvent::TerminalBell { pane_id, count: 1 })
         .unwrap();
-    let error = server.apply_capture_prefix(2).unwrap_err();
-    assert!(error.contains("completely applied"), "{error}");
-    assert!(server.app.event_rx.is_empty());
+    let (_, other_inbox) = crate::events::channel::<AppEvent>(1);
+    let cut = other_inbox.admission_cut().unwrap();
+    let error = server.apply_capture_prefix(cut).unwrap_err();
+    assert!(error.contains("another inbox"), "{error}");
+    assert_eq!(server.app.event_rx.len(), 1);
 }
 
 #[tokio::test]

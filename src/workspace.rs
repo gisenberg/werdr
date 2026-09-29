@@ -5,9 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ratatui::layout::Direction;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 
-use crate::events::AppEvent;
 use crate::layout::PaneId;
 #[cfg(test)]
 use crate::layout::TileLayout;
@@ -238,7 +237,7 @@ impl Workspace {
         tab_label: Option<String>,
         identity_cwd: PathBuf,
         moved: MovedPane,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> Self {
@@ -280,7 +279,7 @@ impl Workspace {
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -309,7 +308,7 @@ impl Workspace {
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         extra_env: Vec<(String, String)>,
@@ -353,7 +352,7 @@ impl Workspace {
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        events: crate::events::AppEventSender,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         argv: Option<&[String]>,
@@ -938,7 +937,7 @@ impl Workspace {
         &mut self,
         moved: MovedPane,
         label: Option<String>,
-        fallback_events: mpsc::Sender<AppEvent>,
+        fallback_events: crate::events::AppEventSender,
         fallback_render_notify: Arc<Notify>,
         fallback_render_dirty: Arc<RenderSignal>,
     ) -> usize {
@@ -1168,7 +1167,7 @@ pub(crate) struct TakenPane {
 #[cfg(test)]
 impl Workspace {
     pub(crate) fn test_new(name: &str) -> Self {
-        let (events, _) = mpsc::channel(64);
+        let (events, _) = crate::events::channel(64);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(RenderSignal::new());
         let identity_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
@@ -1226,7 +1225,7 @@ impl Workspace {
     }
 
     pub(crate) fn test_add_tab(&mut self, name: Option<&str>) -> usize {
-        let (events, _) = mpsc::channel(64);
+        let (events, _) = crate::events::channel(64);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(RenderSignal::new());
         let (layout, root_id) = TileLayout::new();

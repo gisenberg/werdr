@@ -110,9 +110,9 @@ async fn restore_timer_retirement_completion_invalidates_queued_timeout() {
 #[tokio::test]
 async fn restore_timer_bounded_queue_preserves_superseding_registration() {
     let (mut app, pane, terminal, _) = fixture();
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let (sender, receiver) = crate::events::channel(1);
     app.event_tx = sender;
-    app.event_rx = crate::events::OwnerInbox::new(receiver);
+    app.event_rx = receiver;
     app.event_tx
         .try_send(AppEvent::TerminalBell {
             pane_id: pane,

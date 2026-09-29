@@ -1085,7 +1085,7 @@ mod tests {
         state.ensure_test_terminals();
         let pane_id = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.workspaces[0].terminal_id(pane_id).unwrap().clone();
-        let (events, _rx) = tokio::sync::mpsc::channel(32);
+        let (events, _rx) = crate::events::channel(32);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             pane_id,
             24,
