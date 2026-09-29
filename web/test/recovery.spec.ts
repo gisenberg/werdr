@@ -7,6 +7,8 @@ test('fitting forwards geometry even when a native frame already resized the ren
   let latest: any, sendFrame: ((value: unknown) => void) | undefined;
   const sizes: { cols: number; rows: number }[] = [];
   await page.routeWebSocket('**/ws/terminal?*', socket => {
+    const initial = new URL(socket.url()).searchParams;
+    sizes.push({ cols: Number(initial.get('cols')), rows: Number(initial.get('rows')) });
     sendFrame = value => socket.send(JSON.stringify(value));
     const server = socket.connectToServer();
     socket.onMessage(message => {

@@ -10,6 +10,65 @@ function scrollbarFixture() {
   return fixture(false, false, false, undefined, binary);
 }
 
+for (const viewportWidth of [1440, 390]) test(`unchanged-size reconnect uses settled primary and alternate geometry at ${viewportWidth}px`, async ({ page }) => {
+  const runtime = await scrollbarFixture();
+  const attachments: number[] = [], sizes: number[] = [], frames: number[] = [];
+  page.on('websocket', socket => {
+    if (!socket.url().includes('/ws/terminal?')) return;
+    attachments.push(Number(new URL(socket.url()).searchParams.get('cols')));
+    socket.on('framesent', event => { const value = JSON.parse(String(event.payload)); if (value.type === 'terminal.resize') sizes.push(value.cols); });
+    socket.on('framereceived', event => { const value = JSON.parse(String(event.payload)); if (value.type === 'terminal.frame') frames.push(value.width); });
+  });
+  try {
+    await page.setViewportSize({ width: viewportWidth, height: 900 });
+    await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    if (viewportWidth < 700) await page.locator('#host-toggle').click();
+    await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
+    await expect.poll(() => page.locator('.pane-active .pane-content').evaluate(node => parseFloat(getComputedStyle(node).marginRight))).toBeGreaterThan(0);
+    await expect.poll(() => frames.at(-1)).toBe(sizes.at(-1) ?? attachments.at(-1));
+    const width = frames.at(-1)!;
+    await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
+    expect(attachments).toHaveLength(2);
+    expect(attachments.at(-1)).toBe(width);
+    const id = new URL(page.url()).searchParams.get('pane')!;
+    await runtime.cli('pane', 'send-text', id, "printf '\\033[?1049hALT_GEOMETRY'; read -r ALT_EXIT; printf '\\033[?1049l'\n");
+    await expect(page.locator('.pane-active .pane-content')).toHaveCSS('margin-right', '0px');
+    await expect.poll(() => frames.at(-1)).toBeGreaterThan(width);
+    const alternateWidth = frames.at(-1)!;
+    await page.reload(); await expect(page.locator('#boot')).toBeHidden(); await expect(page.locator('#shield')).toBeHidden();
+    expect(attachments).toHaveLength(3);
+    expect(attachments.at(-1)).toBe(alternateWidth);
+    await expect(page.locator('.pane-active .pane-content')).toHaveCSS('margin-right', '0px');
+  } finally { await runtime.close(); }
+});
+
+test('initial scroll metadata is optional and a retired attachment cannot open a terminal', async ({ page }) => {
+  const runtime = await scrollbarFixture();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let received = false, attachments = 0;
+  page.on('websocket', socket => { if (socket.url().includes('/ws/terminal?')) attachments++; });
+  await page.route('**/api/pane-scroll?*', async route => { received = true; await held; await route.continue().catch(() => {}); });
+  try {
+    await page.goto(runtime.url); await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+    await expect.poll(() => received).toBe(true);
+    await page.getByRole('button', { name: '[X] SIGN OUT', exact: true }).click();
+    await expect(page.locator('#boot')).toBeVisible(); release();
+    await page.unroute('**/api/pane-scroll?*');
+    expect(attachments).toBe(0);
+    await page.route('**/api/pane-scroll?*', route => route.fulfill({ contentType: 'application/json', body: '{"terminal_id":"replaced-terminal","scroll":null}' }));
+    await consoleInput(page, 'token', runtime.token); await expect(page.locator('#boot')).toBeHidden();
+    await expect(page.locator('#shield')).toContainText('Terminal identity changed');
+    expect(attachments).toBe(0);
+    await page.unroute('**/api/pane-scroll?*');
+    await page.route('**/api/pane-scroll?*', route => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"unsupported"}' }));
+    await page.reload(); await expect(page.locator('#boot')).toBeHidden();
+    await expect(page.locator('#shield')).toBeHidden();
+    await expect.poll(() => attachments).toBe(1);
+  } finally { release(); await runtime.close(); }
+});
+
 test('native scrollbars preserve history, row geometry, keyboard and drag behavior across screen modes and settings', async ({ page }) => {
   test.setTimeout(90000);
   const runtime = await scrollbarFixture();
@@ -88,6 +147,11 @@ test('native scrollbars preserve history, row geometry, keyboard and drag behavi
 test('older native scroll records keep terminals usable without guessing alternate-screen gutters', async ({ page }) => {
   const runtime = await fixture();
   let records = 0;
+  await page.route('**/api/pane-scroll?*', async route => {
+    const response = await route.fetch(), value = await response.json();
+    if (value.scroll) delete value.scroll.alternate_screen_active;
+    await route.fulfill({ response, json: value });
+  });
   await page.routeWebSocket('**/ws/terminal?*', socket => {
     const server = socket.connectToServer();
     server.onMessage(message => {

@@ -31,6 +31,7 @@ import { NativeApiError } from './native-api.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
 import { noticeEndpointKey } from '../shared/fleet.ts';
 import { popupSession } from '../shared/popups.ts';
+import { scrollState } from '../shared/scrollbar.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.WERDR_HOST || '127.0.0.1';
@@ -216,6 +217,10 @@ const handler: RequestListener = async (req, res) => {
       if (url.pathname === '/api/layout' && req.method === 'GET') {
         const result = await fleet.request(publicId(url.searchParams.get('machine')), 'layout.export', { tab_id: publicId(url.searchParams.get('tab')) }, false);
         return reply(res, 200, browserLayout(result));
+      }
+      if (url.pathname === '/api/pane-scroll' && req.method === 'GET') {
+        const result = await fleet.request(publicId(url.searchParams.get('machine')), 'pane.get', { pane_id: publicId(url.searchParams.get('pane')) }, false);
+        return reply(res, 200, { terminal_id: result.pane?.terminal_id, scroll: scrollState(result.pane?.scroll) ?? null });
       }
       if (url.pathname === '/api/runtime-settings' && req.method === 'GET') {
         const machine = await resolveMachine(publicId(url.searchParams.get('machine')));

@@ -10,6 +10,7 @@ import { NativeCopyMode } from './native-copy-mode';
 import { TerminalImagePaste } from './terminal-image-paste';
 import { NativeSelection } from './native-selection';
 import { terminalSelectionColors } from './terminal-selection';
+import { initialPaneScroll } from './initial-pane-scroll';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -43,7 +44,7 @@ export class TerminalController {
   rightClickPassthrough = false;
   sendKey(event: KeyboardEvent) { if (this.ready && this.visible) this.keyboard?.sendKey(event); }
   readSelection() { return this.copyMode?.active ? this.copyMode?.readText() : this.selectionMode?.hasSelection ? this.selectionMode?.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
-  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, copied: () => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
+  constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, private api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, copied: () => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
     this.content.className = 'pane-content'; this.shield.className = 'pane-shield'; this.shield.setAttribute('role', 'status');
     this.title.append(this.titleLabel);
@@ -108,6 +109,19 @@ export class TerminalController {
     if (epoch !== this.epoch) return;
     const term = new library.Terminal(this.options()); this.terminal = term;
     const fit = new library.FitAddon(); term.loadAddon(fit); term.open(this.content);
+    // A fresh controller has no screen identity. Resolve its gutter before
+    // fitting the first native attachment, not after resizing the owner.
+    // This is one bounded read per attachment, never a render/metadata loop.
+    this.cleanup = () => term.dispose();
+    if (!this.target && this.preferences.paneScrollbars) {
+      const initial = await initialPaneScroll(() => this.api('/api/pane-scroll?' + new URLSearchParams({ machine: this.machine, pane: this.pane })));
+      if (epoch !== this.epoch) return;
+      if (!this.visible) { this.reset(); return; }
+      if (initial?.terminalId && initial.terminalId !== this.terminalId) {
+        this.shield.textContent = 'Terminal identity changed. Select the current pane before attaching.'; this.changed(); return;
+      }
+      this.scrollbar?.update(initial?.scroll);
+    }
     let desired = { cols: term.cols, rows: term.rows };
     let sendSize = () => {};
     const fitVisible = () => {

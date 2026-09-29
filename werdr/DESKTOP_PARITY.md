@@ -36,8 +36,10 @@ These checks used the throwaway-session and wmux isolation procedures and did no
 
 The unchanged-size reconnect requirement remains open despite retained text.
 Wire evidence shows a desktop terminal settled at 129 columns reconnecting at 130 columns, and a phone terminal settled at 40 columns reconnecting at 41 columns.
-The browser currently fits its initial attachment before authoritative scrollbar screen metadata establishes the normal-screen gutter.
-This requires a geometry regression and correction; surviving the extra resize is not equivalent to avoiding it.
+The deployed browser fits its initial attachment before authoritative scrollbar screen metadata establishes the normal-screen gutter.
+The candidate now reads validated native screen metadata before initial fitting, with a bounded optional read, stale-attachment cancellation and terminal-identity checking.
+Desktop and phone regressions cover primary and alternate geometry without inferring screen state from prior connections.
+The correction still requires Windows and deployment verification; surviving the extra resize is not equivalent to avoiding it.
 The alternate-screen fixture also does not establish full-screen application redraw behavior, complete semantic color/theme parity, or OS-level keyboard layout and IME acceptance.
 
 ## Acceptance matrix
