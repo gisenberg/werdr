@@ -174,6 +174,9 @@ export class MachineManagement {
     const candidate: Machine = { id: existing?.id || randomBytes(16).toString('hex'), target: request.target, session: request.session, label: request.label, enabled: existing?.enabled ?? true, platform: 'windows' };
     let ready = false;
     try { const status = await command(candidate, ['status', '--json']); ready = status.server?.running && status.server.compatible && status.server.endpoint_compatible; } catch {}
+    // The status probe is not owned by runChild. Cancellation/revocation can
+    // arrive while it is pending, so fence both prompting and catalog writes.
+    this.check(job);
     if (!ready) {
       this.print(job, 'Install/start the checksum-pinned Windows Herdr runtime and its user Scheduled Task? Existing running runtimes will not be forcibly replaced. [y/N]\n');
       const answer = await new Promise<string>(resolve => {
@@ -191,22 +194,27 @@ export class MachineManagement {
       await this.runChild(job, 'ssh', ['-T', ...sshOptions(), '--', request.target, powershellCommand(run)], '', 10 * 60_000);
       this.check(job);
       const status = await command(candidate, ['status', '--json']);
+      this.check(job);
       if (!status.server?.running || !status.server.compatible || !status.server.endpoint_compatible) throw new ManagementError('Windows runtime is not compatible or ready; the existing catalog was preserved.', 502);
     }
     if (existing) {
       const current = await machines(); const original = current.find(machine => machine.id === existing.id);
+      this.check(job);
       if (!original || original.target !== existing.target || original.session !== existing.session) throw new ManagementError('Host changed during setup; refresh before retrying.', 409);
       await savePlatform(original, 'windows', new Set(current.map(machine => machine.id)));
     } else {
       // Upstream automatic preparation is POSIX-only. Preserve its exact catalog
       // schema for the already-validated Windows runtime; no parallel inventory.
       const current = await machines();
+      this.check(job);
       if (current.length > 64) throw new ManagementError('Herdr machine limit reached.');
       const base = process.env.XDG_STATE_HOME ? resolve(process.env.XDG_STATE_HOME, 'herdr') : process.platform === 'win32' ? resolve(process.env.LOCALAPPDATA || homedir(), 'herdr') : resolve(homedir(), '.local/state/herdr');
       const path = resolve(base, 'client/endpoints.json');
       const stored = await readPrivateJson(path, 64 * 1024) as any || { version: 1, ssh: [] };
+      this.check(job);
       if (stored.version !== 1 || !Array.isArray(stored.ssh) || stored.ssh.length >= 64) throw new ManagementError('Native machine catalog is unsupported or full.');
       await savePlatform(candidate, 'windows', new Set([...current.map(machine => machine.id), candidate.id]));
+      this.check(job);
       const { platform: _, ...record } = candidate;
       stored.ssh.push(record); await writePrivateJson(path, stored);
     }
