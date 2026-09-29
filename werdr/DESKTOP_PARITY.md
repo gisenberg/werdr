@@ -132,6 +132,10 @@ Declining that prompt likewise preserves the remote filesystem and catalogs with
 The long diagnostic exposed a phone-reflow issue in the setup console; resize-aware following now keeps the final prompt visible while preserving deliberate scrollback reading.
 The mounted-browser regression covers narrowing, height changes, scrollback retention and return to following the latest output.
 These checks prove safe refusal, not successful installation or recovery of a running incompatible owner.
+Both Windows hosts also pass the browser refusal path with deliberately incomplete executables in unique temporary directories, without modifying the production executable path or Scheduled Task.
+The explicit default-No installation prompt leads to cancellation on decline, no saved host and no terminal attachment.
+Cleanup verifies the fixture bytes are unchanged, removes only the exact temporary files and directories, and confirms all pre-existing Herdr process identities are unchanged.
+This covers an incomplete executable, not every possible partial installation or Windows compatibility failure.
 
 Runtime-settings acceptance on a real Windows host used the verified `b18a3f3e` companion in a disposable named session with a test-only configuration.
 Browser saves preserved comments and unrelated theme settings, rejected stale external edits and malformed input, and allowed exactly one of two competing revision-based saves.
