@@ -31,6 +31,7 @@ impl HeadlessServer {
         if self.capture_attachments() != attachments {
             return Err("terminal attachments changed while applying queued prefix".into());
         }
+        let work = self.app.event_rx.work_checkpoint()?;
         // Acquisition and serialization share a deadline. Resume acknowledgements
         // have a separate bounded cleanup grace using each guard's timeout.
         let deadline = tokio::time::Instant::now() + timeout;
@@ -154,6 +155,7 @@ impl HeadlessServer {
         };
         self.check_capture_shutdown()?;
         let drafts = result?;
+        self.app.event_rx.validate_work_checkpoint(&work)?;
         if !self.app.event_rx.is_empty() {
             return Err(
                 "events arrived during terminal batch capture; apply them before retrying".into(),

@@ -193,7 +193,9 @@ impl App {
         let path = checkout_path;
         let source_checkout_path = api_request.source_checkout_path.clone();
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::WorktreeAdd);
         std::thread::spawn(move || {
+            let work = work.start();
             let result = if let Some(parent_dir) = parent_dir {
                 std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
             } else {
@@ -215,6 +217,7 @@ impl App {
                     result,
                 },
             )));
+            work.complete();
         });
     }
 
@@ -347,7 +350,9 @@ impl App {
         let force = params.force;
         let trust_repository = params.trust_repository;
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::WorktreeRemove);
         std::thread::spawn(move || {
+            let work = work.start();
             let result = crate::worktree::run_worktree_remove_command_with_recovery(
                 &command,
                 &repo_root,
@@ -366,6 +371,7 @@ impl App {
                     result,
                 },
             )));
+            work.complete();
         });
     }
 

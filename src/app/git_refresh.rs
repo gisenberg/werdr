@@ -64,13 +64,16 @@ impl App {
         if refresh_repo_discovery {
             self.last_git_repo_discovery_refresh = now;
         }
+        let work = event_tx.register_work(crate::events::BackgroundWork::GitRefresh);
         std::thread::spawn(move || {
+            let work = work.start();
             let output =
                 refresh_workspace_git_statuses_with_cache_and_demand(workspaces, &cache, demand);
             let _ = event_tx.blocking_send(AppEvent::GitStatusRefreshed {
                 results: output.results,
                 cache_updates: output.cache_updates,
             });
+            work.complete();
         });
     }
 

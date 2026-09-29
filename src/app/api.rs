@@ -752,13 +752,16 @@ impl App {
         self.pending_worktree_remove_runtime_restores
             .insert(pane_id, request.clone());
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::RestoreTimer);
         tokio::spawn(async move {
+            let work = work.start();
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
             }
             let _ = event_tx
                 .send(AppEvent::WorktreeRuntimeRestoreFailed { pane_id, request })
                 .await;
+            work.complete();
         });
     }
 

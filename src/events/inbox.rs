@@ -20,6 +20,19 @@ pub(crate) struct OwnerInbox<T> {
 }
 
 impl<T> OwnerInbox<T> {
+    #[cfg(any(unix, test))]
+    pub(crate) fn work_checkpoint(&self) -> Result<super::work::WorkCheckpoint, String> {
+        super::work::WorkCheckpoint::new(&self.admission)
+    }
+
+    #[cfg(any(unix, test))]
+    pub(crate) fn validate_work_checkpoint(
+        &self,
+        checkpoint: &super::work::WorkCheckpoint,
+    ) -> Result<(), String> {
+        checkpoint.validate(&self.admission)
+    }
+
     pub(super) fn new(
         channel: mpsc::Receiver<Envelope<T>>,
         _admission: Arc<Mutex<Admission>>,
@@ -57,6 +70,9 @@ impl<T> OwnerInbox<T> {
             .admission
             .lock()
             .map_err(|_| "event admission lock poisoned")?;
+        if let Some(failure) = admission.failure {
+            return Err(failure);
+        }
         Ok(AdmissionCut {
             admission: self.admission.clone(),
             sequence: admission.published,

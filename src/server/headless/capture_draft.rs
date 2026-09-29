@@ -33,6 +33,7 @@ impl HeadlessServer {
         let cut = self.app.event_rx.admission_cut()?;
         self.apply_capture_prefix(cut)?;
         self.capture_runtime_if_unchanged(terminal_id, &identity)?;
+        let work = self.app.event_rx.work_checkpoint()?;
         let result = {
             // Borrow disjoint owner fields. Never apply handlers while the
             // runtime operation owns its producer pauses: they can remove or
@@ -63,6 +64,7 @@ impl HeadlessServer {
         // scoped runtime operation has already resumed its producers here.
         self.check_capture_shutdown()?;
         let draft = result?;
+        self.app.event_rx.validate_work_checkpoint(&work)?;
         if !self.app.event_rx.is_empty() {
             return Err(
                 "events arrived during terminal capture; apply them before retrying".into(),

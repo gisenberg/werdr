@@ -23,6 +23,80 @@ fn fixture() -> (HeadlessServer, TerminalId, crate::layout::PaneId) {
 }
 
 #[tokio::test]
+async fn capture_rejects_unpublished_background_work_and_accepts_explicit_completion() {
+    let (mut server, terminal_id, _) = fixture();
+    let work = server
+        .app
+        .event_tx
+        .register_work(crate::events::BackgroundWork::GitRefresh)
+        .start();
+    assert!(server.app.event_rx.is_empty());
+    let error = server
+        .capture_terminal_after_queued_prefix(
+            &terminal_id,
+            crate::pane::draft_test_limits(),
+            Duration::from_secs(2),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("background work is still active"), "{error}");
+    work.complete();
+    server
+        .capture_terminal_after_queued_prefix(
+            &terminal_id,
+            crate::pane::draft_test_limits(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
+async fn batch_rejects_work_completed_during_detector_pause_acquisition() {
+    let (mut server, terminal_id, _) = fixture();
+    let sender = server.app.event_tx.clone();
+    let (runtime, release) =
+        TerminalRuntime::test_for_draft_capture_with_delayed_detector(b"retained");
+    server
+        .app
+        .terminal_runtimes
+        .insert(terminal_id.clone(), runtime);
+    let mut capture = Box::pin(server.capture_terminal_batch(
+        crate::pane::draft_test_limits(),
+        64 << 20,
+        1,
+        Duration::from_secs(2),
+    ));
+    std::future::poll_fn(|cx| {
+        assert!(capture.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    sender
+        .register_work(crate::events::BackgroundWork::GitRefresh)
+        .start()
+        .complete();
+    release.send(()).unwrap();
+    let error = capture.await.err().unwrap();
+    assert!(
+        error.contains("background work started during capture"),
+        "{error}"
+    );
+    server
+        .capture_terminal_batch(
+            crate::pane::draft_test_limits(),
+            64 << 20,
+            1,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    server.app.state.assert_invariants_for_test();
+}
+
+#[tokio::test]
 async fn capture_stages_blocked_detector_publication_without_running_handlers() {
     let (mut server, terminal_id, pane_id) = fixture();
     let (sender, receiver) = crate::events::channel(1);
@@ -363,15 +437,27 @@ async fn prefix_preserves_normal_foreground_effect_forwarding() {
         )
         .await
         .unwrap();
+    // The test writer relays control frames on a separate OS thread. Ordered
+    // sentinels acknowledge draining instead of racing immediate try_recv.
+    for id in [1, 2] {
+        assert!(server.send_to_client(id, ServerMessage::TerminalBell { count: 99 }));
+    }
     assert!(matches!(
-        read_server_message(foreground.try_recv().unwrap()),
+        read_server_message(foreground.recv_timeout(Duration::from_secs(2)).unwrap()),
         ServerMessage::TerminalBell { count: 4 }
     ));
-    let ServerMessage::Clipboard { data } = read_server_message(foreground.try_recv().unwrap())
+    let ServerMessage::Clipboard { data } =
+        read_server_message(foreground.recv_timeout(Duration::from_secs(2)).unwrap())
     else {
         panic!("expected clipboard forwarding");
     };
     assert_eq!(data, "cGF5bG9hZA==");
+    for receiver in [&foreground, &background] {
+        assert!(matches!(
+            read_server_message(receiver.recv_timeout(Duration::from_secs(2)).unwrap()),
+            ServerMessage::TerminalBell { count: 99 }
+        ));
+    }
     assert!(foreground.try_recv().is_err());
     assert!(background.try_recv().is_err());
 }

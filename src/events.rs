@@ -12,6 +12,8 @@ mod admission;
 pub(crate) use admission::AdmissionCut;
 pub(crate) use admission::{channel, AdmissionSender};
 pub(crate) type AppEventSender = AdmissionSender<AppEvent>;
+mod work;
+pub(crate) use work::BackgroundWork;
 
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;

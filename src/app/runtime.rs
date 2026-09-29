@@ -114,7 +114,12 @@ impl App {
         }
 
         let update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::update::auto_update(update_tx));
+        let work = update_tx.register_work(crate::events::BackgroundWork::UpdateCheck);
+        std::thread::spawn(move || {
+            let work = work.start();
+            crate::update::auto_update(update_tx);
+            work.complete();
+        });
     }
 
     pub(crate) fn run_agent_manifest_update_check(&mut self) {
@@ -129,7 +134,12 @@ impl App {
         self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
 
         let manifest_update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
+        let work = manifest_update_tx.register_work(crate::events::BackgroundWork::ManifestUpdate);
+        std::thread::spawn(move || {
+            let work = work.start();
+            crate::detect::manifest_update::auto_update(manifest_update_tx);
+            work.complete();
+        });
     }
 
     pub(crate) fn next_headless_loop_deadline_with_git_refresh(

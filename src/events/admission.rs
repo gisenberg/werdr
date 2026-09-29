@@ -20,6 +20,8 @@ mod tests;
 #[derive(Default)]
 pub(super) struct Admission {
     pub(super) published: u64,
+    pub(super) work: super::work::WorkLedger,
+    pub(super) failure: Option<&'static str>,
 }
 
 /// Identity-bearing process-local boundary. Not a transferable runtime token.
@@ -56,6 +58,14 @@ pub(crate) fn channel<T>(capacity: usize) -> (AdmissionSender<T>, super::OwnerIn
 }
 
 impl<T> AdmissionSender<T> {
+    /// Register before spawning, then start before the worker's first effect.
+    pub(crate) fn register_work(
+        &self,
+        kind: super::BackgroundWork,
+    ) -> super::work::WorkRegistration {
+        super::work::WorkRegistration::new(self.admission.clone(), kind)
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn capacity(&self) -> usize {
         self.channel.capacity()
@@ -69,7 +79,11 @@ impl<T> AdmissionSender<T> {
         let Ok(mut admission) = self.admission.lock() else {
             return Err(mpsc::error::SendError(event));
         };
+        if admission.failure.is_some() {
+            return Err(mpsc::error::SendError(event));
+        }
         let Some(sequence) = admission.published.checked_add(1) else {
+            admission.failure = Some("event admission sequence exhausted");
             return Err(mpsc::error::SendError(event));
         };
         permit.send(Envelope { sequence, event });

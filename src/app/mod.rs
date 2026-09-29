@@ -550,12 +550,21 @@ impl App {
         );
         if version_check_enabled {
             let update_tx = event_tx.clone();
-            std::thread::spawn(move || crate::update::auto_update(update_tx));
+            let work = update_tx.register_work(crate::events::BackgroundWork::UpdateCheck);
+            std::thread::spawn(move || {
+                let work = work.start();
+                crate::update::auto_update(update_tx);
+                work.complete();
+            });
         }
         if manifest_check_enabled {
             let manifest_update_tx = event_tx.clone();
+            let work =
+                manifest_update_tx.register_work(crate::events::BackgroundWork::ManifestUpdate);
             std::thread::spawn(move || {
-                crate::detect::manifest_update::auto_update(manifest_update_tx)
+                let work = work.start();
+                crate::detect::manifest_update::auto_update(manifest_update_tx);
+                work.complete();
             });
         }
 

@@ -201,7 +201,7 @@ async fn exhausted_sequence_and_poison_return_payload_without_wrapping() {
         Err(mpsc::error::TrySendError::Closed("also retained"))
     ));
     assert_eq!(sender.channel.capacity(), 1);
-    assert_eq!(inbox.admission_cut().unwrap().sequence, u64::MAX);
+    assert!(inbox.admission_cut().err().unwrap().contains("exhausted"));
     assert!(inbox.try_recv().is_err());
     let admission = sender.admission.clone();
     assert!(std::thread::spawn(move || {

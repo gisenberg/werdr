@@ -118,7 +118,10 @@ impl App {
         self.push_plugin_command_log(log.clone());
         self.state.plugin_commands_in_flight += 1;
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::PluginCommand);
         std::thread::spawn(move || {
+            let work = work.start();
+            let mut operation_finished = true;
             let child =
                 crate::plugin_command::command_for_argv_in_dir(&program, &args, &plugin_root)
                     .envs(env)
@@ -127,6 +130,7 @@ impl App {
                     .spawn();
             let finished = match child {
                 Ok(mut child) => {
+                    operation_finished = false;
                     let stdout = child.stdout.take();
                     let stderr = child.stderr.take();
                     let stdout_reader = stdout.map(|stdout| {
@@ -140,18 +144,21 @@ impl App {
                         })
                     });
                     match child.wait() {
-                        Ok(status) => crate::events::AppEvent::PluginCommandFinished {
-                            log_id,
-                            finished_unix_ms: current_unix_ms(),
-                            exit_code: status.code(),
-                            stdout: stdout_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            stderr: stderr_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            error: None,
-                        },
+                        Ok(status) => {
+                            operation_finished = true;
+                            crate::events::AppEvent::PluginCommandFinished {
+                                log_id,
+                                finished_unix_ms: current_unix_ms(),
+                                exit_code: status.code(),
+                                stdout: stdout_reader
+                                    .and_then(|reader| reader.join().ok())
+                                    .unwrap_or_default(),
+                                stderr: stderr_reader
+                                    .and_then(|reader| reader.join().ok())
+                                    .unwrap_or_default(),
+                                error: None,
+                            }
+                        }
                         Err(err) => crate::events::AppEvent::PluginCommandFinished {
                             log_id,
                             finished_unix_ms: current_unix_ms(),
@@ -176,6 +183,9 @@ impl App {
                 },
             };
             let _ = event_tx.blocking_send(finished);
+            if operation_finished {
+                work.complete();
+            }
         });
         Ok(log)
     }

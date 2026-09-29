@@ -310,6 +310,11 @@ Private capture samples a process-local, channel-identity-bound admission cutoff
 Sequence assignment occurs only after capacity reservation and shares a short lock with publication; cancellation before publication consumes no sequence.
 This is a publication boundary, not producer quiescence, handler completion, an external-effect journal or a transferable session capsule.
 The additional work is per admitted internal event, not per terminal byte, render, pane layout or attached client.
+Finite background workers register before spawning and remain registered through operation completion and result publication.
+Private capture rejects active workers, detects registrations that begin and finish during capture, and retains uncertainty after a started worker is cancelled or panics without acknowledging completion.
+An unstarted registration can be safely cancelled, while sequence-exhaustion publication failure prevents capture even if a wrapper reports normal return.
+The ledger covers Git refresh, plugin commands, worktree add/remove/read, status commands, update checks, manifest updates and restore timers.
+This tracks worker lifetimes, not persistent subprocess descendants, direct API ingress or ownership of external effects; uncertain workers require a future explicit reconciliation path before capture can proceed.
 The deployed runtimes limit exported history to 8 KiB per pane and omit it for panes with persisted agent sessions.
 The candidate now preserves all retained primary-screen history for both ordinary and resumable-agent panes.
 It rejects a manifest above the existing 16 MiB encoded transport limit before spawning the importer, rolls back the paused readers, and never truncates history to fit.

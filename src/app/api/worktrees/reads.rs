@@ -180,11 +180,13 @@ impl App {
             return;
         };
         let event_tx = self.event_tx.clone();
+        let work = event_tx.register_work(crate::events::BackgroundWork::WorktreeRead);
         let spawn_error_response = respond_to.clone();
         let request_id = request.id.clone();
         let spawned = std::thread::Builder::new()
             .name("worktree-read".into())
             .spawn(move || {
+                let work = work.start();
                 let source_cwd = input.cwd.clone();
                 let mut source_workspace_id = None;
                 let result = input
@@ -223,6 +225,7 @@ impl App {
                         respond_to,
                     },
                 )));
+                work.complete();
             });
         if let Err(err) = spawned {
             let _ = spawn_error_response.send(encode_error(
