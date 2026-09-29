@@ -169,7 +169,12 @@ test('older native scroll records keep terminals usable without guessing alterna
     await expect(pane.getByRole('scrollbar')).toBeHidden();
     await pane.locator('textarea').focus(); await page.keyboard.type("printf 'LEGACY_%s\\n' INPUT"); await page.keyboard.press('Enter');
     await expect.poll(() => runtime.cli('pane', 'read', id, '--source', 'recent')).toContain('LEGACY_INPUT');
-  } finally { await runtime.close(); }
+  } finally {
+    // Drain intercepted reads while the gateway still exists, then stop the
+    // browser so gateway shutdown cannot initiate another attachment retry.
+    try { await page.unrouteAll({ behavior: 'wait' }); await page.close(); }
+    finally { await runtime.close(); }
+  }
 });
 
 test('initial reveal waits for scroll metadata and an API outage retains terminal geometry', async ({ page }) => {
