@@ -49,6 +49,9 @@ export class NativeKeyboard {
     this.emit({ ...input, action: this.library.KeyAction.RELEASE });
   }
   private encodeInput(event: KeyboardEvent) {
+    // IME sentinels describe browser-owned composition, not a physical key tap.
+    // Apply this to direct taps too, so callers cannot encode an unfinished IME.
+    if (event.isComposing || event.keyCode === 229 || ['Dead', 'Process', 'Unidentified'].includes(event.key)) return;
     const key = this.key(event.code); if (key === undefined) return;
     const { KeyAction, KeyEncoderOption } = this.library;
     const mods = this.modifiers(event);
@@ -59,7 +62,7 @@ export class NativeKeyboard {
     return input;
   }
   private down = (event: KeyboardEvent) => {
-    if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === 'Dead') return;
+    if ((!this.flags && this.level !== 2) || !this.available() || event.defaultPrevented) return;
     // Let the browser and existing clipboard handler complete paste/copy gestures.
     if (((event.ctrlKey || event.metaKey) && event.code === 'KeyV') || (event.metaKey && event.code === 'KeyC')) return;
     const input = this.encodeInput(event); if (!input) return;
