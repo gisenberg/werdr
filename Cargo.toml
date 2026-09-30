@@ -57,6 +57,9 @@ unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
 schemars = { version = "1.2.1", features = ["derive"] }
 
+[build-dependencies]
+sha2 = "0.10"
+
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 

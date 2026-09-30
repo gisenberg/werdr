@@ -11,6 +11,8 @@ import { TerminalImagePaste } from './terminal-image-paste';
 import { NativeSelection } from './native-selection';
 import { terminalSelectionColors } from './terminal-selection';
 import { initialPaneScroll } from './initial-pane-scroll';
+import { TerminalClipboardRequests } from './terminal-osc52';
+import { characterTap, legacyChord, type KeyModifiers, type KeyTap } from './terminal-keys';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -23,11 +25,13 @@ export class TerminalController {
   private readonly mouse: NativeMouse;
   private readonly scrollbar?: NativeScrollbar;
   private readonly selectionMode?: NativeSelection;
+  private readonly clipboardRequests: TerminalClipboardRequests;
   private terminal?: Terminal;
   private socket?: WebSocket;
   private keyboard?: NativeKeyboard;
   private imagePaste?: TerminalImagePaste;
   private cleanup?: () => void;
+  private latched?: { modifiers: KeyModifiers; consumed: () => void };
   private fit?: () => void;
   private epoch = 0;
   private attempt = 0;
@@ -43,6 +47,12 @@ export class TerminalController {
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   rightClickPassthrough = false;
   sendKey(event: KeyboardEvent) { if (this.ready && this.visible) this.keyboard?.sendKey(event); }
+  get acceptsKeys() { return this.ready && this.visible && !this.copyMode?.active; }
+  /** Touch key rows tap keys through the same native encoder as hardware keys. */
+  tap(tap: KeyTap, modifiers: KeyModifiers) { if (this.acceptsKeys) this.keyboard?.sendKey(new KeyboardEvent('keydown', { key: tap.key, code: tap.code, shiftKey: !!tap.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt })); }
+  paste(text: string) { if (this.acceptsKeys) this.terminal?.paste(text); }
+  /** Apply latched modifiers to the next typed character, then report consumption. */
+  latch(modifiers: KeyModifiers | undefined, consumed: () => void) { this.latched = modifiers && { modifiers, consumed }; }
   readSelection() { return this.copyMode?.active ? this.copyMode?.readText() : this.selectionMode?.hasSelection ? this.selectionMode?.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
   constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, private api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, copied: () => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
@@ -50,6 +60,7 @@ export class TerminalController {
     this.title.append(this.titleLabel);
     this.title.className = 'pane-title'; this.title.onclick = () => { select(); this.focus(); };
     this.element.append(this.title, this.content, this.shield);
+    this.clipboardRequests = new TerminalClipboardRequests(this.element, report, copied);
     if (!target) this.copyMode = new NativeCopyMode(this.element, this.content, toolbarHost, () => this.terminal, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), () => this.focus(), report, copied, () => { this.selectionMode?.clear(); this.links?.cancel(); this.mouse.release(); });
     if (!target) this.links = new NativeLinks(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, (action, params) => api('/api/action', { machine, id: pane, action, ...params }), report);
     this.mouse = new NativeMouse(this.content, () => this.terminal, () => this.ready && this.visible && !this.copyMode?.active, text => this.imagePaste?.send({ type: 'terminal.input', text }), () => ({ paneOwns: !!this.target || this.rightClickPassthrough, modifier: this.preferences.rightClickPassthroughModifier }));
@@ -91,14 +102,14 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
-    this.imagePaste?.cancel();
+    this.imagePaste?.cancel(); this.clipboardRequests.cancel(); this.latched?.consumed(); this.latched = undefined;
     this.scrollbar?.reset(); this.mouse.setEnabled(false); this.copyMode?.exit(true, false); this.links?.cancel(); this.selectionMode?.clear();
     this.imagePaste?.dispose(); this.imagePaste = undefined;
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
     this.cleanup?.(); this.cleanup = undefined; this.keyboard = undefined; this.fit = undefined; this.terminal = undefined;
     this.content.replaceChildren(); this.ready = false; this.shield.hidden = false;
   }
-  dispose() { this.reset(); this.scrollbar?.dispose(); this.mouse.dispose(); this.links?.dispose(); this.selectionMode?.dispose(); this.element.remove(); }
+  dispose() { this.reset(); this.clipboardRequests.dispose(); this.scrollbar?.dispose(); this.mouse.dispose(); this.links?.dispose(); this.selectionMode?.dispose(); this.element.remove(); }
   async connect(takeover = false, retry = false) {
     this.reset(); if (!this.visible) return; if (!retry) this.attempt = 0;
     const epoch = this.epoch; if (!retry) this.failure = undefined; this.shield.textContent = this.failure || 'Attaching to Herdr...'; this.changed();
@@ -173,7 +184,14 @@ export class TerminalController {
     // Optional metadata must not indefinitely block a compatible terminal.
     const scrollTimeout = setTimeout(() => { scrollReady = true; reveal(); }, 2000);
     boot.addEventListener('close', reveal);
-    const input = term.onData(text => { this.selectionMode?.clear(); if (!this.copyMode?.active) send({ type: 'terminal.input', text }); });
+    const input = term.onData(text => {
+      this.selectionMode?.clear(); if (this.copyMode?.active) return;
+      const latched = this.latched;
+      if (!latched) { send({ type: 'terminal.input', text }); return; }
+      this.latched = undefined; latched.consumed();
+      const tap = characterTap(text);
+      if (tap) this.tap(tap, latched.modifiers); else send({ type: 'terminal.input', text: legacyChord(text, latched.modifiers) });
+    });
     const resize = term.onResize(({ cols, rows }) => { this.scrollbar?.sync(); this.links?.cancel(); this.selectionMode?.clear(); this.copyMode?.afterFrame(); if (!applyingFrame && this.visible) { desired = { cols, rows }; sendSize(); } });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
     // AttachScroll uses crossterm modifier bits, unlike SGR mouse reports.
@@ -201,6 +219,7 @@ export class TerminalController {
         const frame = JSON.parse(event.data);
         if (frame.type === 'terminal.capabilities') { images.capabilities(frame.clipboard_image_max_bytes); return; }
         if (frame.type === 'terminal.image') { images.result(frame.status, frame.message); return; }
+        if (frame.type === 'terminal.clipboard') { this.clipboardRequests.receive(frame.data); return; }
         if (frame.type === 'terminal.scroll-state') { this.scrollbar?.update(frame.scroll); scrollReady = frame.ready !== false; if (scrollReady) { clearTimeout(scrollTimeout); fitVisible(); reveal(); } return; }
         if (frame.type === 'terminal.keyboard') { keyboard.update(frame.flags, frame.modify_other_keys_level); return; }
         if (frame.type === 'terminal.mouse' && typeof frame.enabled === 'boolean') { if (frame.enabled) this.selectionMode?.clear(); this.mouse.setEnabled(frame.enabled); return; }

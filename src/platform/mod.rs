@@ -188,6 +188,66 @@ pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std:
     command.spawn().map(|child| child.id())
 }
 
+/// Service-manager supervision of the headless runtime (systemd on Linux).
+///
+/// Captured once, before threads or children start, so pane processes never
+/// inherit the notification socket. Unsupervised runtimes and other platforms
+/// treat every notification as a no-op.
+#[derive(Debug, Default)]
+pub(crate) struct ServiceSupervisor {
+    #[cfg(target_os = "linux")]
+    socket: Option<std::ffi::OsString>,
+}
+
+static SERVICE_SUPERVISOR: std::sync::OnceLock<ServiceSupervisor> = std::sync::OnceLock::new();
+
+/// Take service-manager state from the process environment. Later calls reuse it.
+pub(crate) fn capture_service_supervisor() -> &'static ServiceSupervisor {
+    SERVICE_SUPERVISOR.get_or_init(|| ServiceSupervisor {
+        #[cfg(target_os = "linux")]
+        socket: linux::service_notify::take_notify_socket(),
+    })
+}
+
+impl ServiceSupervisor {
+    /// Environment a handoff importer needs to claim this service.
+    #[cfg(unix)]
+    pub(crate) fn importer_env(&self) -> Option<(&'static str, &std::ffi::OsStr)> {
+        #[cfg(target_os = "linux")]
+        return self
+            .socket
+            .as_deref()
+            .map(|socket| (linux::service_notify::NOTIFY_SOCKET_ENV_VAR, socket));
+        #[cfg(not(target_os = "linux"))]
+        return None;
+    }
+
+    /// Report that this runtime is accepting connections.
+    pub(crate) fn ready(&self) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(socket) = &self.socket {
+            let state = format!("READY=1\nMAINPID={}", std::process::id());
+            return linux::service_notify::notify(socket, &state);
+        }
+        Ok(())
+    }
+
+    /// Become the service's main process and wait until the manager applied it.
+    #[cfg(unix)]
+    ///
+    /// Call only after a handoff committed and before the exporter may exit.
+    pub(crate) fn claim_main_process(&self, timeout: std::time::Duration) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(socket) = &self.socket {
+            let state = format!("MAINPID={}\nREADY=1", std::process::id());
+            linux::service_notify::notify(socket, &state)?;
+            return linux::service_notify::barrier(socket, timeout);
+        }
+        let _ = timeout;
+        Ok(())
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn prepare_server_process(_handoff_import: bool) -> std::io::Result<bool> {
     Ok(false)

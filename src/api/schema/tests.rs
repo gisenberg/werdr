@@ -220,6 +220,21 @@ fn request_round_trips_for_server_stop() {
 }
 
 #[test]
+fn lossless_handoff_is_opt_in_and_advertised_separately() {
+    let params: crate::api::schema::ServerLiveHandoffParams =
+        serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(params.require_lossless, None);
+    assert!(serde_json::to_value(&params)
+        .unwrap()
+        .get("require_lossless")
+        .is_none());
+    // Servers predating the field never advertise honoring it.
+    let capabilities: ServerCapabilities =
+        serde_json::from_value(serde_json::json!({"live_handoff": true})).unwrap();
+    assert!(!capabilities.lossless_handoff);
+}
+
+#[test]
 fn stop_if_idle_has_a_distinct_method_and_defaults_to_unsupported() {
     let request = Request {
         id: "idle-stop".into(),
@@ -743,6 +758,7 @@ fn success_response_round_trips() {
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,
+                lossless_handoff: false,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,

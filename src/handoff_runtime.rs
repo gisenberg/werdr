@@ -29,6 +29,24 @@ pub(crate) struct HandoffRuntimeState {
     pub initial_history_ansi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<crate::terminal::state::HandoffAgentState>,
+    /// Exact terminal state offered for this pane. The bytes follow the
+    /// manifest on the handoff stream only when the importer accepts the codec.
+    /// Absent from manifests written by exporters without exact capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_state: Option<HandoffTerminalStateOffer>,
+}
+
+/// Describes one exact terminal-state record without carrying its bytes.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct HandoffTerminalStateOffer {
+    /// Exporter's terminal-state codec identity; importers accept only an exact match.
+    pub codec: String,
+    /// Exact encoded length of the record that follows the manifest.
+    pub bytes: u64,
+    /// Retained images referenced process-local files and were not transferred.
+    #[serde(default)]
+    pub graphics_dropped: bool,
 }
 
 #[cfg(unix)]
@@ -45,4 +63,10 @@ pub(crate) struct ImportedHandoffRuntime {
     pub master_fd: std::os::fd::RawFd,
     #[cfg(unix)]
     pub state: HandoffRuntimeState,
+    /// Exact terminal-state record received after the manifest, if accepted.
+    #[cfg(unix)]
+    pub terminal_state: Option<Vec<u8>>,
+    /// The exporter required lossless transfer; never fall back to history replay.
+    #[cfg(unix)]
+    pub require_exact_terminal_state: bool,
 }

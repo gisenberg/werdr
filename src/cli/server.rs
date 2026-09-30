@@ -212,10 +212,24 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_live_handoff_params(args) else {
         eprintln!(
-            "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
+            "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>] [--require-lossless]"
         );
         return Ok(2);
     };
+    // Older servers ignore require_lossless and would replace themselves lossily
+    // while reporting success, so require the advertised capability first.
+    if params.require_lossless == Some(true) {
+        let supported = super::target::server_status(&super::target::api_client()?)
+            .map_err(super::api_client_error_to_io)?
+            .capabilities
+            .is_some_and(|capabilities| capabilities.lossless_handoff);
+        if !supported {
+            eprintln!(
+                "herdr: the running server does not support lossless handoff; it was left running unchanged"
+            );
+            return Ok(1);
+        }
+    }
 
     // Live handoff is itself a protocol-mismatch recovery path, so it must
     // reach the running server without the normal CLI compatibility guard.
@@ -247,6 +261,11 @@ fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams>
     let mut idx = 0;
     while idx < args.len() {
         let arg = &args[idx];
+        if arg == "--require-lossless" {
+            params.require_lossless = Some(true);
+            idx += 1;
+            continue;
+        }
         let (flag, value) = if let Some((flag, value)) = arg.split_once('=') {
             (flag, Some(value.to_string()))
         } else {
@@ -380,5 +399,22 @@ mod tests {
         );
         assert_eq!(params.expected_protocol, Some(9));
         assert_eq!(params.expected_version.as_deref(), Some("0.6.2"));
+    }
+
+    #[test]
+    fn live_handoff_params_parse_require_lossless_without_a_value() {
+        let args = vec![
+            "--require-lossless".to_string(),
+            "--import-exe=/tmp/herdr".to_string(),
+        ];
+        let params = parse_live_handoff_params(&args).expect("params");
+        assert_eq!(params.require_lossless, Some(true));
+        assert_eq!(params.import_exe.as_deref(), Some("/tmp/herdr"));
+        assert_eq!(
+            parse_live_handoff_params(&[])
+                .expect("params")
+                .require_lossless,
+            None
+        );
     }
 }

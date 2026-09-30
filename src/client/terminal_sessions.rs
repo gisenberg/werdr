@@ -182,6 +182,12 @@ fn terminal_session_record(message: ServerMessage) -> Option<serde_json::Value> 
             "flags": flags,
             "modify_other_keys_level": modify_other_keys_level,
         })),
+        // OSC 52 writes from the attached pane stay base64 so the consumer
+        // decides whether and how to reach its own clipboard.
+        ServerMessage::Clipboard { data } => Some(serde_json::json!({
+            "type": "terminal.clipboard",
+            "data": data,
+        })),
         ServerMessage::ServerShutdown { reason } => Some(serde_json::json!({
             "type": "terminal.closed",
             "reason": reason,
@@ -437,6 +443,12 @@ mod tests {
                 reason: Some("detached".into())
             }),
             Some(serde_json::json!({ "type": "terminal.closed", "reason": "detached" }))
+        );
+        assert_eq!(
+            terminal_session_record(ServerMessage::Clipboard {
+                data: "Y29waWVk".into()
+            }),
+            Some(serde_json::json!({ "type": "terminal.clipboard", "data": "Y29waWVk" }))
         );
         assert!(terminal_session_record(ServerMessage::ReloadSoundConfig).is_none());
     }

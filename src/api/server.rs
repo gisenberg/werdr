@@ -75,6 +75,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         semantic_notifications: true,
         workspace_git_status: true,
         live_handoff: crate::platform::capabilities().live_handoff,
+        lossless_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
@@ -1143,8 +1144,15 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+            .subsec_nanos();
+        // Socket paths must fit sun_path (104 bytes on macOS, whose per-user
+        // temp directory alone can use half of that), so keep them short.
+        #[cfg(unix)]
+        let base = PathBuf::from("/tmp");
+        #[cfg(not(unix))]
+        let base = std::env::temp_dir();
+        let name: String = name.chars().take(24).collect();
+        base.join(format!("herdr-{name}-{}-{nanos:x}", std::process::id()))
     }
 
     fn read_line(stream: &mut LocalStream) -> String {
@@ -1457,6 +1465,7 @@ mod tests {
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,
+                lossless_handoff: false,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,

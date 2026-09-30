@@ -19,3 +19,12 @@ test('clipboard feedback moves away only from an intersecting notification and r
   assert.equal(clipboardFeedbackRect(800, 600, size, 'bottom-left', { x: 500, y: 500, width: 300, height: 100 }).y, 540);
   assert.equal(clipboardFeedbackRect(800, 80, size, 'top-right', { x: 500, y: 0, width: 300, height: 80 }).y, 20);
 });
+
+test('clipboard feedback steps past stacked pane notices and the native notification', () => {
+  const size = { width: 200, height: 40 };
+  const bar = { x: 0, y: 560, width: 800, height: 40 }, toast = { x: 250, y: 500, width: 300, height: 60 };
+  assert.equal(clipboardFeedbackRect(800, 600, size, 'bottom-center', [bar]).y, 520);
+  assert.equal(clipboardFeedbackRect(800, 600, size, 'bottom-center', [toast, bar]).y, 460);
+  assert.equal(clipboardFeedbackRect(800, 600, size, 'top-center', [{ x: 0, y: 0, width: 800, height: 30 }, { x: 300, y: 30, width: 200, height: 50 }]).y, 80);
+  assert.equal(clipboardFeedbackRect(800, 600, size, 'bottom-left', [{ x: 600, y: 560, width: 200, height: 40 }]).y, 560);
+});

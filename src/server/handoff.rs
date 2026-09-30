@@ -20,8 +20,9 @@ use tracing::{info, warn};
 const HANDOFF_VERSION: u32 = 1;
 #[cfg(unix)]
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+// Covers the importer's bounded service-manager claim before it reports ownership.
 #[cfg(unix)]
-const OWNED_ACK_TIMEOUT: Duration = Duration::from_millis(500);
+const OWNED_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 // Descriptors are transferred in batches of this size. A single SCM_RIGHTS
 // control message caps out at 253 descriptors on Linux and 254 on macOS, so the
 // batch stays well below both limits and the number of panes stays unbounded.
@@ -31,6 +32,14 @@ const FDS_PER_MESSAGE: usize = 64;
 const MAX_HANDOFF_LINE_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(unix)]
 pub(crate) const COMMIT_TIMEOUT: Duration = READY_TIMEOUT;
+// One pane's exact terminal state, streamed after the manifest so retained
+// history never counts against the manifest line budget.
+#[cfg(unix)]
+const MAX_TERMINAL_STATE_RECORD_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(unix)]
+const TERMINAL_STATE_ACCEPTED: &str = "validated terminal-state ";
+#[cfg(unix)]
+const IMPORT_REJECTED: &str = "rejected ";
 
 #[cfg(unix)]
 #[derive(Serialize, Deserialize)]
@@ -47,6 +56,11 @@ pub(crate) struct HandoffManifest {
     /// Absent from manifests written before this field existed.
     #[serde(default)]
     pub api_window_title: Option<String>,
+    /// The importer must restore every pane's exact terminal state or refuse
+    /// before ownership moves. Older importers ignore this field, so exporters
+    /// also require the importer to accept the terminal-state codec.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_lossless: bool,
 }
 
 /// Refuse oversized transfers before spawning the importer or releasing ownership.
@@ -76,6 +90,8 @@ pub(crate) fn validate_manifest_size(manifest: &HandoffManifest) -> io::Result<(
 #[cfg(unix)]
 pub(crate) struct ReceivedHandoff {
     pub manifest: HandoffManifest,
+    /// Exact terminal-state records aligned with `manifest.panes`.
+    pub terminal_states: Vec<Option<Vec<u8>>>,
     pub fds: Vec<RawFd>,
     pub stream: UnixStream,
 }
@@ -118,6 +134,11 @@ pub(crate) fn spawn_handoff_import(
         command
             .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
             .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+    }
+    // The runtime removed the notify socket from its own environment so panes
+    // never inherit it; only the importer that may claim the service gets it.
+    if let Some((key, value)) = crate::platform::capture_service_supervisor().importer_env() {
+        command.env(key, value);
     }
     crate::platform::detach_server_daemon_command(&mut command);
     command.spawn().map_err(|err| {
@@ -173,6 +194,7 @@ pub(crate) fn accept_and_validate_on(
     socket_path: &Path,
     token: &str,
     manifest: &HandoffManifest,
+    terminal_states: &[Option<Vec<u8>>],
 ) -> io::Result<UnixStream> {
     let (mut stream, _) = accept_with_timeout(&listener, READY_TIMEOUT)?;
     stream.set_nonblocking(false)?;
@@ -192,11 +214,133 @@ pub(crate) fn accept_and_validate_on(
 
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
     let validated = read_line_unbuffered(&mut stream)?;
-    if validated.trim_end() != "validated" {
+    let validated = validated.trim_end();
+    if let Some(reason) = validated.strip_prefix(IMPORT_REJECTED) {
+        return Err(io::Error::other(format!(
+            "replacement server refused the handoff: {reason}"
+        )));
+    }
+    if let Some(codec) = validated.strip_prefix(TERMINAL_STATE_ACCEPTED) {
+        let own = crate::pane::terminal_state_codec();
+        if codec != own {
+            return Err(io::Error::other(format!(
+                "replacement server accepted terminal-state codec {codec}, but this server offered {own}"
+            )));
+        }
+        send_terminal_states(&mut stream, manifest, terminal_states)?;
+    } else if validated != "validated" {
         return Err(io::Error::other("handoff import did not validate manifest"));
+    } else if manifest.require_lossless {
+        return Err(io::Error::other(
+            "replacement server cannot restore exact terminal state; this server kept ownership",
+        ));
     }
     let _ = std::fs::remove_file(socket_path);
     Ok(stream)
+}
+
+/// Stream each offered record in manifest pane order, prefixed by its length.
+#[cfg(unix)]
+fn send_terminal_states(
+    stream: &mut UnixStream,
+    manifest: &HandoffManifest,
+    terminal_states: &[Option<Vec<u8>>],
+) -> io::Result<()> {
+    if terminal_states.len() != manifest.panes.len() {
+        return Err(io::Error::other(
+            "terminal-state records do not match panes",
+        ));
+    }
+    for (pane, state) in manifest.panes.iter().zip(terminal_states) {
+        match (&pane.terminal_state, state) {
+            (Some(offer), Some(bytes)) if offer.bytes == bytes.len() as u64 => {
+                stream.write_all(&offer.bytes.to_le_bytes())?;
+                stream.write_all(bytes)?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(io::Error::other(
+                    "terminal-state offer does not match its record",
+                ))
+            }
+        }
+    }
+    stream.flush()
+}
+
+/// Codec this importer accepts. Debug builds allow tests to simulate an
+/// incompatible replacement binary without building a second one.
+#[cfg(unix)]
+fn importer_terminal_state_codec() -> String {
+    if cfg!(debug_assertions) {
+        if let Ok(codec) = std::env::var("HERDR_TEST_HANDOFF_TERMINAL_STATE_CODEC") {
+            return codec;
+        }
+    }
+    crate::pane::terminal_state_codec()
+}
+
+/// Decide whether exact state can be accepted, or why a lossless handoff must fail.
+#[cfg(unix)]
+fn terminal_state_acceptance(manifest: &HandoffManifest, codec: &str) -> Result<bool, String> {
+    let offers: Vec<_> = manifest
+        .panes
+        .iter()
+        .map(|pane| pane.terminal_state.as_ref())
+        .collect();
+    let accept = offers.iter().any(Option::is_some)
+        && offers.iter().flatten().all(|offer| offer.codec == codec);
+    if !manifest.require_lossless {
+        return Ok(accept);
+    }
+    if let Some(offer) = offers.iter().flatten().find(|offer| offer.codec != codec) {
+        return Err(format!(
+            "terminal-state codec {} is not this server's {codec}",
+            offer.codec
+        ));
+    }
+    if let Some(pane) = manifest.panes.iter().find(|pane| {
+        pane.terminal_state
+            .as_ref()
+            .is_none_or(|offer| offer.graphics_dropped)
+    }) {
+        return Err(format!(
+            "pane {} has no complete exact terminal state",
+            pane.pane_id
+        ));
+    }
+    Ok(accept || manifest.panes.is_empty())
+}
+
+#[cfg(unix)]
+fn receive_terminal_states(
+    stream: &mut UnixStream,
+    manifest: &HandoffManifest,
+) -> io::Result<Vec<Option<Vec<u8>>>> {
+    manifest
+        .panes
+        .iter()
+        .map(|pane| {
+            let Some(offer) = &pane.terminal_state else {
+                return Ok(None);
+            };
+            let mut len = [0u8; 8];
+            stream.read_exact(&mut len)?;
+            let len = u64::from_le_bytes(len);
+            if len != offer.bytes || len > MAX_TERMINAL_STATE_RECORD_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "terminal-state record length does not match its offer",
+                ));
+            }
+            let len = usize::try_from(len).map_err(io::Error::other)?;
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(len).map_err(io::Error::other)?;
+            bytes.resize(len, 0);
+            stream.read_exact(&mut bytes)?;
+            Ok(Some(bytes))
+        })
+        .collect()
 }
 
 #[cfg(unix)]
@@ -286,11 +430,31 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             crate::build_info::version()
         )));
     }
-    stream.write_all(b"validated\n")?;
-    stream.flush()?;
+    let codec = importer_terminal_state_codec();
+    let accepted = match terminal_state_acceptance(&manifest, &codec) {
+        Ok(accepted) => accepted,
+        Err(reason) => {
+            // Refuse before any descriptor moves; the exporter keeps ownership.
+            let _ = writeln!(stream, "{IMPORT_REJECTED}{reason}");
+            let _ = stream.flush();
+            return Err(io::Error::other(format!(
+                "lossless handoff refused: {reason}"
+            )));
+        }
+    };
+    let terminal_states = if accepted {
+        writeln!(stream, "{TERMINAL_STATE_ACCEPTED}{codec}")?;
+        stream.flush()?;
+        receive_terminal_states(&mut stream, &manifest)?
+    } else {
+        stream.write_all(b"validated\n")?;
+        stream.flush()?;
+        vec![None; manifest.panes.len()]
+    };
     let fds = recv_fds(&stream, manifest.panes.len())?;
     Ok(ReceivedHandoff {
         manifest,
+        terminal_states,
         fds,
         stream,
     })
@@ -341,6 +505,7 @@ pub(crate) fn manifest_for(
         snapshot,
         panes,
         api_window_title,
+        require_lossless: false,
     }
 }
 
@@ -620,5 +785,106 @@ mod tests {
             serde_json::from_value(value).expect("an older manifest should still load");
 
         assert!(older.api_window_title.is_none());
+    }
+
+    fn pane(offer: Option<(&str, bool)>) -> crate::handoff_runtime::HandoffRuntimeState {
+        serde_json::from_value::<crate::handoff_runtime::HandoffRuntimeState>(serde_json::json!({
+            "pane_id": 1, "child_pid": 2, "rows": 24, "cols": 80,
+            "cell_width_px": 0, "cell_height_px": 0,
+        }))
+        .map(|mut state| {
+            state.terminal_state = offer.map(|(codec, graphics_dropped)| {
+                crate::handoff_runtime::HandoffTerminalStateOffer {
+                    codec: codec.into(),
+                    bytes: 4,
+                    graphics_dropped,
+                }
+            });
+            state
+        })
+        .unwrap()
+    }
+
+    fn manifest(
+        panes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
+        lossless: bool,
+    ) -> HandoffManifest {
+        let mut manifest = manifest_for(empty_snapshot(), panes, None, None, None);
+        manifest.require_lossless = lossless;
+        manifest
+    }
+
+    #[test]
+    fn importers_accept_exact_state_only_for_their_codec() {
+        let accept =
+            |panes, lossless| terminal_state_acceptance(&manifest(panes, lossless), "ours");
+        assert_eq!(accept(vec![pane(None)], false), Ok(false));
+        assert_eq!(
+            accept(vec![pane(Some(("ours", false))), pane(None)], false),
+            Ok(true)
+        );
+        assert_eq!(
+            accept(vec![pane(Some(("theirs", false)))], false),
+            Ok(false)
+        );
+        assert_eq!(accept(vec![pane(Some(("ours", true)))], false), Ok(true));
+        assert_eq!(accept(Vec::new(), true), Ok(true));
+        assert_eq!(accept(vec![pane(Some(("ours", false)))], true), Ok(true));
+        for panes in [
+            vec![pane(Some(("theirs", false)))],
+            vec![pane(Some(("ours", false))), pane(None)],
+            vec![pane(Some(("ours", true)))],
+        ] {
+            assert!(accept(panes, true).is_err());
+        }
+    }
+
+    #[test]
+    fn manifests_without_terminal_state_fields_still_load_and_omit_them() {
+        let value = serde_json::to_value(manifest(vec![pane(None)], false)).unwrap();
+        assert!(value.get("require_lossless").is_none());
+        assert!(value["panes"][0].get("terminal_state").is_none());
+        let older: HandoffManifest = serde_json::from_value(value).unwrap();
+        assert!(!older.require_lossless);
+        assert!(older.panes[0].terminal_state.is_none());
+        let offered =
+            serde_json::to_value(manifest(vec![pane(Some(("ours", false)))], true)).unwrap();
+        assert_eq!(offered["require_lossless"], true);
+        assert_eq!(offered["panes"][0]["terminal_state"]["codec"], "ours");
+    }
+
+    #[test]
+    fn terminal_state_records_stream_in_pane_order_and_reject_mismatched_offers() {
+        let (mut exporter, mut importer) = UnixStream::pair().unwrap();
+        let mut offered = manifest(
+            vec![
+                pane(Some(("ours", false))),
+                pane(None),
+                pane(Some(("ours", false))),
+            ],
+            false,
+        );
+        send_terminal_states(
+            &mut exporter,
+            &offered,
+            &[Some(b"abcd".to_vec()), None, Some(b"wxyz".to_vec())],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_terminal_states(&mut importer, &offered).unwrap(),
+            vec![Some(b"abcd".to_vec()), None, Some(b"wxyz".to_vec())]
+        );
+        assert!(send_terminal_states(
+            &mut exporter,
+            &offered,
+            &[Some(b"abc".to_vec()), None, None]
+        )
+        .is_err());
+        assert!(send_terminal_states(&mut exporter, &offered, &[None]).is_err());
+        // A record whose length disagrees with its offer is rejected by the importer.
+        offered.panes.truncate(1);
+        exporter.write_all(&5u64.to_le_bytes()).unwrap();
+        exporter.write_all(b"abcde").unwrap();
+        assert!(receive_terminal_states(&mut importer, &offered).is_err());
     }
 }

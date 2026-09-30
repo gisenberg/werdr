@@ -29,7 +29,7 @@ export interface Preferences {
 export const defaults: Preferences = {
   theme: 'catppuccin', appearance: 'theme', darkTheme: 'catppuccin', lightTheme: 'catppuccin-latte', customColors: {},
   font: 'monospace', fontSize: 14, cursorBlink: false, copyOnSelect: true, sidebarWidth: 248, sidebarSectionPercent: 50, compact: true,
-  indicators: 'text', agentSort: 'priority', confirmClose: true, hideSingleTab: false, tabBarPosition: 'top',
+  indicators: 'dots', agentSort: 'priority', confirmClose: true, hideSingleTab: false, tabBarPosition: 'top',
   collapsedWorkspaceGroups: [],
   agentRows: defaultAgentRows,
   workspaceRows: defaultWorkspaceRows,

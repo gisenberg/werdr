@@ -166,6 +166,13 @@ impl TerminalRuntime {
     }
 
     #[cfg(unix)]
+    pub(crate) fn capture_handoff_terminal_state(
+        &self,
+    ) -> Result<crate::pane::TransferredDraft, String> {
+        self.0.capture_handoff_terminal_state()
+    }
+
+    #[cfg(unix)]
     pub fn from_handoff_fd(
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,

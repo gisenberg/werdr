@@ -12,7 +12,8 @@ import { initialSelection, SelectionRestoration, type Selection, type SelectionI
 import { DesktopShortcuts, type ShortcutCommand } from './desktop-shortcuts';
 import type { ShortcutAction } from '../shared/shortcuts';
 import { resolveAgentRows } from './agent-row-renderer';
-import { forgetSidebarRows, renderSidebarRows, type RowToken } from './sidebar-row-renderer';
+import { TerminalKeyRow } from './terminal-keys';
+import { forgetSidebarRows, renderSidebarRows, rowStatusIcon, type RowToken } from './sidebar-row-renderer';
 import { resolveWorkspaceRows } from './workspace-row-renderer';
 import { agentEntries } from './agent-entries';
 import { SidebarSplit } from './sidebar-split';
@@ -38,7 +39,7 @@ import { defaults, palette, type Preferences } from '../shared/settings';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `<header><button id="host-toggle" aria-expanded="false" aria-controls="rail">[H] HOSTS</button><button id="navigate-toggle" aria-controls="navigate-switcher" aria-expanded="false">[W] SWITCH</button><strong>werdr<span> / WEB TERMINAL</span></strong><div class="account-actions"><button id="settings" hidden>SETTINGS</button><button id="sessions" hidden>SESSIONS</button><button id="access-token" hidden>ACCESS TOKEN</button><button id="logout">[X] SIGN OUT</button></div></header>
 <main><aside id="rail"><div class="rail-catalog"><div class="rail-tools"><button id="manage-hosts">MANAGE HOSTS</button><button id="activity">ACTIVITY</button><button id="commands" aria-label="Command palette" title="Command palette (Ctrl/Cmd+K)">[K]</button></div><label class="rail-search">FIND<input id="fleet-search" type="search" placeholder="Hosts, workspaces, agents" autocomplete="off"></label><div class="section">HOSTS <button id="refresh" aria-label="Refresh hosts">[R]</button></div><nav id="hosts" aria-label="Hosts"></nav></div><div id="rail-sections"><div class="rail-panel"><div class="section">WORKSPACES <button id="create" aria-label="Create workspace">[+]</button></div><nav id="workspaces" aria-label="Workspaces"></nav></div><div id="rail-divider" role="separator" tabindex="0" aria-label="Workspace and agent section sizes" aria-orientation="horizontal" aria-controls="workspaces agents" aria-valuemin="10" aria-valuemax="90" aria-valuenow="50" title="Drag to resize workspaces and agents. Arrow keys adjust; Home/End set limits."></div><div class="rail-panel"><div class="section">AGENTS<select id="agent-filter" aria-label="Filter agents"><option value="all">ALL</option><option value="blocked">ATTENTION</option><option value="working">WORKING</option><option value="done">DONE / IDLE</option></select></div><div id="agent-views" class="section" hidden></div><nav id="agents" aria-label="Agents"></nav></div></div></aside>
-<section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
+<section id="surface"><nav id="tabs" aria-label="Tabs"></nav><nav id="panes" aria-label="Panes"></nav><div id="terminal"></div><div id="terminal-key-row"></div><div id="shield" role="status">Select a workspace to attach.</div></section></main>
 <footer><span id="status" role="status">[WAIT] CONNECTING</span><div><button id="new-tab">[+] TAB</button><button id="split">[|] SPLIT</button><button id="pane-actions">ACTIONS</button><button id="takeover">TAKE CONTROL</button><button id="close">CLOSE PANE</button></div></footer>
 <dialog id="token-dialog"><h1>Access token</h1><p>Generate a new token to sign in on another browser. This replaces the previous token and signs out browsers using it.</p><button id="generate-token">GENERATE TOKEN</button><button id="revoke-token">REVOKE ACCESS TOKEN</button><label id="generated-token-field" hidden>NEW ACCESS TOKEN<input id="generated-token" readonly autocomplete="off" spellcheck="false"></label><p id="token-error" role="alert"></p><button id="token-done">DONE</button></dialog>
 <dialog id="sessions-dialog"><h1>Signed-in browsers</h1><p>Browser tokens stay valid for 90 days, including across restarts. Revoking a browser disconnects it immediately.</p><div id="session-list"></div><p id="session-error" role="alert"></p><button id="revoke-others">REVOKE OTHER BROWSERS</button><button id="sessions-done">DONE</button></dialog>
@@ -92,6 +93,10 @@ const fleet = new FleetClient(applyFleet, online => {
 const hostManager = new HostManager(api, id => selectHost(id));
 let preferences: Preferences = structuredClone(defaults), colors = palette(defaults, false);
 const surface = new DesktopSurface(element('terminal'), element('shield'), element('panes'), api, preferences, colors, selectPane, message => status(`[ERROR] ${message}`), message => status(`[OK] ${message}`));
+const keyRow = new TerminalKeyRow(() => surface.active, message => status(`[ERROR] ${message}`));
+element('terminal-key-row').replaceWith(keyRow.element); keyRow.element.id = 'terminal-key-row';
+surface.readinessChanged = () => keyRow.update();
+for (const type of ['focusin', 'focusout']) document.addEventListener(type, () => keyRow.update());
 const popupSurface = new PopupSurface(element('terminal'), preferences, colors, api, () => surface.active?.focus());
 const readSelection = async (machine: string) => (await api('/api/snapshot?' + new URLSearchParams({ machine }))).snapshot;
 const selectionRestored = () => { if (authenticated && lifecycle.active) { choose(); renderFleetNavigation(); } };
@@ -311,7 +316,7 @@ function renderNavigation() {
   shortcuts?.updateCommands(availableNativeCommands());
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
-  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${p.label || p.title || p.pane_id} [${p.agent_status.toUpperCase()}]`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
+  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${rowStatusIcon(p.agent_status, preferences.indicators)} ${p.label || p.title || p.pane_id}`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   updateShieldBounds();
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';

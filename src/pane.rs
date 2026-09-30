@@ -46,6 +46,8 @@ pub(crate) use capture_draft::{CaptureIdentity, TerminalDraftPause};
 #[cfg(all(test, unix))]
 pub(crate) use terminal::state_draft::test_limits as draft_test_limits;
 #[cfg(unix)]
+pub(crate) use terminal::state_draft::{terminal_state_codec, TransferredDraft};
+#[cfg(unix)]
 pub(crate) use terminal::state_draft::{DraftLimits, PaneStateDraft};
 
 use self::agent_detection::{
@@ -2211,6 +2213,7 @@ impl PaneRuntime {
             input_state: self.input_state(),
             terminal_title: self.terminal_title(),
             initial_history_ansi: None,
+            terminal_state: None,
             agent_state: None,
         }
     }
@@ -2407,7 +2410,12 @@ impl PaneRuntime {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
-        let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
+        let crate::handoff_runtime::ImportedHandoffRuntime {
+            master_fd,
+            state,
+            terminal_state,
+            require_exact_terminal_state,
+        } = import;
         let crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
             child_pid,
@@ -2421,6 +2429,7 @@ impl PaneRuntime {
             terminal_title,
             initial_history_ansi,
             agent_state: _,
+            terminal_state: _,
         } = state;
         let pane_id = PaneId::from_raw(pane_id);
         use std::os::fd::FromRawFd;
@@ -2428,31 +2437,68 @@ impl PaneRuntime {
         let master_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(master_fd) };
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
-        let mut terminal = runtime_terminal::new(cols, rows, scrollback_limit_bytes)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        terminal
-            .resize(cols, rows, cell_width_px, cell_height_px)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        if crate::kitty_graphics::is_enabled() {
-            terminal
-                .enable_kitty_graphics()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
-        pane_terminal.apply_host_terminal_theme(host_terminal_theme);
-        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
-        pane_terminal.seed_terminal_title(terminal_title);
-        if let Some(input_state) = input_state {
-            pane_terminal.seed_handoff_input_state(input_state);
-        }
-        if let Some(ansi) = keyboard_protocol_ansi.as_deref() {
-            pane_terminal.seed_keyboard_protocol_ansi(ansi);
-        } else {
-            pane_terminal.seed_keyboard_protocol_flags(keyboard_protocol_flags);
-        }
-        if let Some(ansi) = initial_history_ansi.as_deref() {
-            pane_terminal.seed_history_ansi(ansi);
-        }
+        // Exact state already contains the screens, history, modes, title,
+        // keyboard protocol, colors and parser continuation; seeding any of
+        // them again would diverge from the exporter's terminal.
+        let exact = match terminal_state {
+            Some(bytes) => {
+                match GhosttyPaneTerminal::restore_transferred_state(&bytes, response_tx.clone()) {
+                    Ok(terminal) => Some(terminal),
+                    Err(err) if require_exact_terminal_state => {
+                        return Err(std::io::Error::other(format!(
+                            "exact terminal state for pane {} could not be restored: {err}",
+                            pane_id.raw()
+                        )));
+                    }
+                    Err(err) => {
+                        warn!(
+                            pane = pane_id.raw(),
+                            err = %err,
+                            "exact terminal state could not be restored; replaying retained history"
+                        );
+                        None
+                    }
+                }
+            }
+            None if require_exact_terminal_state => {
+                return Err(std::io::Error::other(format!(
+                    "lossless handoff did not provide terminal state for pane {}",
+                    pane_id.raw()
+                )));
+            }
+            None => None,
+        };
+        let pane_terminal = match exact {
+            Some(terminal) => terminal,
+            None => {
+                let mut terminal = runtime_terminal::new(cols, rows, scrollback_limit_bytes)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                terminal
+                    .resize(cols, rows, cell_width_px, cell_height_px)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                if crate::kitty_graphics::is_enabled() {
+                    terminal
+                        .enable_kitty_graphics()
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                }
+                let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
+                pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+                let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
+                pane_terminal.seed_terminal_title(terminal_title);
+                if let Some(input_state) = input_state {
+                    pane_terminal.seed_handoff_input_state(input_state);
+                }
+                if let Some(ansi) = keyboard_protocol_ansi.as_deref() {
+                    pane_terminal.seed_keyboard_protocol_ansi(ansi);
+                } else {
+                    pane_terminal.seed_keyboard_protocol_flags(keyboard_protocol_flags);
+                }
+                if let Some(ansi) = initial_history_ansi.as_deref() {
+                    pane_terminal.seed_history_ansi(ansi);
+                }
+                pane_terminal
+            }
+        };
         let terminal = Arc::new(PaneTerminal::new(pane_terminal));
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
         let child_pid = Arc::new(AtomicU32::new(child_pid));
@@ -2512,7 +2558,9 @@ impl PaneRuntime {
                     publish_reported_cwd(pane_id, cwd, &reported_cwd, &read_events);
                 }
                 for content in result.clipboard_writes {
-                    if let Err(err) = read_events.try_send(AppEvent::ClipboardWrite { content }) {
+                    if let Err(err) =
+                        read_events.try_send(AppEvent::ClipboardWrite { pane_id, content })
+                    {
                         warn!(
                             pane = pane_id.raw(),
                             err = %err,
@@ -2723,7 +2771,8 @@ impl PaneRuntime {
                     publish_reported_cwd(pane_id, cwd, &reported_cwd, &events);
                 }
                 for content in result.clipboard_writes {
-                    if let Err(err) = events.try_send(AppEvent::ClipboardWrite { content }) {
+                    if let Err(err) = events.try_send(AppEvent::ClipboardWrite { pane_id, content })
+                    {
                         warn!(
                             pane = pane_id.raw(),
                             err = %err,

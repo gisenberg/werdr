@@ -2326,3 +2326,345 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 fn live_handoff_after_restored_failure_rolls_back_old_server() {
     live_handoff_import_failure_rolls_back_old_server_at("after_restored");
 }
+
+/// Drives a raw-mode application through handoffs in phases separated by
+/// marker files, then lets it query the replacement terminal's state itself.
+fn write_exact_state_probe(base: &Path) -> (PathBuf, PathBuf) {
+    let script = base.join("exact-state.py");
+    let ready = base.join("exact-ready");
+    fs::write(
+        &script,
+        format!(
+            r#"import os, pathlib, select, sys, time, tty
+base = pathlib.Path({base:?})
+out = sys.stdout.buffer
+fd = sys.stdin.fileno()
+def wait(name):
+    while not (base / name).exists():
+        time.sleep(0.01)
+tty.setraw(fd)
+(base / "exact-pid").write_text(str(os.getpid()))
+for i in range(300):
+    out.write(b"\x1b[32mHIST_%03d retained history\x1b[0m\r\n" % i)
+# Alternate screen with a marker, a saved cursor and a separate live cursor.
+out.write(b"\x1b[?1049h\x1b[2J\x1b[5;10HALT_MARKER\x1b[3;7H\x1b7\x1b[10;20H")
+# Bracketed paste, application cursor keys, SGR mouse, Kitty flags, DEC graphics G0.
+out.write(b"\x1b[?2004h\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[>1u\x1b(0")
+# An unfinished SGR sequence; only the next owner sees its remainder.
+out.write(b"\x1b[3")
+out.flush()
+time.sleep(0.3)
+(base / "exact-ready").write_text("ready")
+wait("after-first-handoff")
+out.write(b"1mRED\x1b[0mq\x1b(B")
+out.write(b"\x1b[?2004$p\x1b[?1$p\x1b[?1000$p\x1b[?1006$p\x1b[?1049$p\x1b[?u\x1b[6n\x1b8\x1b[6n")
+out.flush()
+data = b""
+deadline = time.time() + 5
+while data.count(b"$y") < 5 or data.count(b"R") < 2 or b"u" not in data:
+    left = deadline - time.time()
+    if left <= 0 or not select.select([fd], [], [], left)[0]:
+        break
+    data += os.read(fd, 1024)
+(base / "exact-replies").write_text(data.hex())
+# Output spanning the second handoff's capture cut.
+wait("burst")
+out.write(b"\x1b[12;1H")
+for i in range(200):
+    out.write(b"B%03d" % i)
+    out.flush()
+    time.sleep(0.002)
+out.write(b"\x1b[10;24H")
+out.flush()
+(base / "burst-done").write_text("done")
+wait("exit-alt")
+out.write(b"\x1b[?1049lPRIMARY_BACK\r\n")
+out.flush()
+time.sleep(30)
+"#,
+            base = base.display().to_string(),
+        ),
+    )
+    .unwrap();
+    (script, ready)
+}
+
+fn read_pane(api_socket: &Path, pane_id: &str, source: &str, format: &str) -> String {
+    let response = request(
+        api_socket,
+        serde_json::json!({
+            "id":"read", "method":"pane.read",
+            "params":{"pane_id":pane_id,"source":source,"lines":2000,"format":format}
+        }),
+    );
+    response["result"]["read"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn start_exact_state_probe(api_socket: &Path, base: &Path) -> String {
+    let (script, ready) = write_exact_state_probe(base);
+    let created = request(
+        api_socket,
+        serde_json::json!({"id":"create","method":"workspace.create","params":{"cwd":"/tmp","focus":true}}),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ok(request(
+        api_socket,
+        serde_json::json!({
+            "id":"start","method":"pane.send_input",
+            "params":{"pane_id":pane_id,"text":format!("exec python3 {}", script.display()),"keys":["Enter"]}
+        }),
+    ));
+    support::wait_for_file(&ready, Duration::from_secs(10));
+    pane_id
+}
+
+fn lossless_handoff(api_socket: &Path) -> serde_json::Value {
+    request(
+        api_socket,
+        serde_json::json!({"id":"handoff","method":"server.live_handoff","params":{"require_lossless":true}}),
+    )
+}
+
+fn decode_hex(text: &str) -> String {
+    let text = text.trim();
+    String::from_utf8(
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn read_probe_replies(base: &Path) -> String {
+    decode_hex(&wait_for_file_contains(
+        &base.join("exact-replies"),
+        "",
+        Duration::from_secs(10),
+    ))
+}
+
+#[test]
+fn live_handoff_require_lossless_transfers_exact_terminal_state() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let pane_id = start_exact_state_probe(&api_socket, &base);
+    let pid_before = fs::read_to_string(base.join("exact-pid")).unwrap();
+    assert!(read_pane(&api_socket, &pane_id, "visible", "text").contains("ALT_MARKER"));
+
+    assert_ok(lossless_handoff(&api_socket));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    fs::write(base.join("after-first-handoff"), "go").unwrap();
+
+    let replies = read_probe_replies(&base);
+    for mode in ["?2004;1$y", "?1;1$y", "?1000;1$y", "?1006;1$y", "?1049;1$y"] {
+        assert!(
+            replies.contains(mode),
+            "mode {mode} was not retained: {replies:?}"
+        );
+    }
+    assert!(
+        replies.contains("\u{1b}[?1u"),
+        "kitty keyboard flags lost: {replies:?}"
+    );
+    // Live cursor after "RED" and the DEC line glyph, then the saved cursor.
+    assert!(
+        replies.contains("\u{1b}[10;24R"),
+        "cursor lost: {replies:?}"
+    );
+    assert!(
+        replies.contains("\u{1b}[3;7R"),
+        "saved cursor lost: {replies:?}"
+    );
+    let visible = read_pane(&api_socket, &pane_id, "visible", "text");
+    assert!(
+        visible.contains("ALT_MARKER"),
+        "alternate screen lost: {visible:?}"
+    );
+    assert!(
+        visible.contains("RED─"),
+        "continuation or charset lost: {visible:?}"
+    );
+    let ansi = read_pane(&api_socket, &pane_id, "visible", "ansi");
+    // The `CSI 3` captured by the exporter completes as red on the importer.
+    assert!(
+        ansi.contains("38;5;1mRED") || ansi.contains("31mRED"),
+        "split SGR lost: {ansi:?}"
+    );
+
+    // A restored terminal is captured again while output crosses the cut.
+    fs::write(base.join("burst"), "go").unwrap();
+    assert_ok(lossless_handoff(&api_socket));
+    support::wait_for_file(&base.join("burst-done"), Duration::from_secs(10));
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    // Contiguous tokens make any loss or duplication at the boundary visible.
+    let burst: String = (0..200).map(|i| format!("B{i:03}")).collect();
+    let joined = |text: &str| text.lines().map(str::trim_end).collect::<String>();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut visible = read_pane(&api_socket, &pane_id, "visible", "text");
+    while !joined(&visible).contains(&burst) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+        visible = read_pane(&api_socket, &pane_id, "visible", "text");
+    }
+    assert!(
+        joined(&visible).contains(&burst),
+        "pending output not delivered exactly once: {visible:?}"
+    );
+
+    fs::write(base.join("exit-alt"), "go").unwrap();
+    wait_for_output(&api_socket, &pane_id, "PRIMARY_BACK");
+    let recent = read_pane(&api_socket, &pane_id, "recent", "text");
+    let history = recent
+        .lines()
+        .filter(|line| line.starts_with("HIST_"))
+        .count();
+    assert_eq!(history, 300, "primary history lost: {recent:?}");
+    assert!(
+        !recent.contains("ALT_MARKER"),
+        "alternate screen leaked into primary"
+    );
+    assert_eq!(
+        fs::read_to_string(base.join("exact-pid")).unwrap(),
+        pid_before
+    );
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn live_handoff_require_lossless_refuses_incompatible_importer_and_keeps_owner() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_server_with_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &[(
+            "HERDR_TEST_HANDOFF_TERMINAL_STATE_CODEC",
+            "incompatible-codec",
+        )],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let pane_id = start_exact_state_probe(&api_socket, &base);
+    let server_pid = spawned.child.process_id().unwrap();
+
+    let response = lossless_handoff(&api_socket);
+    let message = response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.contains("incompatible-codec"),
+        "unexpected response: {response}"
+    );
+
+    // The original owner keeps serving the same live application.
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let status = request(
+        &api_socket,
+        serde_json::json!({"id":"ping","method":"ping","params":{}}),
+    );
+    assert!(status.get("result").is_some(), "owner stopped: {status}");
+    assert_eq!(spawned.child.process_id(), Some(server_pid));
+    assert!(read_pane(&api_socket, &pane_id, "visible", "text").contains("ALT_MARKER"));
+    // The rolled-back owner kept its modes and completes the split SGR.
+    fs::write(base.join("after-first-handoff"), "go").unwrap();
+    let replies = read_probe_replies(&base);
+    assert!(
+        replies.contains("?1049;1$y"),
+        "rollback lost terminal state: {replies:?}"
+    );
+    let ansi = read_pane(&api_socket, &pane_id, "visible", "ansi");
+    assert!(
+        ansi.contains("38;5;1mRED") || ansi.contains("31mRED"),
+        "{ansi:?}"
+    );
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn live_handoff_falls_back_to_history_replay_for_an_incompatible_importer() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_server_with_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &[(
+            "HERDR_TEST_HANDOFF_TERMINAL_STATE_CODEC",
+            "incompatible-codec",
+        )],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let created = request(
+        &api_socket,
+        serde_json::json!({"id":"create","method":"workspace.create","params":{"cwd":"/tmp","focus":true}}),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id":"start","method":"pane.send_input",
+            "params":{"pane_id":pane_id,"text":"i=0; while [ $i -lt 50 ]; do echo FALLBACK_$i; i=$((i+1)); done","keys":["Enter"]}
+        }),
+    ));
+    wait_for_output(&api_socket, &pane_id, "FALLBACK_49");
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let recent = read_pane(&api_socket, &pane_id, "recent", "text");
+    assert!(
+        recent.contains("FALLBACK_0") && recent.contains("FALLBACK_49"),
+        "{recent:?}"
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id":"input","method":"pane.send_input",
+            "params":{"pane_id":pane_id,"text":"echo AFTER_FALLBACK","keys":["Enter"]}
+        }),
+    ));
+    wait_for_output(&api_socket, &pane_id, "AFTER_FALLBACK");
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}

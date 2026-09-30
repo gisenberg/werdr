@@ -4,11 +4,13 @@ interface Rect { x: number; y: number; width: number; height: number }
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 /** Native copy feedback is anchored to the pane surface, outside alert delivery policy. */
-export function clipboardFeedbackRect(width: number, height: number, size: { width: number; height: number }, position: Preferences['clipboardToastPosition'], notice?: Rect): Rect {
+export function clipboardFeedbackRect(width: number, height: number, size: { width: number; height: number }, position: Preferences['clipboardToastPosition'], notices: Rect | Rect[] = []): Rect {
   const w = Math.min(width, size.width), h = Math.min(height, size.height);
   const top = position.startsWith('top');
   const rect = { x: position.endsWith('left') ? 0 : position.endsWith('right') ? width - w : (width - w) / 2, y: top ? 0 : height - h, width: w, height: h };
-  if (notice && overlaps(rect, notice)) rect.y = Math.max(0, Math.min(height - h, top ? notice.y + notice.height : notice.y - h));
+  // Step past each intersecting notice in the direction away from the anchored edge.
+  const ordered = (Array.isArray(notices) ? notices : [notices]).slice().sort((a, b) => top ? a.y - b.y : b.y + b.height - a.y - a.height);
+  for (const notice of ordered) if (overlaps(rect, notice)) rect.y = Math.max(0, Math.min(height - h, top ? notice.y + notice.height : notice.y - h));
   return rect;
 }
 
@@ -27,6 +29,7 @@ export class ClipboardFeedback {
       resize.observe(toast);
       new MutationObserver(() => this.update()).observe(toast, { attributes: true, attributeFilter: ['hidden', 'data-position'], childList: true, subtree: true, characterData: true });
     }
+    new MutationObserver(() => this.update()).observe(container, { attributes: true, attributeFilter: ['hidden'], subtree: true });
     document.addEventListener('visibilitychange', () => this.update());
   }
   show() {
@@ -41,9 +44,11 @@ export class ClipboardFeedback {
     const preferences = this.preferences();
     if (!preferences.clipboardToast || performance.now() >= this.deadline) { this.clear(); return; }
     const bounds = this.container.getBoundingClientRect(), toast = document.getElementById('notice-toast');
-    const notice = toast && !toast.hidden ? toast.getBoundingClientRect() : undefined;
-    const position = clipboardFeedbackRect(this.container.clientWidth, this.container.clientHeight, { width: this.node.offsetWidth, height: this.node.offsetHeight }, preferences.clipboardToastPosition,
-      notice && { x: notice.x - bounds.x, y: notice.y - bounds.y, width: notice.width, height: notice.height });
+    // Pane-anchored link and clipboard actions stay clickable beneath the feedback.
+    const notices = [...(toast && !toast.hidden ? [toast] : []), ...this.container.querySelectorAll<HTMLElement>('.terminal-link-notice:not([hidden]), .terminal-clipboard-request:not([hidden])')]
+      .map(node => node.getBoundingClientRect()).filter(rect => rect.width && rect.height)
+      .map(rect => ({ x: rect.x - bounds.x, y: rect.y - bounds.y, width: rect.width, height: rect.height }));
+    const position = clipboardFeedbackRect(this.container.clientWidth, this.container.clientHeight, { width: this.node.offsetWidth, height: this.node.offsetHeight }, preferences.clipboardToastPosition, notices);
     this.node.dataset.position = preferences.clipboardToastPosition;
     this.node.style.left = position.x + 'px'; this.node.style.top = position.y + 'px';
   }

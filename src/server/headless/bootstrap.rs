@@ -2,6 +2,8 @@ use super::*;
 
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server() -> io::Result<()> {
+    // Before logging or runtime threads start, so no child inherits the socket.
+    let supervisor = crate::platform::capture_service_supervisor();
     let args: Vec<String> = std::env::args().collect();
     let handoff_import = args.get(2).map(String::as_str) == Some("--handoff-import");
     let process_context = crate::platform::prepare_server_process(handoff_import);
@@ -85,6 +87,9 @@ pub fn run_server() -> io::Result<()> {
             "herdr server started"
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
+        if let Err(err) = supervisor.ready() {
+            warn!(%err, "could not report readiness to the service manager");
+        }
         server.app.run_plugin_startup_hooks();
 
         server.run().await
@@ -125,6 +130,10 @@ fn take_startup_cwd() -> Option<PathBuf> {
     (!cwd.is_empty()).then(|| PathBuf::from(cwd))
 }
 
+/// Bounded below the exporter's ownership wait so the report still arrives.
+#[cfg(unix)]
+const SERVICE_CLAIM_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[cfg(unix)]
 fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> {
     let loaded_config = config::Config::load();
@@ -136,13 +145,17 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
     let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
-    for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
+    let require_exact_terminal_state = received.manifest.require_lossless;
+    let panes = received.manifest.panes.into_iter().zip(received.fds);
+    for ((pane, fd), terminal_state) in panes.zip(received.terminal_states) {
         let pane_id = pane.pane_id;
         imports.insert(
             pane_id,
             crate::handoff_runtime::ImportedHandoffRuntime {
                 master_fd: fd,
                 state: pane,
+                terminal_state,
+                require_exact_terminal_state,
             },
         );
     }
@@ -186,6 +199,14 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         server.api_window_title = received.manifest.api_window_title.take();
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
+        // The exporter exits after the ownership report. A supervisor must
+        // already track this process, or that exit would stop the service and
+        // every pane process in its control group.
+        if let Err(err) =
+            crate::platform::capture_service_supervisor().claim_main_process(SERVICE_CLAIM_TIMEOUT)
+        {
+            tracing::error!(%err, "could not claim the service main process after handoff");
+        }
         server.app.assume_handoff_ownership();
         server.app.unpause_handoff_readers();
         server.pending_handoff_repaint_nudge = true;

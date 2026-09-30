@@ -12,7 +12,7 @@ Herdr uses several state paths for different situations.
 | Detach and reattach | Yes | Yes | Yes, from the live terminal | Yes, because the process never stopped |
 | Server restart | No | Yes | Only with pane screen history | Only with native agent session restore |
 | Update without `--handoff` | Compatible servers keep running; restart-required servers may need stop/restart | Yes after restart | Only with pane screen history | Only with native agent session restore |
-| Update with `--handoff` | Best effort for supported running servers | Yes | Yes, from the live terminal if handoff succeeds | Yes, because the process keeps running if handoff succeeds |
+| Update with `--handoff` | Best effort for supported running servers | Yes | Yes; exact terminal state when both servers share a terminal-state codec, otherwise replayed history | Yes, because the process keeps running if handoff succeeds |
 
 ## Live persistence
 

@@ -170,6 +170,28 @@ impl HeadlessServer {
             }
         }
 
+        // Readers are quiesced, so no new PTY-derived events can be admitted.
+        // Apply the events already queued before the cut so the captured
+        // session reflects them, then confirm that topology did not change.
+        let prefix = self
+            .app
+            .event_rx
+            .admission_cut()
+            .map_err(String::from)
+            .and_then(|cut| self.apply_capture_prefix(cut));
+        let topology_unchanged = prefix.is_ok()
+            && self
+                .legacy_handoff_topology()
+                .is_ok_and(|current| current == pane_by_terminal);
+        if !topology_unchanged {
+            self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+            return Err(io::Error::other(match prefix {
+                Err(err) => format!("handoff could not apply queued events: {err}"),
+                Ok(()) => "panes changed while preparing handoff; retry".into(),
+            }));
+        }
+
+        let require_lossless = params.require_lossless == Some(true);
         let snapshot = crate::persist::capture(
             &self.app.state.workspaces,
             &self.app.state.terminals,
@@ -188,17 +210,44 @@ impl HeadlessServer {
                     .copied()
                     .ok_or_else(|| io::Error::other("handoff runtime topology changed"))?;
                 let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
-                handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
+                let exact = match runtime.capture_handoff_terminal_state() {
+                    Ok(draft) if require_lossless && draft.graphics_dropped => {
+                        return Err(io::Error::other(format!(
+                            "pane {pane_id} retains file-backed images that cannot be transferred; this server kept ownership"
+                        )));
+                    }
+                    Ok(draft) => Some(draft),
+                    Err(err) if require_lossless => {
+                        return Err(io::Error::other(format!(
+                            "exact terminal state for pane {pane_id} is unavailable: {err}; this server kept ownership"
+                        )));
+                    }
+                    Err(err) => {
+                        warn!(pane = pane_id, err = %err, "exact terminal state unavailable; offering retained history only");
+                        None
+                    }
+                };
+                // History replay is only a fallback; a lossless importer never uses it.
+                if !require_lossless {
+                    handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
+                }
+                handoff_runtime.terminal_state = exact.as_ref().map(|draft| {
+                    crate::handoff_runtime::HandoffTerminalStateOffer {
+                        codec: crate::pane::terminal_state_codec(),
+                        bytes: draft.bytes.len() as u64,
+                        graphics_dropped: draft.graphics_dropped,
+                    }
+                });
                 handoff_runtime.agent_state = self
                     .app
                     .state
                     .terminals
                     .get(terminal_id)
                     .and_then(|terminal| terminal.handoff_agent_state());
-                Ok((terminal_id.clone(), handoff_runtime))
+                Ok((terminal_id.clone(), handoff_runtime, exact.map(|draft| draft.bytes)))
             })
             .collect::<io::Result<Vec<_>>>();
-        let handoff_entries = match handoff_entries {
+        let mut handoff_entries = match handoff_entries {
             Ok(entries) => entries,
             Err(err) => {
                 self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
@@ -208,15 +257,21 @@ impl HeadlessServer {
 
         let panes = handoff_entries
             .iter()
-            .map(|(_, runtime)| runtime.clone())
+            .map(|(_, runtime, _)| runtime.clone())
             .collect();
-        let manifest = crate::server::handoff::manifest_for(
+        // Move, not copy: each record can hold a pane's complete history.
+        let terminal_states: Vec<_> = handoff_entries
+            .iter_mut()
+            .map(|(_, _, state)| state.take())
+            .collect();
+        let mut manifest = crate::server::handoff::manifest_for(
             snapshot,
             panes,
             params.expected_protocol,
             params.expected_version,
             self.api_window_title.clone(),
         );
+        manifest.require_lossless = require_lossless;
         if let Err(err) = crate::server::handoff::validate_manifest_size(&manifest) {
             self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
             return Err(err);
@@ -237,7 +292,7 @@ impl HeadlessServer {
 
         let mut fds = Vec::new();
         let duplicate_result = (|| {
-            for (terminal_id, _) in &handoff_entries {
+            for (terminal_id, _, _) in &handoff_entries {
                 let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
                     return Err(io::Error::other("handoff runtime disappeared"));
                 };
@@ -259,6 +314,7 @@ impl HeadlessServer {
             &socket_path,
             &token,
             &manifest,
+            &terminal_states,
         ) {
             Ok(stream) => stream,
             Err(err) => {
@@ -456,6 +512,7 @@ impl HeadlessServer {
             .flat_map(|(_, client)| client.staged_clipboard_files)
             .collect::<Vec<_>>();
         crate::server::clipboard_image::remove_files(staged_files);
+        self.remove_retired_clipboard_images_unless_handed_off();
 
         // Remove socket files.
         self.cleanup_sockets()?;

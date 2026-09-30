@@ -4472,6 +4472,13 @@
                 "string",
                 "null"
               ]
+            },
+            "require_lossless": {
+              "description": "Refuse the handoff, keeping this server as owner, unless every pane's\nexact terminal state can be captured and accepted by the importer.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             }
           },
           "type": "object"
@@ -11935,6 +11942,11 @@
               "type": "boolean"
             },
             "live_handoff": {
+              "type": "boolean"
+            },
+            "lossless_handoff": {
+              "default": false,
+              "description": "server.live_handoff honors require_lossless: exact terminal state or refusal.",
               "type": "boolean"
             },
             "passive_metadata": {

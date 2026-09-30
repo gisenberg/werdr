@@ -1607,6 +1607,8 @@ fn live_handoff_server_via_api_for_release_at(
         import_exe: Some(updated_exe.display().to_string()),
         expected_protocol: release.target_protocol,
         expected_version: Some(release.label().to_string()),
+        // Exact state is still used whenever both builds share a codec.
+        require_lossless: None,
     };
 
     send_server_update_method_at(
@@ -3054,6 +3056,7 @@ mod tests {
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,
+                lossless_handoff: false,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
@@ -3136,6 +3139,7 @@ mod tests {
                     semantic_notifications: true,
                     workspace_git_status: true,
                     live_handoff: true,
+                    lossless_handoff: false,
                     detached_server_daemon: true,
                     endpoint_protocol_generation: Some(
                         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
@@ -3402,6 +3406,7 @@ mod tests {
                     semantic_notifications: true,
                     workspace_git_status: true,
                     live_handoff: true,
+                    lossless_handoff: false,
                     detached_server_daemon: true,
                     endpoint_protocol_generation: Some(
                         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,

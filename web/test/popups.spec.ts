@@ -31,7 +31,7 @@ test('native popups attach on desktop and mobile with application keys, retained
     const originalUrl = page.url();
     await runtime.cli('plugin', 'pane', 'open', '--plugin', 'example.popup-test', '--entrypoint', 'popup', '--width', '80%', '--height', '70%');
     const popup = page.locator('#native-popup');
-    await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('textarea')).toBeFocused();
+    await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('.terminal-pane textarea')).toBeFocused();
     await expect(popup.getByRole('button', { name: '[R] RETRY', exact: true })).toBeHidden();
     await expect(popup.getByRole('button', { name: '[T] TAKE CONTROL', exact: true })).toBeHidden();
     await expect.poll(() => [frame?.width, frame?.height]).toEqual([Number(await popup.getAttribute('data-cols')), Number(await popup.getAttribute('data-rows'))]);
@@ -46,6 +46,14 @@ test('native popups attach on desktop and mobile with application keys, retained
     await expect.poll(async () => { const box = await popup.boundingBox(); return box ? box.x + box.width : Infinity; }).toBeLessThanOrEqual(391);
     await expect.poll(() => [frame?.width, frame?.height]).toEqual([Number(await popup.getAttribute('data-cols')), Number(await popup.getAttribute('data-rows'))]);
     const box = await popup.boundingBox(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(391);
+    // The modal popup carries its own key row over the inert page row.
+    const popupKeys = popup.locator('.terminal-keys'), pageKeys = page.locator('#terminal-key-row');
+    await expect(popupKeys).toBeVisible();
+    await expect.poll(async () => JSON.stringify(await popupKeys.boundingBox())).toBe(JSON.stringify(await pageKeys.boundingBox()));
+    expect(box!.y + box!.height).toBeLessThanOrEqual((await pageKeys.boundingBox())!.y + 1);
+    await popupKeys.getByRole('button', { name: 'Escape' }).click(); await popupKeys.getByRole('button', { name: 'Up arrow' }).click();
+    await expect.poll(async () => (await readFile(capture)).toString('hex')).toContain('1b021b5b357e1b1b5b41');
+    await expect(popup.locator('.terminal-pane textarea')).toBeFocused();
     await page.screenshot({ path: 'test-results/popup-mobile.png' });
     const fleet = await (await page.request.get(runtime.url + '/api/fleet')).json();
     const nativePopup = fleet.hosts.find((host: any) => host.machine.id === 'local').popup.popup;
@@ -54,7 +62,7 @@ test('native popups attach on desktop and mobile with application keys, retained
     await popup.getByRole('button', { name: '[X] CLOSE', exact: true }).click(); await expect(popup).not.toBeVisible();
     expect(await underlying!.evaluate(node => node.isConnected)).toBe(true);
     await runtime.cli('plugin', 'pane', 'open', '--plugin', 'example.popup-test', '--entrypoint', 'popup', '--width', '6', '--height', '4');
-    await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('textarea')).toBeFocused();
+    await expect(popup).toBeVisible(); await expect(popup.locator('.pane-shield')).toBeHidden(); await expect(popup.locator('.terminal-pane textarea')).toBeFocused();
     await expect.poll(() => frame && { width: frame.width, height: frame.height }).toEqual({ width: 4, height: 2 });
     const close = popup.getByRole('button', { name: '[X] CLOSE', exact: true });
     await expect(close).toBeVisible();
@@ -78,7 +86,7 @@ test('native popups attach on desktop and mobile with application keys, retained
     await retry.click();
     await expect(popup.locator('.pane-shield')).toBeHidden();
     await expect(retry).toBeHidden();
-    await popup.locator('textarea').focus();
+    await popup.locator('.terminal-pane textarea').focus();
     await page.keyboard.type('q'); await expect(popup).not.toBeVisible();
     await expect(page.locator('#terminal textarea')).toBeFocused();
   } finally { await runtime.close(); }

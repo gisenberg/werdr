@@ -7,7 +7,8 @@
 //! Stage new events while awaiting detector/actor acknowledgements, then reject
 //! the draft if any are pending. An empty inbox is not proof of a producer or
 //! shared-session cut.
-//! Keep this disconnected from production handoff and endpoint negotiation.
+//! Live handoff reuses only `apply_capture_prefix`, after its readers are
+//! quiesced; the capture coordinator stays out of endpoint negotiation.
 
 use super::*;
 

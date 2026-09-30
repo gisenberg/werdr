@@ -11,6 +11,10 @@ pub struct ServerLiveHandoffParams {
     pub expected_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
+    /// Refuse the handoff, keeping this server as owner, unless every pane's
+    /// exact terminal state can be captured and accepted by the importer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_lossless: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -40,6 +44,9 @@ pub struct ServerCapabilities {
     #[serde(default)]
     pub semantic_notifications: bool,
     pub live_handoff: bool,
+    /// server.live_handoff honors require_lossless: exact terminal state or refusal.
+    #[serde(default)]
+    pub lossless_handoff: bool,
     #[serde(default)]
     pub detached_server_daemon: bool,
     /// Stable client-owned endpoint generation supported by this server.

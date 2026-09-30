@@ -86,7 +86,10 @@ export class DesktopSurface {
       this.focusTarget = undefined;
       if (!document.querySelector('dialog[open], .context-menu:not([hidden])')) this.active.focus();
     }
+    this.readinessChanged?.();
   };
+  /** Chrome outside the surface, such as the phone key row, follows readiness. */
+  readinessChanged?: () => void;
   private render() {
     const width = this.container.clientWidth, height = this.container.clientHeight;
     if (!this.layout || !width || !height) return;
