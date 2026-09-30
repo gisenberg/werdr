@@ -46,6 +46,14 @@ test('native popups attach on desktop and mobile with application keys, retained
     await expect.poll(async () => { const box = await popup.boundingBox(); return box ? box.x + box.width : Infinity; }).toBeLessThanOrEqual(391);
     await expect.poll(() => [frame?.width, frame?.height]).toEqual([Number(await popup.getAttribute('data-cols')), Number(await popup.getAttribute('data-rows'))]);
     const box = await popup.boundingBox(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(391);
+    // The modal popup carries its own key row over the inert page row.
+    const popupKeys = popup.locator('.terminal-keys'), pageKeys = page.locator('#terminal-key-row');
+    await expect(popupKeys).toBeVisible();
+    await expect.poll(async () => JSON.stringify(await popupKeys.boundingBox())).toBe(JSON.stringify(await pageKeys.boundingBox()));
+    expect(box!.y + box!.height).toBeLessThanOrEqual((await pageKeys.boundingBox())!.y + 1);
+    await popupKeys.getByRole('button', { name: 'Escape' }).click(); await popupKeys.getByRole('button', { name: 'Up arrow' }).click();
+    await expect.poll(async () => (await readFile(capture)).toString('hex')).toContain('1b021b5b357e1b1b5b41');
+    await expect(popup.locator('textarea')).toBeFocused();
     await page.screenshot({ path: 'test-results/popup-mobile.png' });
     const fleet = await (await page.request.get(runtime.url + '/api/fleet')).json();
     const nativePopup = fleet.hosts.find((host: any) => host.machine.id === 'local').popup.popup;

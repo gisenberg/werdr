@@ -2,6 +2,7 @@ import { noticeEndpointKey, type HostView } from '../shared/fleet';
 import type { PopupSession, PopupSize } from '../shared/popups';
 import { fontFamilies, type Preferences, palette } from '../shared/settings';
 import { TerminalController } from './terminal-controller';
+import { TerminalKeyRow } from './terminal-keys';
 
 /** A native singleton popup is a terminal session, never a pane in the layout. */
 export class PopupSurface {
@@ -15,6 +16,8 @@ export class PopupSurface {
   private readonly retryButton = document.createElement('button');
   private readonly takeoverButton = document.createElement('button');
   private controller?: TerminalController;
+  // Modal popups make the page's key row inert, so they carry their own.
+  private readonly keyRow = new TerminalKeyRow(() => this.controller, message => { this.message.textContent = message; });
   private popup?: PopupSession;
   private endpoint = '';
   private selectedTab = '';
@@ -41,7 +44,7 @@ export class PopupSurface {
     label(this.takeoverButton, '[T]', 'TAKE CONTROL'); this.takeoverButton.onclick = () => void this.controller?.connect(true);
     label(this.closeButton, '[X]', 'CLOSE'); this.closeButton.onclick = () => void this.closeExact();
     this.message.className = 'popup-status'; this.message.setAttribute('role', 'status');
-    this.toolbar.append(this.retryButton, this.takeoverButton, this.closeButton); this.dialog.append(this.toolbar, this.content, this.message); document.body.append(this.dialog);
+    this.toolbar.append(this.retryButton, this.takeoverButton, this.closeButton); this.dialog.append(this.toolbar, this.content, this.message, this.keyRow.element); document.body.append(this.dialog);
     // Escape belongs to the terminal application, including shells and nested TUIs.
     this.dialog.addEventListener('cancel', event => event.preventDefault());
     document.addEventListener('close', () => queueMicrotask(() => this.present()), true);
@@ -99,7 +102,7 @@ export class PopupSurface {
     const message = ready ? '' : this.controller?.status || '';
     if (this.message.textContent !== message) this.message.textContent = message;
     if (ready && !this.wasReady && this.dialog.open && document.activeElement === this.dialog) this.controller?.focus();
-    this.wasReady = ready;
+    this.wasReady = ready; this.keyRow.update();
   }
   private layout() {
     if (!this.popup || !this.dialog.open) return;
@@ -121,6 +124,11 @@ export class PopupSurface {
     this.dialog.style.setProperty('--popup-cell-width', `${cellWidth}px`); this.dialog.style.setProperty('--popup-cell-height', `${cellHeight}px`);
     this.dialog.style.setProperty('--popup-right-inset', `${(outerCols - 2 <= 4 ? 1 : 2) * cellWidth}px`);
     this.dialog.dataset.cols = String(outerCols - (outerCols - 2 <= 4 ? 2 : 3)); this.dialog.dataset.rows = String(outerRows - 2);
+    // Occupy the page row's exact rectangle; the popup never covers that row.
+    const row = document.getElementById('terminal-key-row')?.getBoundingClientRect();
+    this.keyRow.element.hidden = !row?.height;
+    if (row?.height) Object.assign(this.keyRow.element.style, { left: `${row.left}px`, top: `${row.top}px`, width: `${row.width}px`, height: `${row.height}px` });
+    this.keyRow.update();
   }
   private async closeExact() {
     const popup = this.popup, controller = this.controller;
@@ -132,5 +140,5 @@ export class PopupSurface {
   }
   update(preferences: Preferences, colors: ReturnType<typeof palette>) { this.preferences = preferences; this.colors = colors; this.controller?.update(preferences, colors); this.layout(); }
   recover() { this.controller?.recover(); }
-  clear(preservePending = false) { if (!preservePending) this.cancelPending(); const focused = this.dialog.open; this.popup = undefined; this.closing = false; this.wasReady = false; this.terminalMetrics = ''; this.controller?.dispose(); this.controller = undefined; if (this.dialog.open) this.dialog.close(); if (focused) this.restoreFocus(); }
+  clear(preservePending = false) { if (!preservePending) this.cancelPending(); this.keyRow.reset(); const focused = this.dialog.open; this.popup = undefined; this.closing = false; this.wasReady = false; this.terminalMetrics = ''; this.controller?.dispose(); this.controller = undefined; if (this.dialog.open) this.dialog.close(); if (focused) this.restoreFocus(); }
 }

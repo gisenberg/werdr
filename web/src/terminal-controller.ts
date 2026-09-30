@@ -12,6 +12,7 @@ import { NativeSelection } from './native-selection';
 import { terminalSelectionColors } from './terminal-selection';
 import { initialPaneScroll } from './initial-pane-scroll';
 import { TerminalClipboardRequests } from './terminal-osc52';
+import { characterTap, legacyChord, type KeyModifiers, type KeyTap } from './terminal-keys';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -30,6 +31,7 @@ export class TerminalController {
   private keyboard?: NativeKeyboard;
   private imagePaste?: TerminalImagePaste;
   private cleanup?: () => void;
+  private latched?: { modifiers: KeyModifiers; consumed: () => void };
   private fit?: () => void;
   private epoch = 0;
   private attempt = 0;
@@ -45,6 +47,12 @@ export class TerminalController {
   get status() { return this.shield.textContent || 'Attaching to Herdr...'; }
   rightClickPassthrough = false;
   sendKey(event: KeyboardEvent) { if (this.ready && this.visible) this.keyboard?.sendKey(event); }
+  get acceptsKeys() { return this.ready && this.visible && !this.copyMode?.active; }
+  /** Touch key rows tap keys through the same native encoder as hardware keys. */
+  tap(tap: KeyTap, modifiers: KeyModifiers) { if (this.acceptsKeys) this.keyboard?.sendKey(new KeyboardEvent('keydown', { key: tap.key, code: tap.code, shiftKey: !!tap.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt })); }
+  paste(text: string) { if (this.acceptsKeys) this.terminal?.paste(text); }
+  /** Apply latched modifiers to the next typed character, then report consumption. */
+  latch(modifiers: KeyModifiers | undefined, consumed: () => void) { this.latched = modifiers && { modifiers, consumed }; }
   readSelection() { return this.copyMode?.active ? this.copyMode?.readText() : this.selectionMode?.hasSelection ? this.selectionMode?.readText() : Promise.resolve(this.terminal?.getSelection() || ''); }
   constructor(readonly machine: string, readonly pane: string, readonly terminalId: string, toolbarHost: HTMLElement, private preferences: Preferences, private colors: Colors, private select: () => void, private changed: () => void, private api: (path: string, data?: object) => Promise<any>, private report: (message: string, failed?: boolean) => void, copied: () => void, readonly target?: { kind: 'popup'; ownerTabId: string }) {
     this.element.className = 'terminal-pane'; this.element.dataset.pane = pane;
@@ -94,7 +102,7 @@ export class TerminalController {
     if (this.visible && this.socket?.readyState === WebSocket.CLOSED && !this.timer) void this.connect();
   }
   private reset() {
-    this.imagePaste?.cancel(); this.clipboardRequests.cancel();
+    this.imagePaste?.cancel(); this.clipboardRequests.cancel(); this.latched?.consumed(); this.latched = undefined;
     this.scrollbar?.reset(); this.mouse.setEnabled(false); this.copyMode?.exit(true, false); this.links?.cancel(); this.selectionMode?.clear();
     this.imagePaste?.dispose(); this.imagePaste = undefined;
     ++this.epoch; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined;
@@ -176,7 +184,14 @@ export class TerminalController {
     // Optional metadata must not indefinitely block a compatible terminal.
     const scrollTimeout = setTimeout(() => { scrollReady = true; reveal(); }, 2000);
     boot.addEventListener('close', reveal);
-    const input = term.onData(text => { this.selectionMode?.clear(); if (!this.copyMode?.active) send({ type: 'terminal.input', text }); });
+    const input = term.onData(text => {
+      this.selectionMode?.clear(); if (this.copyMode?.active) return;
+      const latched = this.latched;
+      if (!latched) { send({ type: 'terminal.input', text }); return; }
+      this.latched = undefined; latched.consumed();
+      const tap = characterTap(text);
+      if (tap) this.tap(tap, latched.modifiers); else send({ type: 'terminal.input', text: legacyChord(text, latched.modifiers) });
+    });
     const resize = term.onResize(({ cols, rows }) => { this.scrollbar?.sync(); this.links?.cancel(); this.selectionMode?.clear(); this.copyMode?.afterFrame(); if (!applyingFrame && this.visible) { desired = { cols, rows }; sendSize(); } });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
     // AttachScroll uses crossterm modifier bits, unlike SGR mouse reports.
