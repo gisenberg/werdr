@@ -3,8 +3,9 @@ import type { TokenStyle } from '../shared/sidebar-tokens';
 
 export interface RowToken { kind: string; text: string; style: TokenStyle; runs?: { text: string; tone?: 'green' | 'red' }[] }
 const symbols: Record<AgentStatus, string> = { blocked: '×', working: '◐', done: '✓', idle: '○', unknown: '·' };
-export function rowStatusIcon(status: AgentStatus, indicators: 'text' | 'dots' | 'symbols'): string {
-  return indicators === 'text' ? `[${status.toUpperCase()}]` : indicators === 'symbols' ? symbols[status] : status === 'idle' ? '○' : status === 'unknown' ? '·' : '●';
+/** No agent has no state to name: text mode omits it, like a missing token. */
+export function rowStatusIcon(status: AgentStatus, indicators: 'text' | 'dots' | 'symbols'): string | undefined {
+  return indicators === 'text' ? status === 'unknown' ? undefined : `[${status.toUpperCase()}]` : indicators === 'symbols' ? symbols[status] : status === 'idle' ? '○' : status === 'unknown' ? '·' : '●';
 }
 
 const rendered = new WeakMap<HTMLElement, string>();

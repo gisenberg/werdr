@@ -49,3 +49,13 @@ test('workspace layouts reject non-text rules, agent-only tokens and unbounded s
     { rows_by_agent: {} }, { rows: [[{ token: '$build', rules: [{ contains: 'x'.repeat(17000) }] }]] },
   ]) assert.throws(() => validateWorkspaceRows(value));
 });
+
+test('text indicators omit the state icon for panes without an agent while other styles keep the native marker', () => {
+  const workspace: Workspace = { workspace_id: 'w', label: 'shell', agent_status: 'unknown' };
+  const rows = (status: 'unknown' | 'blocked', indicators: 'text' | 'dots' | 'symbols') =>
+    resolveWorkspaceRows({ rows: [['state_icon', 'workspace']], row_gap: 0 }, { workspace, status, indented: false }, indicators)[0].map(token => [token.kind, token.text]);
+  assert.deepEqual(rows('unknown', 'text'), [['workspace', workspace.label]]);
+  assert.deepEqual(rows('blocked', 'text'), [['state_icon', '[BLOCKED]'], ['workspace', workspace.label]]);
+  assert.deepEqual(rows('unknown', 'dots'), [['state_icon', '·'], ['workspace', workspace.label]]);
+  assert.deepEqual(rows('unknown', 'symbols')[0][0], 'state_icon');
+});
