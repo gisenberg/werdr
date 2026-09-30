@@ -52,11 +52,30 @@ export class TerminalKeyRow {
   private readonly buttons = new Map<string, HTMLButtonElement>();
   private readonly modifierButtons: Record<keyof KeyModifiers, HTMLButtonElement>;
   private latchedTarget?: KeyTarget;
+  // Manual paste fallback when the browser refuses programmatic clipboard reads.
+  private readonly pastePanel = document.createElement('form');
+  private readonly pasteInput = document.createElement('textarea');
+  private pasteTarget?: KeyTarget;
   constructor(private target: () => KeyTarget | undefined, private report: (message: string, failed?: boolean) => void) {
     this.element.className = 'terminal-keys'; this.element.setAttribute('role', 'toolbar'); this.element.setAttribute('aria-label', 'Terminal keys');
     // Keep focus in the terminal textarea; buttons remain keyboard-activatable.
-    this.element.addEventListener('pointerdown', event => { if ((event.target as Element).closest('button')) event.preventDefault(); });
-    this.element.addEventListener('mousedown', event => { if ((event.target as Element).closest('button')) event.preventDefault(); });
+    this.element.addEventListener('pointerdown', event => { if ((event.target as Element).closest('.terminal-keys > button')) event.preventDefault(); });
+    this.element.addEventListener('mousedown', event => { if ((event.target as Element).closest('.terminal-keys > button')) event.preventDefault(); });
+    this.pastePanel.className = 'terminal-paste'; this.pastePanel.hidden = true; this.pastePanel.setAttribute('aria-label', 'Paste text into the terminal');
+    this.pasteInput.placeholder = 'Paste text here, then SEND'; this.pasteInput.setAttribute('aria-label', 'Text to paste into the terminal');
+    for (const [key, value] of Object.entries({ autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none', spellcheck: 'false', rows: '3' })) this.pasteInput.setAttribute(key, value);
+    const send = document.createElement('button'); send.type = 'submit'; send.textContent = 'SEND';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'CANCEL'; cancel.onclick = () => this.closePaste(true);
+    const actions = document.createElement('div'); actions.append(cancel, send);
+    this.pastePanel.append(this.pasteInput, actions);
+    this.pastePanel.onsubmit = event => {
+      event.preventDefault();
+      const target = this.pasteTarget, text = this.pasteInput.value;
+      if (target && target === this.target() && target.acceptsKeys && text) target.paste(text);
+      this.closePaste(true);
+    };
+    this.pasteInput.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.closePaste(true); } });
+    this.element.append(this.pastePanel);
     const button = (label: string, name: string, run: () => void) => {
       const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.setAttribute('aria-label', name); node.onclick = run;
       this.element.append(node); return node;
@@ -77,6 +96,7 @@ export class TerminalKeyRow {
   update() {
     const target = this.target();
     if (this.latchedTarget && this.latchedTarget !== target) this.reset();
+    if (this.pasteTarget && (this.pasteTarget !== target || !target?.acceptsKeys)) this.closePaste(false);
     const disabled = !target?.acceptsKeys;
     for (const node of [...this.buttons.values(), ...Object.values(this.modifierButtons)]) node.disabled = disabled;
     if (disabled && (this.modifiers.ctrl || this.modifiers.alt)) this.reset();
@@ -102,8 +122,18 @@ export class TerminalKeyRow {
       const text = await navigator.clipboard.readText();
       if (this.target() !== target || !target.acceptsKeys) return;
       if (text) target.paste(text);
-    } catch (error) { this.report((error as Error).message || 'Clipboard paste failed.', true); }
-    target.focus();
+      target.focus();
+    } catch {
+      // Browsers without clipboard read permission still allow a native paste gesture.
+      if (this.target() === target && target.acceptsKeys) this.openPaste(target);
+    }
+  }
+  private openPaste(target: KeyTarget) {
+    this.pasteTarget = target; this.pasteInput.value = ''; this.pastePanel.hidden = false; this.pasteInput.focus();
+  }
+  private closePaste(restoreFocus: boolean) {
+    const target = this.pasteTarget; this.pasteTarget = undefined; this.pastePanel.hidden = true; this.pasteInput.value = '';
+    if (restoreFocus && target?.acceptsKeys) target.focus();
   }
   private sync() {
     for (const [name, node] of Object.entries(this.modifierButtons)) node.setAttribute('aria-pressed', String(this.modifiers[name as keyof KeyModifiers]));

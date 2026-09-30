@@ -88,3 +88,25 @@ test('phone key row sends escape, tab, arrows, latched chords and paste without 
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(row).toBeHidden();
 });
+
+test('refused clipboard reads fall back to a manual paste panel that returns focus to the terminal', async ({ page }) => {
+  await page.addInitScript(() => { navigator.clipboard.readText = () => Promise.reject(new DOMException('Read denied', 'NotAllowedError')); });
+  const id = await create(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await reader(id);
+  const row = page.locator('#terminal-key-row'), panel = row.locator('.terminal-paste'), textarea = page.locator('.pane-active textarea');
+  await textarea.focus();
+  await row.getByRole('button', { name: 'Paste clipboard text' }).click();
+  await expect(panel).toBeVisible(); await expect(panel.getByRole('textbox')).toBeFocused();
+  const box = (await panel.boundingBox())!, rowBox = (await row.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(390); expect(Math.abs(box.y + box.height - rowBox.y)).toBeLessThan(1);
+  await page.screenshot({ path: 'test-results/terminal-keys-paste-mobile.png' });
+  await panel.getByRole('button', { name: 'CANCEL' }).click();
+  await expect(panel).toBeHidden(); await expect(textarea).toBeFocused();
+  await row.getByRole('button', { name: 'Paste clipboard text' }).click();
+  await panel.getByRole('textbox').fill('hi');
+  await panel.getByRole('button', { name: 'SEND' }).click();
+  await expect(panel).toBeHidden(); await expect(textarea).toBeFocused();
+  await expect.poll(async () => keys(await received(id))).toEqual(['68', '69']);
+  await page.keyboard.insertText('q');
+});
