@@ -10,6 +10,7 @@ export class HostManager {
   private timer?: ReturnType<typeof setTimeout>;
   private renameId = '';
   private followOutput = true;
+  private outputGeometry = '';
   private readonly outputResize: ResizeObserver;
   constructor(private readonly api: Api, private readonly select: (id: string) => void) {
     element('host-manager-done').onclick = () => element<HTMLDialogElement>('host-manager').close();
@@ -40,10 +41,16 @@ export class HostManager {
     element('setup-open-host').onclick = () => { if (this.job?.machineId) select(this.job.machineId); element<HTMLDialogElement>('setup-dialog').close(); };
     element('setup-done').onclick = () => element<HTMLDialogElement>('setup-dialog').close();
     const output = element('setup-output');
-    output.addEventListener('scroll', () => { this.followOutput = output.scrollHeight - output.scrollTop - output.clientHeight < 30; });
+    // Reflow can deliver a scroll event before the resize observation. A scroll
+    // whose geometry changed is layout, not the reader, so it keeps following.
+    output.addEventListener('scroll', () => {
+      const current = this.measureOutput(output);
+      if (current !== this.outputGeometry) { this.outputGeometry = current; if (this.followOutput) { output.scrollTop = output.scrollHeight; return; } }
+      this.followOutput = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
+    });
     // Rewrapping on phone rotation or viewport resize must retain the prompt,
     // without dragging a reader who deliberately scrolled into earlier output.
-    this.outputResize = new ResizeObserver(() => { if (this.followOutput) output.scrollTop = output.scrollHeight; });
+    this.outputResize = new ResizeObserver(() => { if (this.followOutput) output.scrollTop = output.scrollHeight; this.outputGeometry = this.measureOutput(output); });
     element('setup-dialog').addEventListener('close', () => { clearTimeout(this.timer); this.outputResize.disconnect(); });
   }
   update(hosts: HostView[]) { this.hosts = hosts; if (element<HTMLDialogElement>('host-manager').open) this.render(); }
@@ -87,19 +94,23 @@ export class HostManager {
     catch (error) { element('host-error').textContent = (error as Error).message; }
     finally { button.disabled = false; }
   }
+  private measureOutput(output: HTMLElement) { return `${output.clientWidth}x${output.clientHeight}x${output.scrollHeight}`; }
   private showJob(job: SetupJob) {
     this.job = job; element<HTMLDialogElement>('host-manager').close(); element('setup-error').textContent = '';
     this.followOutput = true;
     const dialog = element<HTMLDialogElement>('setup-dialog');
     dialog.showModal(); this.renderJob();
     element('setup-output').scrollTop = element('setup-output').scrollHeight;
+    this.outputGeometry = this.measureOutput(element('setup-output'));
     this.outputResize.observe(element('setup-output')); void this.poll();
   }
   private renderJob() {
     if (!this.job) return;
     const job = this.job, output = element('setup-output');
     const follow = this.followOutput;
-    if (output.textContent !== job.output) { output.textContent = job.output; if (follow) output.scrollTop = output.scrollHeight; }
+    // Appended output changes scrollHeight without a resize; record it so the
+    // reader's next scroll is not mistaken for layout.
+    if (output.textContent !== job.output) { output.textContent = job.output; if (follow) output.scrollTop = output.scrollHeight; this.outputGeometry = this.measureOutput(output); }
     element('setup-status').textContent = `${job.label} / ${job.target} [${job.state.toUpperCase()}]`;
     element('setup-input-form').hidden = job.state !== 'running' || job.cancellable === false; element('setup-cancel').hidden = job.state !== 'running' || job.cancellable === false;
     element('setup-open-host').hidden = job.state !== 'complete' || !job.machineId;
