@@ -211,6 +211,7 @@ pub(crate) fn capture_service_supervisor() -> &'static ServiceSupervisor {
 
 impl ServiceSupervisor {
     /// Environment a handoff importer needs to claim this service.
+    #[cfg(unix)]
     pub(crate) fn importer_env(&self) -> Option<(&'static str, &std::ffi::OsStr)> {
         #[cfg(target_os = "linux")]
         return self
@@ -232,6 +233,7 @@ impl ServiceSupervisor {
     }
 
     /// Become the service's main process and wait until the manager applied it.
+    #[cfg(unix)]
     ///
     /// Call only after a handoff committed and before the exporter may exit.
     pub(crate) fn claim_main_process(&self, timeout: std::time::Duration) -> std::io::Result<()> {
