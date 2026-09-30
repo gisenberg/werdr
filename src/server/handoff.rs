@@ -20,8 +20,9 @@ use tracing::{info, warn};
 const HANDOFF_VERSION: u32 = 1;
 #[cfg(unix)]
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+// Covers the importer's bounded service-manager claim before it reports ownership.
 #[cfg(unix)]
-const OWNED_ACK_TIMEOUT: Duration = Duration::from_millis(500);
+const OWNED_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 // Descriptors are transferred in batches of this size. A single SCM_RIGHTS
 // control message caps out at 253 descriptors on Linux and 254 on macOS, so the
 // batch stays well below both limits and the number of panes stays unbounded.
@@ -118,6 +119,11 @@ pub(crate) fn spawn_handoff_import(
         command
             .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
             .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+    }
+    // The runtime removed the notify socket from its own environment so panes
+    // never inherit it; only the importer that may claim the service gets it.
+    if let Some((key, value)) = crate::platform::capture_service_supervisor().importer_env() {
+        command.env(key, value);
     }
     crate::platform::detach_server_daemon_command(&mut command);
     command.spawn().map_err(|err| {
