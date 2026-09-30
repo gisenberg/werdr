@@ -35,11 +35,13 @@ pub mod pane_graphics_files;
 mod snapshot;
 #[cfg(any(windows, test))]
 mod tracked_row_snapshot;
+mod transfer;
 pub use callback_snapshot::TerminalCallbackSnapshot;
 pub use graphics_policy_snapshot::GraphicsPolicySnapshot;
 pub use graphics_snapshot::{GraphicsSnapshot, GraphicsSnapshotLimits};
 #[cfg(any(windows, test))]
 pub use tracked_row_snapshot::TrackedRowSnapshot;
+pub use transfer::{TransferReader, TransferWriter};
 
 /// Terminfo entry the terminal emulates; child processes should see it as TERM.
 pub const TERM: &str = "xterm-256color";

@@ -30,8 +30,8 @@ impl GraphicsSnapshotLimits {
 /// Keeps native-file attachments alive independently of the source terminal.
 /// Private bytes cannot be detached and mistaken for a cross-process snapshot.
 pub struct GraphicsSnapshot {
-    bytes: Vec<u8>,
-    attachments: HashMap<u64, Arc<OwnedExport>>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) attachments: HashMap<u64, Arc<OwnedExport>>,
 }
 
 impl GraphicsSnapshot {
@@ -450,6 +450,17 @@ mod tests {
         let path = base64::engine::general_purpose::STANDARD
             .encode(source.path().as_os_str().as_encoded_bytes());
         t.write(format!("\x1b_Ga=T,t=f,f=32,s=1,v=1,i={id},q=2;{path}\x1b\\").as_bytes());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn file_backed_graphics_are_not_offered_for_byte_transfer() {
+        let file = Arc::new(FileStore::default().export(&[1, 2, 3, 4]).unwrap());
+        let mut source = terminal();
+        upload_file(&mut source, &file, 1);
+        let snapshot = source.graphics_snapshot(LIMITS).unwrap();
+        assert_eq!(snapshot.attachments.len(), 1);
+        assert!(snapshot.transfer_bytes().is_none());
     }
 
     #[cfg(target_os = "linux")]

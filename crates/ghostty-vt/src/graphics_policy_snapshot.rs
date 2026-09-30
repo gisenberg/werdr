@@ -3,10 +3,10 @@
 use crate::{ffi, native_source, Error, GhosttyResultExt, Terminal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScreenPolicy {
-    flags: u32,
-    storage_limit: u64,
-    directory: Vec<u8>,
+pub(crate) struct ScreenPolicy {
+    pub(crate) flags: u32,
+    pub(crate) storage_limit: u64,
+    pub(crate) directory: Vec<u8>,
 }
 
 /// In-memory policy record, not a wire format or full snapshot eligibility.
@@ -14,14 +14,14 @@ struct ScreenPolicy {
 /// its separate authoritative snapshot; retained graphics remain excluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsPolicySnapshot {
-    features: u32,
-    flags: u32,
-    kitty_max_bytes: usize,
-    glyph_max_bytes: usize,
-    unknown_max_bytes: usize,
-    screens: [ScreenPolicy; 2],
-    png_forwarding: bool,
-    source_forwarding: bool,
+    pub(crate) features: u32,
+    pub(crate) flags: u32,
+    pub(crate) kitty_max_bytes: usize,
+    pub(crate) glyph_max_bytes: usize,
+    pub(crate) unknown_max_bytes: usize,
+    pub(crate) screens: [ScreenPolicy; 2],
+    pub(crate) png_forwarding: bool,
+    pub(crate) source_forwarding: bool,
 }
 
 impl GraphicsPolicySnapshot {
