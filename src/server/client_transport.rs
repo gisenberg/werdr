@@ -1706,11 +1706,14 @@ mod tests {
     fn observer_write_timeout_resets_when_sending_makes_progress() {
         use std::io::Read as _;
 
+        // The transfer spans several timeouts while each gap stays well below
+        // one, so only a timeout measured from the last progress can pass.
+        // The margin tolerates scheduler stalls on shared CI runners.
+        const TIMEOUT: Duration = Duration::from_millis(400);
         let (mut client, mut server, _path) = local_stream_pair("slow-observer");
-        server
-            .set_send_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
+        server.set_send_timeout(Some(TIMEOUT)).unwrap();
         server.set_nonblocking(true).unwrap();
+        let started = std::time::Instant::now();
         let worker = std::thread::spawn(move || {
             assert!(write_framed_bytes(&mut server, &vec![b'x'; 1024 * 1024]));
         });
@@ -1723,9 +1726,13 @@ mod tests {
             let count = client.read(&mut buffer).unwrap();
             assert_ne!(count, 0, "observer disconnected while making progress");
             received += count;
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(20));
         }
         worker.join().unwrap();
+        assert!(
+            started.elapsed() > TIMEOUT * 2,
+            "the transfer must outlast the timeout to prove it resets"
+        );
     }
 
     #[cfg(unix)]

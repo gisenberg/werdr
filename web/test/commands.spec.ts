@@ -38,6 +38,8 @@ test('configured shell, pane, popup and plugin commands use the browser target a
     await page.getByRole('button', { name: 'Create workspace', exact: true }).click(); await expect(page.locator('#shield')).toBeHidden();
     const source = Object.fromEntries(new URL(page.url()).searchParams);
     const foreign = JSON.parse(await runtime.cli('workspace', 'create')).result.root_pane;
+    // Navigate previews only workspaces the browser already lists.
+    await expect(page.locator(`#workspaces button[data-id="local/${foreign.workspace_id}"]`)).toBeAttached();
     await expect(page.locator('#terminal textarea')).toBeFocused();
     await page.keyboard.press('Control+b'); await page.keyboard.press('y');
     await expect.poll(async () => { try { return JSON.parse(await readFile(marker, 'utf8')).HERDR_ACTIVE_PANE_ID; } catch { return undefined; } }).toBe(source.pane);

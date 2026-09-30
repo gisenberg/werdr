@@ -64,6 +64,8 @@ for (const confirmClose of [true, false]) test(`duplicate repository parents ret
     await page.getByRole('menuitem', { name: 'CLOSE WORKSPACE', exact: true }).click();
     await expect(row(page, third)).toHaveCount(0); await expect(row(page, first)).toBeVisible(); await expect(row(page, child)).toBeVisible();
     const fourth = await createParent('Fourth repository parent'); await expect(row(page, fourth)).toBeVisible();
+    // A row can render before its worktree membership arrives with later metadata.
+    await expect(row(page, first)).toHaveAttribute('title', /\b3 workspaces in group\b/);
     await row(page, first).click({ button: 'right' });
     if (confirmClose) page.once('dialog', dialog => { expect(dialog.message()).toContain('all 3 workspaces'); void dialog.accept(); });
     await page.getByRole('menuitem', { name: 'CLOSE GROUP', exact: true }).click();
