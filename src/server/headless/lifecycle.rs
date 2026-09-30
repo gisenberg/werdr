@@ -247,7 +247,7 @@ impl HeadlessServer {
                 Ok((terminal_id.clone(), handoff_runtime, exact.map(|draft| draft.bytes)))
             })
             .collect::<io::Result<Vec<_>>>();
-        let handoff_entries = match handoff_entries {
+        let mut handoff_entries = match handoff_entries {
             Ok(entries) => entries,
             Err(err) => {
                 self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
@@ -259,9 +259,10 @@ impl HeadlessServer {
             .iter()
             .map(|(_, runtime, _)| runtime.clone())
             .collect();
+        // Move, not copy: each record can hold a pane's complete history.
         let terminal_states: Vec<_> = handoff_entries
-            .iter()
-            .map(|(_, _, state)| state.clone())
+            .iter_mut()
+            .map(|(_, _, state)| state.take())
             .collect();
         let mut manifest = crate::server::handoff::manifest_for(
             snapshot,
