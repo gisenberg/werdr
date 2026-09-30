@@ -13,6 +13,8 @@ env:
 
 jobs:
   close:
+    # Upstream website and issue automation; forks lack its secrets and issues.
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
 
     steps:
