@@ -425,6 +425,17 @@ This candidate passes all 175 browser package tests and the native suite of 3,29
 
 ## Native runtime rollout gate
 
+### Status, 2026-09-29
+
+The source now transfers each pane's exact terminal state during a Unix live handoff, and statements below that describe screen export as not wired into handoff are historical.
+An exact record carries both screens, full history, saved cursors, modes, charset state, unfinished escape sequences, herdr's per-pane terminal trackers and pending replies.
+Records are accepted only by an importer with the identical codec identity, derived from the vendored libghostty commit, its patch set and herdr's terminal-state schema.
+`--require-lossless` refuses before ownership moves when any pane cannot be transferred exactly; file-backed Kitty images are the known exclusion.
+`tests/live_handoff.rs` verifies modes, live and saved cursors, the active alternate screen, split escape and charset continuation, exactly-once output across the cut, full history and the unchanged process through two chained handoffs, plus refusal and fallback for incompatible importers.
+Under systemd, the importer claims the service main process through `sd_notify` and a notify barrier before the exporter exits; `werdr/test-systemd-handoff.sh` verifies retained shells, the new main process and zero restarts under the production kill policy.
+Windows owners upgrade only when idle.
+The deployed owners predate these changes, so adopting them ends werdr sessions once; production verification of a lossless upgrade remains outstanding.
+
 Scrollbar screen-mode metadata, native agent-view projections, and custom-tab-label metadata require a new server runtime; updating the terminal companion alone cannot provide them.
 
 A passive endpoint metadata reader cannot safely bypass this rollout gate on the current production runtimes.

@@ -137,9 +137,31 @@ Theme and font changes update the mounted terminal without releasing its control
 Desktop displays the native split tree with independent controllers for visible panes; phones display the selected pane.
 Metadata stays connected for every enabled saved host through native event subscriptions, with a ten-second reconciliation heartbeat.
 A surface retains up to 16 pane controllers, with explicit capacity feedback and zoom access for larger layouts.
-Full wmux media/clipboard integration remains outside the current browser implementation.
 The remaining native desktop work is tracked in [the parity acceptance matrix](werdr/DESKTOP_PARITY.md).
-This is a working first version, not feature parity with wmux.
+See [replacing wmux](werdr/WMUX_REPLACEMENT.md) for the wmux workflows werdr covers and the ones that remain.
+See [remaining migration actions and feature gaps](werdr/MIGRATION_REMAINING.md) for the deployment sequence and unfinished behavior.
+
+## Clipboard, phones and home screens
+
+Applications copy to your clipboard with OSC 52, as they would in a native terminal.
+The browser controlling that pane writes the text directly when it has focus; otherwise the pane shows a **CLIPBOARD REQUEST** with a **[COPY]** action that expires after a minute.
+Read-only viewers never receive clipboard writes, and requests are limited to 1 MiB of text.
+
+Phones and touch devices show a key row beneath the terminal with ESC, TAB, CTRL, ALT, arrows and PASTE.
+CTRL and ALT apply to the next key or typed character, and tapping one again cancels it.
+Keys use the pane's negotiated keyboard protocol and never close the on-screen keyboard.
+When the browser refuses to read the clipboard, PASTE opens a field where you can paste with the system gesture and then send.
+Native popups carry the same row.
+
+werdr can be installed as a standalone app from the browser's add-to-home-screen or install action.
+
+## Upgrading the runtime
+
+Restarting or upgrading the gateway never ends a session; herdr owns the processes.
+On Linux, `herdr server live-handoff --import-exe <new-herdr> --require-lossless` replaces the owning runtime while keeping every pane's process, history, screens, modes and cursor.
+It refuses, leaving everything unchanged, when a pane cannot be transferred exactly or the new build uses a different libghostty.
+Run the owner under systemd with `Type=notify` and `NotifyAccess=all` so the new runtime becomes the service's main process before the old one exits.
+Windows cannot transfer console sessions between processes, so Windows owners are upgraded only when idle.
 
 ## Configuration and operations
 
