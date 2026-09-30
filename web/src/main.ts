@@ -316,7 +316,7 @@ function renderNavigation() {
   shortcuts?.updateCommands(availableNativeCommands());
   element('tabs').hidden = preferences.hideSingleTab && snapshot.tabs.filter(t => t.workspace_id === workspaceId).length <= 1;
   navigation('tabs', snapshot.tabs.filter(t => t.workspace_id === workspaceId).map(t => ({ id: t.tab_id, context: { kind: 'tab', machine: machineId, id: t.tab_id }, label: t.label || t.tab_id, active: t.tab_id === tabId, select: () => { reconnectSelection = undefined; restoration.cancel(); ++selectionIntent; tabId = t.tab_id; paneId = ''; choose(); } })));
-  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: `${rowStatusIcon(p.agent_status, preferences.indicators)} ${p.label || p.title || p.pane_id}`, active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
+  navigation('panes', snapshot.panes.filter(p => p.tab_id === tabId).map(p => ({ id: p.pane_id, context: { kind: 'pane', machine: machineId, id: p.pane_id }, label: [rowStatusIcon(p.agent_status, preferences.indicators), p.label || p.title || p.pane_id].filter(Boolean).join(' '), active: p.pane_id === paneId, select: () => selectPane(p.pane_id) })));
   updateShieldBounds();
   element<HTMLButtonElement>('new-tab').disabled = !workspaceId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
   for (const id of ['split', 'takeover', 'close', 'pane-actions']) element<HTMLButtonElement>(id).disabled = !paneId || (!!pendingPane || restoration.active) || selectedHost()?.connection !== 'online';
