@@ -45,7 +45,7 @@ export class ClipboardFeedback {
     if (!preferences.clipboardToast || performance.now() >= this.deadline) { this.clear(); return; }
     const bounds = this.container.getBoundingClientRect(), toast = document.getElementById('notice-toast');
     // Pane-anchored link and clipboard actions stay clickable beneath the feedback.
-    const notices = [...(toast && !toast.hidden ? [toast] : []), ...this.container.querySelectorAll<HTMLElement>('.terminal-link-notice:not([hidden])')]
+    const notices = [...(toast && !toast.hidden ? [toast] : []), ...this.container.querySelectorAll<HTMLElement>('.terminal-link-notice:not([hidden]), .terminal-clipboard-request:not([hidden])')]
       .map(node => node.getBoundingClientRect()).filter(rect => rect.width && rect.height)
       .map(rect => ({ x: rect.x - bounds.x, y: rect.y - bounds.y, width: rect.width, height: rect.height }));
     const position = clipboardFeedbackRect(this.container.clientWidth, this.container.clientHeight, { width: this.node.offsetWidth, height: this.node.offsetHeight }, preferences.clipboardToastPosition, notices);

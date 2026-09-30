@@ -24,7 +24,7 @@ export class TerminalClipboardRequests {
   private timer?: ReturnType<typeof setTimeout>;
   private generation = 0;
   constructor(container: HTMLElement, private report: (message: string, failed?: boolean) => void, private copied: () => void) {
-    this.notice.className = 'terminal-link-notice terminal-clipboard-request'; this.notice.setAttribute('role', 'status'); this.notice.hidden = true;
+    this.notice.className = 'terminal-clipboard-request'; this.notice.setAttribute('role', 'status'); this.notice.hidden = true;
     container.append(this.notice);
   }
   receive(data: unknown) {
