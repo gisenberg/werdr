@@ -10,7 +10,9 @@ test('palette searches native targets, moves by keyboard, and focuses selected p
     const first = new URL(page.url()).searchParams.get('pane')!;
     const original = await page.locator('.pane-active textarea').elementHandle();
     await page.keyboard.press('Control+d'); await expect(page.locator('.terminal-pane:visible')).toHaveCount(2);
-    const second = new URL(page.url()).searchParams.get('pane')!; expect(second).not.toBe(first);
+    // Two panes can render before the new split's selection reaches the URL.
+    await expect.poll(() => new URL(page.url()).searchParams.get('pane')).not.toBe(first);
+    const second = new URL(page.url()).searchParams.get('pane')!;
     await page.keyboard.press('Control+k'); await page.locator('#command-search').fill('Pane:');
     const results = page.locator('#command-list button'); await expect(results).toHaveCount(2);
     await page.keyboard.press('ArrowDown'); await expect(results.nth(0)).toBeFocused();
