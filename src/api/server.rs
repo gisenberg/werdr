@@ -1144,8 +1144,15 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+            .subsec_nanos();
+        // Socket paths must fit sun_path (104 bytes on macOS, whose per-user
+        // temp directory alone can use half of that), so keep them short.
+        #[cfg(unix)]
+        let base = PathBuf::from("/tmp");
+        #[cfg(not(unix))]
+        let base = std::env::temp_dir();
+        let name: String = name.chars().take(24).collect();
+        base.join(format!("herdr-{name}-{}-{nanos:x}", std::process::id()))
     }
 
     fn read_line(stream: &mut LocalStream) -> String {
