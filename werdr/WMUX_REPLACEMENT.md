@@ -20,10 +20,10 @@ A row is complete only when the behavior exists, has automated coverage, and is 
 
 | ID | Workflow | werdr status |
 | --- | --- | --- |
-| B4 | Inline images (Kitty graphics), `wmux-media` and the media shelf | Missing; the terminal stream does not carry graphics records to the browser |
+| B4 | Inline images (Kitty graphics), `wmux-media` and the media shelf | Not planned; decided on 2026-09-29 that werdr does not need inline images |
 | B4 | Screen streaming and Moonlight | Not part of werdr; these services already run independently of the wmux gateway and should move out of the wmux repository |
-| B6 | Mobile chat view built from agent timelines, answering OpenCode questions in the browser | Missing |
-| B6 | Native iOS/Android app (`wmux-mobile`) | Bound to the wmux API; replace with the installable werdr web app or port |
+| B6 | Native iOS/Android app (`wmux-mobile`) | Planned as `werdr-mobile`, modeled on `wmux-mobile` but built on the werdr gateway API; the installable web app with the touch key row covers phones until then |
+| B6 | Mobile chat view built from agent timelines, answering agent questions from the phone | Candidate `werdr-mobile` features; not planned for the browser client |
 | B7 | Installable web app | Implemented: manifest, icons and standalone display (`pwa.spec.ts`) |
 | B7 | Local input prediction and latency diagnostics | Missing; most useful for Windows panes over SSH |
 | B7 | Rectangular (Alt-drag) selection | Missing |
