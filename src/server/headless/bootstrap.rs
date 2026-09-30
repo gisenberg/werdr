@@ -145,13 +145,17 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
     let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
-    for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
+    let require_exact_terminal_state = received.manifest.require_lossless;
+    let panes = received.manifest.panes.into_iter().zip(received.fds);
+    for ((pane, fd), terminal_state) in panes.zip(received.terminal_states) {
         let pane_id = pane.pane_id;
         imports.insert(
             pane_id,
             crate::handoff_runtime::ImportedHandoffRuntime {
                 master_fd: fd,
                 state: pane,
+                terminal_state,
+                require_exact_terminal_state,
             },
         );
     }

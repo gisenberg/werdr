@@ -436,6 +436,7 @@ mod tests {
                 semantic_notifications: true,
                 workspace_git_status: true,
                 live_handoff: true,
+                lossless_handoff: false,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,
                 surface_interest: true,

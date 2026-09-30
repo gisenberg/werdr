@@ -1,11 +1,15 @@
-//! Coordinated in-memory capture primitive, NOT a handoff-ready format.
+//! Coordinated pane terminal capture and its live-handoff transfer encoding.
 //!
-//! Retained graphics and owned file attachments are preserved in-process.
-//! Glyph state and unsupported external producer authority remain rejected.
-//! This still is not a complete handoff format. The caller
-//! must fence readers and control producers: replies/notifications already
-//! returned from process_pty_bytes or queued in PTY actors are outside this lock.
-//! Do not expose this draft through runtime negotiation or transport.
+//! In-process drafts preserve retained graphics and owned file attachments.
+//! The transfer encoding (`encode_transfer`/`decode_transfer`) carries every
+//! domain by value between builds with an identical `terminal_state_codec`;
+//! native-file backed images are the only state it cannot carry, and it
+//! reports them as dropped. Glyph state and unsupported external producer
+//! authority remain rejected at capture.
+//! The caller must fence readers and control producers: replies/notifications
+//! already returned from process_pty_bytes or queued in PTY actors are outside
+//! this lock. Live handoff captures only after its PTY actor quiesce, which
+//! drains queued writes and replies and stops reads.
 //! Restored callback queues require explicit consumption: process_pty_bytes
 //! discards pre-existing callback effects as historical, not newly received.
 
@@ -52,7 +56,9 @@ pub(crate) struct PaneStateDraft {
     caller: Vec<u8>,
     callbacks: crate::ghostty::TerminalCallbackSnapshot,
     graphics_policy: crate::ghostty::GraphicsPolicySnapshot,
-    graphics: crate::ghostty::GraphicsSnapshot,
+    // Absent only for transferred drafts whose file-backed images could not
+    // cross the process boundary; restoration then starts graphics-empty.
+    graphics: Option<crate::ghostty::GraphicsSnapshot>,
     clipboard_write: Vec<u8>,
     dnd: Vec<u8>,
     handler: Vec<u8>,
@@ -88,7 +94,9 @@ impl PaneStateDraft {
         ] {
             total = total.checked_add(bytes.len())?;
         }
-        total = total.checked_add(self.graphics.retained_payload_bytes()?)?;
+        if let Some(graphics) = &self.graphics {
+            total = total.checked_add(graphics.retained_payload_bytes()?)?;
+        }
         total = total.checked_add(self.graphics_policy.retained_payload_bytes()?)?;
         for queue in [
             &self.callbacks.pwd_changes,
@@ -283,10 +291,11 @@ impl GhosttyPaneTerminal {
                 .terminal
                 .graphics_policy_snapshot(limits.graphics_policy_bytes)
                 .map_err(|e| e.to_string())?,
-            graphics: core
-                .terminal
-                .graphics_snapshot(limits.graphics)
-                .map_err(|e| e.to_string())?,
+            graphics: Some(
+                core.terminal
+                    .graphics_snapshot(limits.graphics)
+                    .map_err(|e| e.to_string())?,
+            ),
             native,
             caller: writer.bytes,
             callbacks,
@@ -324,9 +333,11 @@ impl GhosttyPaneTerminal {
         terminal
             .restore_graphics_policy_snapshot(&draft.graphics_policy, limits.graphics_policy_bytes)
             .map_err(|e| e.to_string())?;
-        terminal
-            .restore_graphics_snapshot(&draft.graphics, limits.graphics)
-            .map_err(|e| e.to_string())?;
+        if let Some(graphics) = &draft.graphics {
+            terminal
+                .restore_graphics_snapshot(graphics, limits.graphics)
+                .map_err(|e| e.to_string())?;
+        }
         terminal
             .restore_clipboard_write_snapshot(&draft.clipboard_write, limits.clipboard_write_bytes)
             .map_err(|e| e.to_string())?;
@@ -384,6 +395,219 @@ impl GhosttyPaneTerminal {
             .map_err(|_| "poisoned restored reply queue")? = draft.replies;
         drop(core);
         Ok(result)
+    }
+}
+
+/// Bump whenever the meaning of any herdr-side draft encoding changes without
+/// a matching decode failure, so mismatched builds never exchange exact state.
+#[cfg(unix)]
+pub(crate) const TERMINAL_STATE_SCHEMA: u32 = 1;
+#[cfg(unix)]
+const TRANSFER_MAGIC: &[u8] = b"herdr-pane-state";
+
+/// Identity of this build's exact terminal-state codec. Exact state crosses a
+/// live handoff only between builds reporting the same identity: the vendored
+/// native snapshot format carries no cross-version compatibility guarantee.
+#[cfg(unix)]
+pub(crate) fn terminal_state_codec() -> String {
+    format!(
+        "herdr-pane-state-{TERMINAL_STATE_SCHEMA}+{}",
+        env!("HERDR_TERMINAL_STATE_CODEC")
+    )
+}
+
+/// Production budgets for live handoff. The importer only decodes records from
+/// a token-authenticated exporter of the same user, but every length is still
+/// bounded. Continuation must equal the runtime tracking limit so restored
+/// panes keep capturing the same unfinished input after a later handoff.
+#[cfg(unix)]
+pub(crate) fn handoff_limits() -> DraftLimits {
+    const MIB: usize = 1 << 20;
+    DraftLimits {
+        native_bytes: 256 * MIB,
+        caller_bytes: 16 * MIB,
+        reply_bytes: 16 * MIB,
+        callback_bytes: 16 * MIB,
+        native_allocation_bytes: 1024 * MIB,
+        continuation_bytes: super::super::runtime_terminal::CONTINUATION_BYTES,
+        graphics_policy_bytes: 64 * 1024,
+        graphics: crate::ghostty::GraphicsSnapshotLimits {
+            encoded_bytes: 256 * MIB,
+            backing_bytes: 1024 * MIB,
+            images: 1 << 16,
+            placements: 1 << 16,
+            policy_bytes: 64 * 1024,
+        },
+        clipboard_write_bytes: 16 * MIB,
+        dnd_bytes: 16 * MIB,
+        handler_bytes: 16 * MIB,
+        osc_capture_bytes: 16 * MIB,
+        apc_bytes: 16 * MIB,
+    }
+}
+
+/// A draft encoded for another process, and whether retained graphics had to
+/// be dropped because they referenced process-local file attachments.
+#[cfg(unix)]
+pub(crate) struct TransferredDraft {
+    pub bytes: Vec<u8>,
+    pub graphics_dropped: bool,
+}
+
+#[cfg(unix)]
+impl PaneStateDraft {
+    /// Encode every captured domain by value. Native-file backed images are the
+    /// only state that cannot cross the boundary; they are reported, not hidden.
+    pub(crate) fn encode_transfer(&self) -> TransferredDraft {
+        use crate::ghostty::TransferWriter;
+        let mut w = TransferWriter::new();
+        w.bytes(TRANSFER_MAGIC);
+        w.u32(TERMINAL_STATE_SCHEMA);
+        w.bytes(&self.native);
+        w.bytes(&self.caller);
+        let callbacks = &self.callbacks;
+        w.u16(callbacks.rows);
+        w.u16(callbacks.columns);
+        w.u32(callbacks.cell_width);
+        w.u32(callbacks.cell_height);
+        w.u8(match callbacks.color_scheme {
+            None => 0,
+            Some(crate::ghostty::ColorScheme::Light) => 1,
+            Some(crate::ghostty::ColorScheme::Dark) => 2,
+        });
+        w.u16(callbacks.bell_count);
+        for queue in [&callbacks.pwd_changes, &callbacks.clipboard_writes] {
+            w.u64(queue.len() as u64);
+            for item in queue {
+                w.bytes(item);
+            }
+        }
+        self.graphics_policy.encode_transfer(&mut w);
+        let graphics = self
+            .graphics
+            .as_ref()
+            .and_then(crate::ghostty::GraphicsSnapshot::transfer_bytes);
+        match graphics {
+            Some(bytes) => {
+                w.u8(1);
+                w.bytes(bytes);
+            }
+            None => w.u8(0),
+        }
+        for bytes in [
+            &self.clipboard_write,
+            &self.dnd,
+            &self.handler,
+            &self.osc_capture,
+            &self.apc,
+        ] {
+            w.bytes(bytes);
+        }
+        w.u64(self.replies.len() as u64);
+        for reply in &self.replies {
+            w.bytes(reply);
+        }
+        TransferredDraft {
+            bytes: w.finish(),
+            graphics_dropped: self.graphics.is_some() && graphics.is_none(),
+        }
+    }
+
+    /// Strictly decode [`Self::encode_transfer`] output. Budgets are enforced
+    /// again when the draft is restored into a terminal.
+    pub(crate) fn decode_transfer(bytes: &[u8], limits: DraftLimits) -> Result<Self, String> {
+        use crate::ghostty::TransferReader;
+        let err = |e: crate::ghostty::Error| format!("invalid transferred terminal state: {e}");
+        let mut r = TransferReader::new(bytes);
+        if r.bytes().map_err(err)? != TRANSFER_MAGIC {
+            return Err("transferred terminal state has an unknown format".into());
+        }
+        let schema = r.u32().map_err(err)?;
+        if schema != TERMINAL_STATE_SCHEMA {
+            return Err(format!(
+                "transferred terminal state schema {schema} is not {TERMINAL_STATE_SCHEMA}"
+            ));
+        }
+        let native = r.owned_bytes().map_err(err)?;
+        let caller = r.owned_bytes().map_err(err)?;
+        let rows = r.u16().map_err(err)?;
+        let columns = r.u16().map_err(err)?;
+        let cell_width = r.u32().map_err(err)?;
+        let cell_height = r.u32().map_err(err)?;
+        let color_scheme = match r.u8().map_err(err)? {
+            0 => None,
+            1 => Some(crate::ghostty::ColorScheme::Light),
+            2 => Some(crate::ghostty::ColorScheme::Dark),
+            other => return Err(format!("invalid transferred color scheme {other}")),
+        };
+        let bell_count = r.u16().map_err(err)?;
+        let queue = |r: &mut TransferReader<'_>| -> Result<Vec<Vec<u8>>, String> {
+            let count = usize::try_from(r.u64().map_err(err)?).map_err(|e| e.to_string())?;
+            // Each entry needs at least its eight-byte length prefix.
+            if count > bytes.len() / 8 {
+                return Err("invalid transferred callback queue".into());
+            }
+            (0..count).map(|_| r.owned_bytes().map_err(err)).collect()
+        };
+        let pwd_changes = queue(&mut r)?;
+        let clipboard_writes = queue(&mut r)?;
+        let graphics_policy = crate::ghostty::GraphicsPolicySnapshot::decode_transfer(
+            &mut r,
+            limits.graphics_policy_bytes,
+        )
+        .map_err(err)?;
+        let graphics = match r.u8().map_err(err)? {
+            0 => None,
+            1 => Some(crate::ghostty::GraphicsSnapshot::from_transfer_bytes(
+                r.owned_bytes().map_err(err)?,
+            )),
+            other => return Err(format!("invalid transferred graphics marker {other}")),
+        };
+        let clipboard_write = r.owned_bytes().map_err(err)?;
+        let dnd = r.owned_bytes().map_err(err)?;
+        let handler = r.owned_bytes().map_err(err)?;
+        let osc_capture = r.owned_bytes().map_err(err)?;
+        let apc = r.owned_bytes().map_err(err)?;
+        let replies = queue(&mut r)?.into_iter().map(Bytes::from).collect();
+        r.finish().map_err(err)?;
+        Ok(Self {
+            native,
+            caller,
+            callbacks: crate::ghostty::TerminalCallbackSnapshot {
+                rows,
+                columns,
+                cell_width,
+                cell_height,
+                color_scheme,
+                bell_count,
+                pwd_changes,
+                clipboard_writes,
+            },
+            graphics_policy,
+            graphics,
+            clipboard_write,
+            dnd,
+            handler,
+            osc_capture,
+            apc,
+            replies,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl GhosttyPaneTerminal {
+    /// Rebuild an unpublished pane terminal from a live-handoff record.
+    pub(in crate::pane) fn restore_transferred_state(
+        bytes: &[u8],
+        writer: mpsc::Sender<Bytes>,
+    ) -> Result<Self, String> {
+        let limits = handoff_limits();
+        Self::restore_state_draft(
+            PaneStateDraft::decode_transfer(bytes, limits)?,
+            limits,
+            writer,
+        )
     }
 }
 
@@ -933,7 +1157,8 @@ mod tests {
                 let draft = source.capture_state_draft(limits()).unwrap();
                 let restored =
                     GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
-                let draft = restored.capture_state_draft(limits()).unwrap();
+                // The second hop crosses the byte encoding used by live handoff.
+                let draft = transferred(restored.capture_state_draft(limits()).unwrap());
                 let restored =
                     GhosttyPaneTerminal::restore_state_draft(draft, limits(), tx.clone()).unwrap();
                 for suffix in [
@@ -992,7 +1217,7 @@ mod tests {
             .callback_snapshot(1 << 20)
             .unwrap();
         assert!(callbacks.bell_count > 0);
-        let draft = source.capture_state_draft(limits()).unwrap();
+        let draft = transferred(source.capture_state_draft(limits()).unwrap());
         assert_eq!(*source.pending_pty_responses.lock().unwrap(), before);
         assert_eq!(
             source
@@ -1167,5 +1392,105 @@ mod tests {
                 .unwrap()
                 .contains("poisoned"));
         }
+    }
+
+    /// Cross the live-handoff byte encoding where it exists; Windows keeps the
+    /// in-process draft because live handoff is Unix-only.
+    fn transferred(draft: PaneStateDraft) -> PaneStateDraft {
+        #[cfg(unix)]
+        {
+            let encoded = draft.encode_transfer();
+            assert!(!encoded.graphics_dropped);
+            PaneStateDraft::decode_transfer(&encoded.bytes, limits()).unwrap()
+        }
+        #[cfg(not(unix))]
+        draft
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transferred_draft_rejects_truncation_trailing_data_and_foreign_schemas() {
+        let (tx, _rx) = mpsc::channel(16);
+        let source = pane(&tx);
+        feed(&source, &tx, b"retained\x1b[3");
+        let bytes = source
+            .capture_state_draft(limits())
+            .unwrap()
+            .encode_transfer()
+            .bytes;
+        assert!(PaneStateDraft::decode_transfer(&bytes, limits()).is_ok());
+        for cut in [0, 1, 8, bytes.len() / 2, bytes.len() - 1] {
+            assert!(PaneStateDraft::decode_transfer(&bytes[..cut], limits()).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(PaneStateDraft::decode_transfer(&trailing, limits()).is_err());
+        // Layout: 8-byte magic length, magic, then the little-endian schema.
+        let schema = 8 + TRANSFER_MAGIC.len();
+        let mut future = bytes.clone();
+        future[schema..schema + 4].copy_from_slice(&(TERMINAL_STATE_SCHEMA + 1).to_le_bytes());
+        let error = PaneStateDraft::decode_transfer(&future, limits())
+            .err()
+            .unwrap();
+        assert!(error.contains("schema"), "{error}");
+        let mut foreign = bytes;
+        foreign[8] ^= 0xff;
+        assert!(PaneStateDraft::decode_transfer(&foreign, limits()).is_err());
+        assert!(terminal_state_codec().starts_with(&format!(
+            "herdr-pane-state-{TERMINAL_STATE_SCHEMA}+ghostty-"
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transferred_draft_keeps_inline_images_and_reports_dropped_file_images() {
+        use base64::Engine;
+        let (tx, _rx) = mpsc::channel(16);
+        let inline = graphics_pane(&tx);
+        feed(
+            &inline,
+            &tx,
+            b"text\x1b_Ga=T,f=32,s=1,v=1,i=1,q=2;AQIDBA==\x1b\\",
+        );
+        let encoded = inline
+            .capture_state_draft(limits())
+            .unwrap()
+            .encode_transfer();
+        assert!(!encoded.graphics_dropped);
+        let restored = GhosttyPaneTerminal::restore_state_draft(
+            PaneStateDraft::decode_transfer(&encoded.bytes, limits()).unwrap(),
+            limits(),
+            tx.clone(),
+        )
+        .unwrap();
+        assert_eq!(graphics(&restored)[0].data, [1, 2, 3, 4]);
+
+        let files = graphics_pane(&tx);
+        let store = crate::ghostty::pane_graphics_files::FileStore::default();
+        let original = store.export(&[1, 2, 3, 4]).unwrap();
+        let path = base64::engine::general_purpose::STANDARD
+            .encode(original.path().as_os_str().as_encoded_bytes());
+        feed(
+            &files,
+            &tx,
+            format!("kept\x1b_Ga=T,t=f,f=32,s=1,v=1,i=7,q=2;{path}\x1b\\").as_bytes(),
+        );
+        if graphics(&files)[0].source_file.is_none() {
+            // Filesystems without cloning decode the upload inline instead.
+            return;
+        }
+        let encoded = files
+            .capture_state_draft(limits())
+            .unwrap()
+            .encode_transfer();
+        assert!(encoded.graphics_dropped);
+        let restored = GhosttyPaneTerminal::restore_state_draft(
+            PaneStateDraft::decode_transfer(&encoded.bytes, limits()).unwrap(),
+            limits(),
+            tx.clone(),
+        )
+        .unwrap();
+        assert!(graphics(&restored).is_empty());
+        assert!(restored.visible_text().contains("kept"));
     }
 }

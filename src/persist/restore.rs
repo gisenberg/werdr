@@ -639,6 +639,8 @@ fn restore_tab(
                     crate::handoff_runtime::ImportedHandoffRuntime {
                         master_fd: imported.master_fd,
                         state: imported.state.with_pane_id(*id),
+                        terminal_state: imported.terminal_state,
+                        require_exact_terminal_state: imported.require_exact_terminal_state,
                     },
                     runtime_context.scrollback_limit_bytes,
                     crate::terminal_theme::TerminalTheme::default(),
@@ -2000,6 +2002,8 @@ mod tests {
                 crate::handoff_runtime::ImportedHandoffRuntime {
                     master_fd: runtime.duplicate_handoff_fd().unwrap(),
                     state,
+                    terminal_state: None,
+                    require_exact_terminal_state: false,
                 },
             )]);
             let (_, mut restored_terminals, restored_runtimes) = restore_handoff(

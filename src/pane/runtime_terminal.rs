@@ -4,7 +4,7 @@
 // The native tracker starts at 4 KiB and grows only for unfinished sequences.
 // Overlong input keeps parsing normally but makes capture unavailable until
 // a genuine parser recovery. Never truncate or substitute ANSI for that state.
-const CONTINUATION_BYTES: usize = 1 << 20;
+pub(super) const CONTINUATION_BYTES: usize = 1 << 20;
 
 pub(super) fn new(
     cols: u16,

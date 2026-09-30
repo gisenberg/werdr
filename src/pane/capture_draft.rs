@@ -1,10 +1,11 @@
 //! Private terminal-only capture through the real Unix PTY actor.
 //!
-//! This is not a runtime handoff or an event ownership cut. Queued application
-//! effects, child-exit state and detector state are not captured here. Detector
-//! suspension preserves its live task state, not a transferable representation.
+//! This is not an event ownership cut. Queued application effects, child-exit
+//! state and detector state are not captured here. Detector suspension
+//! preserves its live task state, not a transferable representation.
 //! Observed exit evidence invalidates capture, but child watchers are not frozen.
-//! Keep this disconnected from the production handoff protocol.
+//! Live handoff uses only `capture_handoff_terminal_state`, under its own
+//! quiesced PTY actor; the pause/resume capture below remains private.
 
 use super::{
     terminal::state_draft::{DraftLimits, PaneStateDraft},
@@ -85,6 +86,29 @@ impl PaneRuntime {
             .await?
             .capture(limits)
             .await
+    }
+}
+
+impl PaneRuntime {
+    /// Exact terminal state for live handoff.
+    ///
+    /// Call only after `pause_handoff_reader` quiesced the PTY actor: pending
+    /// writes and terminal replies are drained, no reader mutates the terminal,
+    /// and output still in the kernel PTY buffer stays unread so it reaches the
+    /// importer through the transferred descriptor exactly once. Output split
+    /// mid-sequence at the last read resumes through the snapshot continuation.
+    #[cfg(unix)]
+    pub(crate) fn capture_handoff_terminal_state(
+        &self,
+    ) -> Result<super::terminal::state_draft::TransferredDraft, String> {
+        let identity = self.capture_identity();
+        identity.reject_observed_exit()?;
+        let draft = self
+            .terminal
+            .ghostty
+            .capture_state_draft(super::terminal::state_draft::handoff_limits())?;
+        identity.reject_observed_exit()?;
+        Ok(draft.encode_transfer())
     }
 }
 
