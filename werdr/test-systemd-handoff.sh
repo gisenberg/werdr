@@ -50,7 +50,7 @@ shell_pid=$(grep -o 'PROBE_SHELL=[0-9]*' <<<"$output" | tail -1 | cut -d= -f2)
 grep -q 'NOTIFY=unset' <<<"$output" || fail "pane shell inherited NOTIFY_SOCKET"
 kill -0 "$shell_pid" || fail "probe shell is not running"
 
-herdr server live-handoff --import-exe "$importer" >/dev/null
+herdr server live-handoff --import-exe "$importer" --require-lossless >/dev/null
 
 # The exporter exits after the importer reports ownership.
 for _ in $(seq 50); do kill -0 "$exporter_pid" 2>/dev/null || break; sleep 0.1; done
