@@ -1,0 +1,17 @@
+{
+  "name": "werdr",
+  "short_name": "werdr",
+  "description": "Private-network browser client for herdr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#14191b",
+  "theme_color": "#14191b",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icons/werdr-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/werdr-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/werdr-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/werdr.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
