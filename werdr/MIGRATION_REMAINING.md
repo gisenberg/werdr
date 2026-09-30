@@ -38,20 +38,21 @@ They upgrade only when idle through the atomic `server stop-if-idle` operation, 
 
 ### Remaining upgrade work
 
-- [ ] Deploy the notify-supervised Linux unit and a lossless-capable owner.
-  The currently deployed owner has neither, so this one transition ends werdr sessions; every later upgrade can preserve them.
-- [ ] Verify a live lossless upgrade on the production Linux host with real agent panes.
-- [ ] Exercise the Windows idle-only upgrade on both hosts, including the busy refusal.
+- [x] Deploy the notify-supervised Linux unit and a lossless-capable owner (`05b9edf1`); adopting it ended werdr sessions once.
+- [x] Verify lossless upgrades on the production Linux host: two chained handoffs kept a probe shell, its history, and `less` and `vim` on the alternate screen, with zero service restarts.
+- [x] Exercise the Windows idle-only upgrade: 9800x3d upgraded while idle, and win-ci refused while busy before its authorized upgrade.
+- [ ] Verify a lossless upgrade with real agent panes.
 - [ ] Decide how to upgrade when the vendored libghostty changes: a lossless handoff refuses, and history replay remains available only by explicitly omitting `--require-lossless`.
-- [ ] Carry file-backed Kitty images, or document that such panes must be upgraded without `--require-lossless`.
+- [ ] Document that panes retaining file-backed Kitty images must be upgraded without `--require-lossless`; carrying them is not planned.
 
 ## Feature gaps
 
 | Gap | Remaining work |
 | --- | --- |
-| Kitty graphics in browser panes | Forward image placements through the terminal stream and render them in the browser |
 | Pane controller cap | A surface retains at most 16 pane controllers; native herdr has no such limit |
-| Mobile agent views | A chat-style agent timeline and in-browser answers to agent questions, if still wanted after cutover |
+| Native mobile client | `werdr-mobile`, modeled on `wmux-mobile`, is the planned mobile experience; see [WMUX_REPLACEMENT.md](WMUX_REPLACEMENT.md) |
+
+Kitty graphics in browser panes are not planned.
 
 ## Verification gaps
 
