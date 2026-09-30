@@ -237,6 +237,7 @@ pub struct HeadlessServer {
     shutting_down: bool,
     /// Flag set while exporting live PTYs to a replacement server.
     handoff_in_progress: bool,
+    retired_clipboard_images: crate::server::clipboard_image::RetiredClipboardImages,
     /// Imported panes get one app-safe resize nudge after the first client attaches.
     #[cfg(unix)]
     pending_handoff_repaint_nudge: bool,
@@ -374,6 +375,7 @@ impl HeadlessServer {
             shutting_down: false,
             host_shutdown_requested: Arc::new(AtomicBool::new(false)),
             handoff_in_progress: false,
+            retired_clipboard_images: Default::default(),
             #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
             should_quit,
@@ -925,7 +927,14 @@ impl HeadlessServer {
         if let Some(mut removed) = removed {
             let held_inputs = removed.drain_shell_held_inputs();
             self.release_client_shell_inputs(client_id, held_inputs);
-            crate::server::clipboard_image::remove_files(removed.staged_clipboard_files);
+            // A reconnecting browser or a handoff must not delete a pasted
+            // path that the pane's application has not read yet.
+            let now = std::time::Instant::now();
+            self.retired_clipboard_images
+                .retire(removed.staged_clipboard_files, now);
+            crate::server::clipboard_image::remove_files(
+                self.retired_clipboard_images.take_expired(now),
+            );
             if let ClientConnectionMode::TerminalAttach { terminal_id } = removed.mode {
                 self.terminal_attach_owners.remove(&terminal_id);
                 if let Some(terminal_id) = self.terminal_id_by_string(&terminal_id) {
@@ -1119,6 +1128,14 @@ impl HeadlessServer {
                         .as_ref()
                         .is_some_and(|popup| popup.terminal_id.as_str() == terminal_id)
             }
+        }
+    }
+
+    /// Pane processes survive a committed handoff, so their unread image
+    /// paths do too; the staging directory's age limit reclaims them.
+    fn remove_retired_clipboard_images_unless_handed_off(&mut self) {
+        if !self.handoff_in_progress {
+            crate::server::clipboard_image::remove_files(self.retired_clipboard_images.take_all());
         }
     }
 
@@ -2120,11 +2137,16 @@ impl HeadlessServer {
                             target,
                             staged.paste_text,
                         );
+                        let now = std::time::Instant::now();
+                        crate::server::clipboard_image::remove_files(
+                            self.retired_clipboard_images.take_expired(now),
+                        );
                         if routed {
                             if let Some(client) = self.clients.get_mut(&client_id) {
                                 client.staged_clipboard_files.push(staged.path);
                             } else {
-                                crate::server::clipboard_image::remove_files(vec![staged.path]);
+                                // The pane already received the path.
+                                self.retired_clipboard_images.retire(vec![staged.path], now);
                                 return false;
                             }
                         } else {
@@ -3341,6 +3363,7 @@ impl Drop for HeadlessServer {
             .flat_map(|(_, client)| client.staged_clipboard_files)
             .collect::<Vec<_>>();
         crate::server::clipboard_image::remove_files(staged_files);
+        self.remove_retired_clipboard_images_unless_handed_off();
         let _ = self.cleanup_sockets();
     }
 }

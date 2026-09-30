@@ -150,6 +150,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         shutting_down: false,
         host_shutdown_requested: Arc::new(AtomicBool::new(false)),
         handoff_in_progress: false,
+        retired_clipboard_images: Default::default(),
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
         should_quit,
@@ -8194,4 +8195,44 @@ fn workspace_git_interest_refreshes_without_an_attached_application_client() {
     assert!(!server.has_app_client());
     assert!(server.clients.is_empty());
     drop(interest);
+}
+
+#[test]
+fn disconnected_client_images_outlive_reconnects_until_shutdown_unless_handed_off() {
+    for handed_off in [false, true] {
+        let directory = std::env::temp_dir().join(format!(
+            "herdr-retired-images-{}-{handed_off}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let image = directory.join("pasted.png");
+        std::fs::write(&image, b"png").unwrap();
+
+        let mut server = test_headless_server();
+        let (writer, _control, _frames) = test_client_writer();
+        let mut client = ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            1,
+            RenderEncoding::SemanticFrame,
+            Some(writer),
+        );
+        client.staged_clipboard_files.push(image.clone());
+        server.clients.insert(1, client);
+
+        server.remove_client(1);
+        assert!(
+            image.exists(),
+            "a reconnecting client keeps its unread image"
+        );
+
+        server.handoff_in_progress = handed_off;
+        drop(server);
+        assert_eq!(
+            image.exists(),
+            handed_off,
+            "shutdown removes retired images unless panes moved to a new owner"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }

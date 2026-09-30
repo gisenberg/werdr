@@ -1,9 +1,42 @@
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const STAGED_CLIPBOARD_IMAGE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Browser controllers reconnect after network changes and phone backgrounding.
+/// A pasted path may still be unread by the pane's application, so a
+/// disconnected client's images outlive it by this reconnect window.
+const RETIRED_CLIPBOARD_IMAGE_GRACE: Duration = Duration::from_secs(10 * 60);
+
+/// Staged images whose client disconnected, deleted once their grace expires.
+#[derive(Debug, Default)]
+pub(crate) struct RetiredClipboardImages {
+    files: Vec<(PathBuf, Instant)>,
+}
+
+impl RetiredClipboardImages {
+    pub(crate) fn retire(&mut self, paths: Vec<PathBuf>, now: Instant) {
+        let deadline = now + RETIRED_CLIPBOARD_IMAGE_GRACE;
+        self.files
+            .extend(paths.into_iter().map(|path| (path, deadline)));
+    }
+
+    pub(crate) fn take_expired(&mut self, now: Instant) -> Vec<PathBuf> {
+        let (expired, retained) = std::mem::take(&mut self.files)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, deadline)| *deadline <= now);
+        self.files = retained;
+        expired.into_iter().map(|(path, _)| path).collect()
+    }
+
+    pub(crate) fn take_all(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.files)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+}
 
 pub(crate) struct StagedClipboardImage {
     pub(crate) path: PathBuf,
@@ -136,6 +169,27 @@ fn cleanup_stale(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_images_expire_only_after_the_reconnect_grace() {
+        let start = Instant::now();
+        let mut retired = RetiredClipboardImages::default();
+        retired.retire(vec![PathBuf::from("a.png")], start);
+        retired.retire(
+            vec![PathBuf::from("b.png")],
+            start + Duration::from_secs(60),
+        );
+        assert!(retired.take_expired(start).is_empty());
+        assert!(retired
+            .take_expired(start + RETIRED_CLIPBOARD_IMAGE_GRACE - Duration::from_millis(1))
+            .is_empty());
+        assert_eq!(
+            retired.take_expired(start + RETIRED_CLIPBOARD_IMAGE_GRACE),
+            vec![PathBuf::from("a.png")]
+        );
+        assert_eq!(retired.take_all(), vec![PathBuf::from("b.png")]);
+        assert!(retired.take_all().is_empty());
+    }
 
     #[test]
     fn sanitize_extension_accepts_known_image_extensions() {

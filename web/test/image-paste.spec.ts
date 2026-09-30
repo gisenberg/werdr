@@ -39,7 +39,7 @@ async function pastedPath(pane: string) {
   return path;
 }
 
-test('large clipboard images preserve bytes, queue input in order, and clean host files when the controller detaches', async ({ page }) => {
+test('large clipboard images preserve bytes, queue input in order, and outlive a controller reconnect', async ({ page }) => {
   const pane = await create(page); await waitingReader(page, pane);
   const original = await page.locator('.pane-active textarea').elementHandle();
   const bytes = Buffer.concat([png, Buffer.alloc(16 * 1024 * 1024 - png.length, 77)]);
@@ -49,8 +49,10 @@ test('large clipboard images preserve bytes, queue input in order, and clean hos
   expect((await stat(path)).mode & 0o777).toBe(0o600);
   await expect(page.locator('#status')).toContainText('Image sent to terminal');
   expect(await original!.evaluate(node => node.isConnected)).toBe(true);
+  // A reconnect must not delete a path the pane's application has not read yet;
+  // the owner removes retired images after a grace period or at shutdown.
   await page.reload(); await expect(page.locator('#shield')).toBeHidden();
-  await expect.poll(async () => { try { await stat(path); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT'; } }).toBe(true);
+  expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
   expect(await runtime.cli('pane', 'read', pane, '--source', 'recent')).toContain('IMAGE_PATH=');
 });
 
