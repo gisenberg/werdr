@@ -12,6 +12,9 @@ test('theme/font preview preserves the terminal, cancellation restores values, a
   const color = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--herdr-panel-bg').trim());
   const initial = await color();
   await page.locator('#settings').click();
+  const themeControls = () => page.evaluate(() => ['theme', 'darkTheme', 'lightTheme'].filter(key => document.querySelector<HTMLElement>(`[data-setting=${key}]`)?.checkVisibility()));
+  await expect.poll(themeControls).toEqual(['theme']);
+  await expect(page.locator('[data-setting=appearance] option:checked')).toHaveText('ONE THEME');
   await page.locator('[data-setting=theme]').selectOption('catppuccin-latte');
   await expect.poll(color).toBe('#eff1f5');
   await page.locator('[data-setting=fontSize]').fill('18');
@@ -20,9 +23,14 @@ test('theme/font preview preserves the terminal, cancellation restores values, a
   await page.locator('#settings-cancel').click(); await expect.poll(color).toBe(initial);
   await page.locator('#settings').click();
   await page.locator('[data-setting=appearance]').selectOption('system');
+  await expect.poll(themeControls).toEqual(['darkTheme', 'lightTheme']);
   await page.emulateMedia({ colorScheme: 'light' }); await expect.poll(color).toBe('#eff1f5');
   await page.emulateMedia({ colorScheme: 'dark' }); await expect.poll(color).toBe('#181825');
+  await page.locator('[data-setting=appearance]').selectOption('dark');
+  await expect.poll(themeControls).toEqual(['darkTheme']);
+  await page.locator('[data-setting=darkTheme]').selectOption('dracula'); await expect.poll(color).toBe('#282a36');
   await page.locator('[data-setting=appearance]').selectOption('theme');
+  await expect.poll(themeControls).toEqual(['theme']);
   await page.locator('[data-setting=theme]').selectOption('nord');
   await page.locator('[data-setting=sidebarWidth]').fill('320');
   await page.locator('[data-setting=hideSingleTab]').check();

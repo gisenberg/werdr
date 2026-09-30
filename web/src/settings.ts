@@ -8,11 +8,13 @@ import { defaultWorkspaceRows, workspaceRowTokens } from '../shared/workspace-ro
 import { agentRowTokens, canonicalAgents, defaultAgentRows, detailedAgentRows } from '../shared/agent-rows';
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const settingsMarkup = `<dialog id="settings-dialog"><form id="settings-form"><h1>SETTINGS</h1><p>Appearance and behavior shared by your browsers. Changes preview until you save.</p><div id="settings-fields"></div><details><summary>CUSTOM THEME COLORS</summary><div id="settings-colors"></div></details><fieldset><legend>THIS DEVICE</legend><label><input id="settings-device-font" type="checkbox"> Override terminal font size on this device</label><label>DEVICE FONT SIZE<input id="settings-device-size" type="number" min="10" max="32" value="14"></label></fieldset><fieldset><legend>NATIVE HOST</legend><button id="settings-integrations" type="button">MANAGE HOST INTEGRATIONS</button><button id="settings-plugins" type="button">MANAGE HOST PLUGINS</button></fieldset><p id="settings-error" role="alert"></p><div class="settings-actions"><button type="submit">SAVE SETTINGS</button><button id="settings-cancel" type="button">CANCEL</button><button id="settings-reset" type="button">PREVIEW DEFAULTS</button></div></form></dialog>`;
-type Control = { key: keyof Preferences; label: string; choices?: readonly string[]; min?: number; max?: number };
+type Control = { key: keyof Preferences; label: string; choices?: readonly string[]; choiceLabels?: Record<string, string>; min?: number; max?: number };
+// Each color mode reads only some theme choices; hide the rest so edits always take effect.
+const activeThemes: Record<Preferences['appearance'], (keyof Preferences)[]> = { theme: ['theme'], system: ['darkTheme', 'lightTheme'], dark: ['darkTheme'], light: ['lightTheme'] };
 const groups: [string, Control[]][] = [
   ['APPEARANCE', [
-    { key: 'appearance', label: 'COLOR MODE', choices: ['theme', 'system', 'dark', 'light'] },
-    { key: 'theme', label: 'SELECTED THEME', choices: themeNames },
+    { key: 'appearance', label: 'COLOR MODE', choices: ['theme', 'system', 'dark', 'light'], choiceLabels: { theme: 'ONE THEME', system: 'FOLLOW SYSTEM', dark: 'ALWAYS DARK', light: 'ALWAYS LIGHT' } },
+    { key: 'theme', label: 'THEME', choices: themeNames },
     { key: 'darkTheme', label: 'DARK THEME', choices: themeNames }, { key: 'lightTheme', label: 'LIGHT THEME', choices: themeNames },
     { key: 'font', label: 'TERMINAL FONT', choices: fonts }, { key: 'fontSize', label: 'FONT SIZE', min: 10, max: 32 },
     { key: 'cursorBlink', label: 'BLINKING CURSOR' }, { key: 'sidebarWidth', label: 'SIDEBAR WIDTH', min: 160, max: 640 },
@@ -45,7 +47,7 @@ export class Settings {
     element('settings-cancel').onclick = () => element<HTMLDialogElement>('settings-dialog').close();
     element('settings-dialog').addEventListener('close', () => { ++this.editGeneration; this.soundUpload?.abort(); this.sounds.close(); this.apply(this.state.preferences); });
     element('settings-reset').onclick = () => { this.fill(structuredClone(defaults)); this.preview(); };
-    element('settings-form').addEventListener('input', () => { ++this.editGeneration; this.preview(); });
+    element('settings-form').addEventListener('input', () => { ++this.editGeneration; this.showActiveThemes(); this.preview(); });
     element<HTMLFormElement>('settings-form').onsubmit = async event => {
       event.preventDefault(); const button = element('settings-form').querySelector<HTMLButtonElement>('button[type=submit]')!; button.disabled = true;
       const generation = this.editGeneration, upload = new AbortController(); this.soundUpload = upload;
@@ -120,7 +122,7 @@ export class Settings {
       for (const control of controls) {
         const label = document.createElement('label'); label.textContent = control.label;
         const input = document.createElement(control.choices ? 'select' : 'input'); input.dataset.setting = control.key;
-        if (input instanceof HTMLSelectElement) for (const choice of control.choices!) { const option = document.createElement('option'); option.value = choice; option.textContent = choice === '' ? 'OFF' : choice.replaceAll('-', ' ').toUpperCase(); input.append(option); }
+        if (input instanceof HTMLSelectElement) for (const choice of control.choices!) { const option = document.createElement('option'); option.value = choice; option.textContent = control.choiceLabels?.[choice] ?? (choice === '' ? 'OFF' : choice.replaceAll('-', ' ').toUpperCase()); input.append(option); }
         if (input instanceof HTMLInputElement) {
           input.type = control.min === undefined ? 'checkbox' : 'number';
           if (input.type === 'checkbox') input.checked = preferences[control.key] as boolean;
@@ -130,6 +132,7 @@ export class Settings {
       }
       parent.append(group);
     }
+    this.showActiveThemes();
     const sounds = document.createElement('details'); sounds.id = 'settings-agent-sounds';
     const soundSummary = document.createElement('summary'); soundSummary.textContent = 'PER-AGENT SOUND'; sounds.append(soundSummary);
     const soundHint = document.createElement('p'); soundHint.textContent = 'DEFAULT and ON follow the Alert sound switch. OFF mutes only this agent. Droid starts OFF, matching native defaults.'; sounds.append(soundHint);
@@ -177,6 +180,13 @@ export class Settings {
     }
     element<HTMLInputElement>('settings-device-font').checked = !!this.deviceSize;
     element<HTMLInputElement>('settings-device-size').value = String(this.deviceSize || preferences.fontSize);
+  }
+  private showActiveThemes() {
+    const mode = element('settings-fields').querySelector<HTMLSelectElement>('[data-setting=appearance]')?.value as Preferences['appearance'] | undefined;
+    for (const key of ['theme', 'darkTheme', 'lightTheme'] as const) {
+      const label = element('settings-fields').querySelector(`[data-setting=${key}]`)?.parentElement;
+      if (label && mode) label.hidden = !activeThemes[mode].includes(key);
+    }
   }
   private read() {
     const value: Record<string, unknown> = { ...this.state.preferences, customColors: {} };
