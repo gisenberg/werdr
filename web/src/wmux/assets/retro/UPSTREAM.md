@@ -1,7 +1,7 @@
 # Werdr asset boundary
 
 The provenance below describes the retained wmux source material.
-Werdr bundles only the redistributable TOS screenshot and logos in this directory.
+Werdr bundles only the redistributable logos in this directory.
 The ZX Origins font binaries and Workbench screenshot are provisioned outside the public source tree for the private deployment; see `werdr/BOOT_FONTS.md` and `web/THIRD_PARTY_NOTICES.md`.
 
 # DamienG Micropack system font files
@@ -65,8 +65,3 @@ The image depicts the copyrighted Amiga user interface and is included as an
 application-internal historical screenshot, not as project branding. No
 source-redistribution license has been identified for it, and it is not covered
 by wmux's MIT license.
-
-`tos-1.04-desktop.png` is the CC BY-SA 4.0
-[TOS 1.04 startup screenshot](https://commons.wikimedia.org/wiki/File:TOS_1.04_(Rainbow_TOS).png)
-by MJaap. It preserves the real Rainbow TOS startup mark and GEM disk/trash
-iconography instead of substituting generic browser glyphs.
