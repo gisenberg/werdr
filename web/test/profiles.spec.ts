@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { RETRO_BOOT_PROFILES } from '../src/wmux/retro-boot-profiles';
+import { GRAPHICAL_BOOT_STAGES, GRAPHICAL_DESKTOP_STAGE } from '../src/wmux/RetroGraphicalDesktop';
 import { fixture } from './fixture';
 import { consoleInput } from './console-helpers';
 let runtime: Awaited<ReturnType<typeof fixture>>;
@@ -33,8 +34,8 @@ for (const [index, profile] of RETRO_BOOT_PROFILES.entries()) for (const width o
   });
 }
 
-for (const id of ['acorn-archimedes', 'atari-st', 'amiga-workbench', 'amiga-guru-meditation', 'msx2', 'apple-lisa', 'sgi-irix', 'nextcube', 'os2-warp']) {
-  test(`${id} preserves artwork and desktop transitions`, async ({ page }) => {
+for (const id of ['amiga-workbench', 'amiga-guru-meditation', 'msx2']) {
+  test(`${id} preserves artwork and terminal transitions`, async ({ page }) => {
     const index = RETRO_BOOT_PROFILES.findIndex(profile => profile.id === id);
     await page.addInitScript(({ index, count }) => { localStorage.removeItem('werdr-last-boot'); Math.random = () => (index + .1) / count; }, { index, count: RETRO_BOOT_PROFILES.length });
     await page.goto(runtime.url);
@@ -47,22 +48,43 @@ for (const id of ['acorn-archimedes', 'atari-st', 'amiga-workbench', 'amiga-guru
     }
     await expect(page.locator('#boot')).toHaveAttribute('data-boot-phase', 'artwork');
     const before = await frame.boundingBox();
-    if (id.startsWith('amiga-') || id === 'msx2') {
-      test.skip(id.startsWith('amiga-') && !process.env.WERDR_TEST_BOOT_ASSET_DIR, 'Private Workbench screenshot is provisioned by the deployment.');
+    if (id === 'msx2') {
+      await expect.poll(() => page.locator('.retro-msx2-title img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+    } else {
+      test.skip(!process.env.WERDR_TEST_BOOT_ASSET_DIR, 'Private Workbench screenshot is provisioned by the deployment.');
       await expect.poll(() => page.locator('.retro-boot-artwork canvas').evaluate((canvas: HTMLCanvasElement) => {
         const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
         return pixels.some((value, index) => index % 4 === 3 && value > 0);
       })).toBe(true);
-    } else {
-      for (const img of await page.locator('#boot-visual img').all()) expect(await img.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
-    }
-    if (['nextcube', 'sgi-irix', 'os2-warp'].includes(id)) {
-      const logo = await page.locator('.retro-graphical-logo-boot img').boundingBox();
-      expect(logo!.width).toBeGreaterThan(id === 'nextcube' ? 80 : id === 'sgi-irix' ? 130 : 300);
     }
     await page.screenshot({ path: `test-results/profiles/${id}-startup.png` });
     await page.keyboard.press('Escape');
     await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
+    expect(await frame.boundingBox()).toEqual(before);
+  });
+}
+
+for (const profile of RETRO_BOOT_PROFILES.filter(candidate => candidate.graphicalShell)) {
+  test(`${profile.id} steps through each graphical startup scene before its login`, async ({ page }) => {
+    const index = RETRO_BOOT_PROFILES.indexOf(profile);
+    // install() alone lets time flow; pausing first makes every scene wait for runFor().
+    await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+    await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
+    await page.addInitScript(({ index, count }) => { localStorage.removeItem('werdr-last-boot'); Math.random = () => (index + .1) / count; }, { index, count: RETRO_BOOT_PROFILES.length });
+    await page.goto(runtime.url);
+    const frame = page.locator('#boot-frame');
+    let before: Awaited<ReturnType<typeof frame.boundingBox>> = null;
+    // The fixed clock holds each scene until the test advances it.
+    for (const stage of GRAPHICAL_BOOT_STAGES[profile.graphicalShell!]) {
+      await expect(page.locator(`#boot-visual [data-graphical-stage="${stage.id}"]`)).toBeAttached();
+      for (const img of await page.locator('#boot-visual img').all()) await expect.poll(() => img.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+      before ??= await frame.boundingBox();
+      expect(await frame.boundingBox()).toEqual(before);
+      await page.screenshot({ path: `test-results/profiles/${profile.id}-${stage.id}.png` });
+      await page.clock.runFor(stage.duration);
+    }
+    await expect(page.locator('#boot')).toHaveAttribute('data-stage', 'username');
+    await expect(page.locator(`#boot-visual [data-graphical-stage="${GRAPHICAL_DESKTOP_STAGE}"] .retro-graphical-login`)).toBeVisible();
     expect(await frame.boundingBox()).toEqual(before);
   });
 }

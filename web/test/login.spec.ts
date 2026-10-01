@@ -82,7 +82,7 @@ test('network login throttling rejects excessive attempts and never trusts forwa
 });
 
 
-test('BIOS memory count overwrites its row and the display retains its native framebuffer shape', async ({ page }) => {
+test('BIOS memory count overwrites its row and the display keeps its monitor shape', async ({ page }) => {
   await page.addInitScript(() => { localStorage.removeItem('werdr-last-boot'); Math.random = () => 3.1 / 36; });
   await page.goto(runtime.url);
   await expect(page.locator('#boot-output')).toContainText('Keyboard');
@@ -90,6 +90,7 @@ test('BIOS memory count overwrites its row and the display retains its native fr
   expect(text).toContain('016384 KB OK');
   expect(text!.match(/KB OK/g)).toHaveLength(1);
   const box = await page.locator('#boot-frame').boundingBox();
-  expect(box!.width / box!.height).toBeCloseTo(720 / 400, 2);
+  // 720x400 VGA text fills a 4:3 monitor, so the frame follows the displayed shape.
+  expect(box!.width / box!.height).toBeCloseTo(4 / 3, 2);
   await page.screenshot({ path: 'test-results/boot-bios.png' });
 });

@@ -168,8 +168,9 @@ export class BootConsole {
   }
   private fitViewport() {
     if (!this.screen.open || !this.screen.clientWidth || !this.screen.clientHeight) return;
-    const [nativeWidth, nativeHeight] = this.presentation.framebuffer;
-    const ratio = nativeWidth / nativeHeight;
+    const [nativeWidth] = this.presentation.framebuffer;
+    const [aspectWidth, aspectHeight] = this.presentation.aspect;
+    const ratio = aspectWidth / aspectHeight;
     const width = Math.min(920, this.screen.clientWidth * .92, this.screen.clientHeight * .92 * ratio), height = width / ratio;
     this.frame.style.width = `${width}px`; this.frame.style.height = `${height}px`;
     const visualWidth = this.profile.id.startsWith('amiga-') ? 920 : Math.min(920, Math.max(640, nativeWidth));
@@ -187,7 +188,7 @@ export class BootConsole {
     const dismissed = new Promise<void>(resolve => { this.skipBoot = resolve; });
     const [library] = await Promise.all([
       this.profile.graphicalShell ? Promise.resolve(undefined) : loadGhostty(),
-      Promise.race([Promise.all([this.profile.fontFamily, '"Retro IBM 2915"', ...(this.profile.graphicalShell === 'nextstep' ? ['"Retro Lisa Console"'] : [])].map(family => document.fonts.load(`400 16px ${family}`, family === this.profile.fontFamily ? this.profile.boot.map(step => step.text).join('') : undefined))).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]),
+      Promise.race([document.fonts.load(`400 16px ${this.profile.fontFamily}`, this.profile.boot.map(step => step.text).join('')).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]),
     ]);
     const terminal = library ? new library.Terminal({ cols: this.profile.columns, rows: this.profile.rows,
       fontSize: this.profile.fontSize.desktop, fontFamily: this.profile.fontFamily, scrollback: 0,
@@ -204,7 +205,10 @@ export class BootConsole {
     const isAmiga = this.profile.id.startsWith('amiga-');
     if (!isAmiga && !this.profile.boot.some(step => step.postSound)) this.stopSound = playRetroPostSound(this.profile.id);
     if (this.profile.graphicalShell) {
-      visual('artwork'); await pause(1100);
+      for (const stage of this.presentation.graphicalStages) {
+        if (skipped || reduced) break;
+        this.presentation.showGraphicalStage(stage.id); visual('artwork'); await pause(stage.duration);
+      }
     } else if (this.profile.showBootArtwork !== false) {
       if (this.profile.specialBoot === 'amiga-guru') {
         visual('guru');

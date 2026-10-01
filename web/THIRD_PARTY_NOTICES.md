@@ -38,7 +38,7 @@ See [private-font provenance](../werdr/BOOT_FONTS.md) for setup and source infor
 The Amiga Workbench screenshot is not included in the public repository or release archive.
 It has no identified source-redistribution license and is provisioned separately for private deployment through `WERDR_BOOT_ASSET_DIR`.
 Its exact source and status are recorded in [asset provenance](src/wmux/assets/retro/UPSTREAM.md).
-The TOS screenshot and boot logos are included with their original public-domain or CC BY-SA terms and attribution in the [asset provenance](src/wmux/assets/retro/UPSTREAM.md) and [logo provenance](src/wmux/assets/retro/logos/UPSTREAM.md).
+The boot logos are included with their original public-domain or CC BY-SA terms and attribution in the [logo provenance](src/wmux/assets/retro/logos/UPSTREAM.md); other boot-asset provenance is in the [asset provenance](src/wmux/assets/retro/UPSTREAM.md).
 The artwork renderer preserves the wmux raster palettes and transparency normalization; those asset changes remain under their respective source licenses.
 Historical product names in boot text identify the systems being simulated and do not imply endorsement.
 React and React DOM are MIT-licensed and are used to retain wmux's existing artwork and graphical desktop presentation without duplicating its vector renderer.

@@ -19,7 +19,14 @@ const fonts = [
   ['Retro SAM Coupe', 'SAM_Coupe.woff2'],
   ['Retro Tatung Einstein', 'Tatung_Einstein.woff2'],
 ];
-// These upstream faces store a machine glyph in the U+00A9 slot, so the copyright sign falls back.
-const withoutCopyright = new Set(['Retro Amstrad CPC', 'Retro Tatung Einstein']);
+// These upstream faces draw a machine glyph in the copyright (or pound) slot, so that character falls back.
+const ranges: Record<string, string> = {
+  'Retro Amstrad CPC': 'U+0020-007E, U+00A3',
+  'Retro Tatung Einstein': 'U+0020-007E, U+00A3',
+  'Retro SAA 5050': 'U+0020-007E, U+00A3',
+  'Retro IBM CGA': 'U+0020-007E',
+  'Retro Lisa Console': 'U+0020-007E',
+  'Retro Memotech MTX': 'U+0020-007E',
+};
 for (const [family, file] of fonts) document.fonts.add(new FontFace(family, `url(/fonts/retro/${file})`,
-  { weight: "400", ...(withoutCopyright.has(family) ? { unicodeRange: 'U+0020-007E, U+00A3' } : {}) }));
+  { weight: "400", ...(ranges[family] ? { unicodeRange: ranges[family] } : {}) }));
