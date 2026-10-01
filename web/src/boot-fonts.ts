@@ -19,4 +19,7 @@ const fonts = [
   ['Retro SAM Coupe', 'SAM_Coupe.woff2'],
   ['Retro Tatung Einstein', 'Tatung_Einstein.woff2'],
 ];
-for (const [family, file] of fonts) document.fonts.add(new FontFace(family, `url(/fonts/retro/${file})`, { weight: "400" }));
+// These upstream faces store a machine glyph in the U+00A9 slot, so the copyright sign falls back.
+const withoutCopyright = new Set(['Retro Amstrad CPC', 'Retro Tatung Einstein']);
+for (const [family, file] of fonts) document.fonts.add(new FontFace(family, `url(/fonts/retro/${file})`,
+  { weight: "400", ...(withoutCopyright.has(family) ? { unicodeRange: 'U+0020-007E, U+00A3' } : {}) }));

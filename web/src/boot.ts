@@ -3,6 +3,7 @@ import { loadGhostty } from './terminal-loader';
 import { BootPresentation, type VisualPhase } from './boot-presentation';
 import { playRetroPostSound, playRetroFloppySound } from './wmux/retro-boot-audio';
 import { RETRO_BOOT_PROFILES } from './wmux/retro-boot-profiles';
+import { brandBootText } from './boot-brand';
 import './boot-fonts.css';
 import './boot-fonts';
 
@@ -147,10 +148,12 @@ export class BootConsole {
       await this.write(this.profile.auth.failed + message + '\n'); this.prompt();
     }
   }
-  private async write(text: string) {
+  // Text must already be branded when a caller splits it, as typed boot commands do.
+  private async write(text: string, branded = false) {
     if (!text) return;
-    if (!this.terminal) { this.transcript.textContent += text.replaceAll('WMUX', 'WERDR').replaceAll('wmux', 'werdr'); this.render(); return; }
-    await new Promise<void>(resolve => this.terminal!.write(text.replaceAll('WMUX', 'WERDR').replaceAll('wmux', 'werdr').replaceAll('\n', '\r\n'), resolve));
+    const output = branded ? text : brandBootText(text);
+    if (!this.terminal) { this.transcript.textContent += output; this.render(); return; }
+    await new Promise<void>(resolve => this.terminal!.write(output.replaceAll('\n', '\r\n'), resolve));
     const buffer = this.terminal.buffer.active;
     this.transcript.textContent = Array.from({ length: this.terminal.rows }, (_, row) => buffer.getLine(row)?.translateToString(true) || '').join('\n');
   }
@@ -184,7 +187,7 @@ export class BootConsole {
     const dismissed = new Promise<void>(resolve => { this.skipBoot = resolve; });
     const [library] = await Promise.all([
       this.profile.graphicalShell ? Promise.resolve(undefined) : loadGhostty(),
-      Promise.race([Promise.all([this.profile.fontFamily, '"Retro IBM 2915"', ...(this.profile.graphicalShell === 'nextstep' ? ['"Retro Lisa Console"'] : [])].map(family => document.fonts.load(`400 16px ${family}`))).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]),
+      Promise.race([Promise.all([this.profile.fontFamily, '"Retro IBM 2915"', ...(this.profile.graphicalShell === 'nextstep' ? ['"Retro Lisa Console"'] : [])].map(family => document.fonts.load(`400 16px ${family}`, family === this.profile.fontFamily ? this.profile.boot.map(step => step.text).join('') : undefined))).catch(() => {}), new Promise(resolve => setTimeout(resolve, 1000))]),
     ]);
     const terminal = library ? new library.Terminal({ cols: this.profile.columns, rows: this.profile.rows,
       fontSize: this.profile.fontSize.desktop, fontFamily: this.profile.fontFamily, scrollback: 0,
@@ -226,12 +229,13 @@ export class BootConsole {
       if (step.overwrite) await this.write('\r\x1b[2K');
       if (step.inverse) await this.write('\x1b[7m');
       if (step.postSound) { this.stopSound(); this.stopSound = playRetroPostSound(this.profile.id); }
-      if (step.typedFrom === undefined || reduced) await this.write(step.text);
+      const text = brandBootText(step.text);
+      if (step.typedFrom === undefined || reduced) await this.write(text, true);
       else {
-        await this.write(step.text.slice(0, step.typedFrom));
-        for (const character of step.text.slice(step.typedFrom)) {
+        await this.write(text.slice(0, step.typedFrom), true);
+        for (const character of text.slice(step.typedFrom)) {
           if (skipped) break;
-          await this.write(character); if (character !== '\n') await pause(character === ' ' ? 22 : 38);
+          await this.write(character, true); if (character !== '\n') await pause(character === ' ' ? 22 : 38);
         }
       }
       if (step.inverse) await this.write('\x1b[27m');
