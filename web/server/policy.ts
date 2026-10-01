@@ -1,5 +1,6 @@
 import { BlockList, isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
+import { MAX_TERMINAL_INPUT_BYTES } from '../shared/terminal-input.ts';
 
 const privateNetworks = new BlockList();
 for (const [ip, bits] of [['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['100.64.0.0', 10]] as const) privateNetworks.addSubnet(ip, bits, 'ipv4');
@@ -31,7 +32,7 @@ export function dimension(value: unknown): number {
   return Number(value);
 }
 export function terminalInput(value: any): object {
-  if (value?.type === 'terminal.input' && typeof value.text === 'string' && Buffer.byteLength(value.text) <= 32768) return { type: value.type, text: value.text };
+  if (value?.type === 'terminal.input' && typeof value.text === 'string' && Buffer.byteLength(value.text) <= MAX_TERMINAL_INPUT_BYTES) return { type: value.type, text: value.text };
   if (value?.type === 'terminal.resize') return { type: value.type, cols: dimension(value.cols), rows: dimension(value.rows) };
   if (value?.type === 'terminal.scroll' && ['up', 'down'].includes(value.direction) && Number.isInteger(value.lines) && value.lines >= 1 && value.lines <= 100) {
     const point: Record<string, number> = {};

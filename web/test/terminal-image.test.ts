@@ -16,11 +16,14 @@ test('large image writes retain byte identity and keep following keystrokes orde
   const writer = new TerminalInputWriter(pipe), bytes = Buffer.concat([png, Buffer.alloc(1024 * 1024, 123)]);
   const image = writer.image(bytes, MAX_CLIPBOARD_IMAGE_BYTES);
   writer.write('{"type":"terminal.input","text":"after"}\n');
+  // The in-flight image is bounded separately and never counts as queued keystrokes.
+  writer.write(JSON.stringify({ type: 'terminal.input', text: 'x'.repeat(16384) }) + '\n');
   assert.equal(records.length, 1); assert.equal(records[0].extension, 'png'); assert.deepEqual(Buffer.from(records[0].bytes, 'base64'), bytes);
   assert.equal(records[0].target, undefined);
   await assert.rejects(writer.image(png, MAX_CLIPBOARD_IMAGE_BYTES), /still running/);
   release(); await image;
   assert.deepEqual(records[1], { type: 'terminal.input', text: 'after' });
+  assert.equal(records[2].text.length, 16384);
 });
 
 test('image limits, queue bounds, transfer concurrency and disposal fail without forwarding another image', async () => {
@@ -33,7 +36,7 @@ test('image limits, queue bounds, transfer concurrency and disposal fail without
   assert.equal(records.length, 0);
   const one = first.image(png, MAX_CLIPBOARD_IMAGE_BYTES), two = second.image(png, MAX_CLIPBOARD_IMAGE_BYTES);
   await assert.rejects(third.image(png, MAX_CLIPBOARD_IMAGE_BYTES), /still running/);
-  assert.throws(() => first.write('x'.repeat(65537)), /queue full/);
+  assert.throws(() => first.write('x'.repeat(4 * 1024 * 1024 + 1)), /queue full/);
   first.write('{"type":"terminal.input","text":"discard"}\n'); first.dispose();
   const rejected = assert.rejects(one, /detached/); callbacks.shift()!(); callbacks.shift()!(); await rejected; await two;
   assert.equal(records.length, 2);

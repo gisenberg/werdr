@@ -13,6 +13,7 @@ import { terminalSelectionColors } from './terminal-selection';
 import { initialPaneScroll } from './initial-pane-scroll';
 import { TerminalClipboardRequests } from './terminal-osc52';
 import { characterTap, legacyChord, type KeyModifiers, type KeyTap } from './terminal-keys';
+import { splitTerminalInput } from '../shared/terminal-input';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -161,7 +162,13 @@ export class TerminalController {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/terminal?${params}`); this.socket = ws;
     const images = new TerminalImagePaste(this.content, term.textarea!, () => epoch === this.epoch && this.ready && this.visible && this.element.classList.contains('pane-active') && !this.copyMode?.active, data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); else if (typeof data !== 'string') throw new Error('Terminal disconnected before image transfer.'); }, this.report);
     this.imagePaste = images;
-    const send = (value: object) => { if (ws.readyState === WebSocket.OPEN) images.send(value); };
+    // Large pastes become several bounded messages; the gateway applies backpressure.
+    const send = (value: object) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const input = value as { type?: unknown; text?: unknown };
+      if (input.type === 'terminal.input' && typeof input.text === 'string') for (const text of splitTerminalInput(input.text)) images.send({ type: 'terminal.input', text });
+      else images.send(value);
+    };
     let forwarded = { ...desired };
     sendSize = () => {
       if (ws.readyState !== WebSocket.OPEN || desired.cols === forwarded.cols && desired.rows === forwarded.rows) return;

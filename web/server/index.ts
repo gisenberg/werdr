@@ -341,7 +341,9 @@ server.on('upgrade', async (req, socket, head) => {
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
       const decoder = new NdjsonDecoder();
-      const input = new TerminalInputWriter(child.stdin);
+      // Pausing stops reading the viewer socket, so TCP flow control slows a large
+      // paste to the controller's pace instead of overflowing its input queue.
+      const input = new TerminalInputWriter(child.stdin, paused => { if (paused) ws.pause(); else ws.resume(); });
       let imageLimit = 0, terminalReady = false;
       let ended = false, released = false, terminalClosedSent = false;
       const startup = setTimeout(() => closeSocket(ws, 1011, 'Terminal controller timed out'), 15000);
