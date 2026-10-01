@@ -206,11 +206,23 @@ Login attempts are limited by the actual peer IP, and password verification conc
 Browser login issues a random HttpOnly SameSite cookie valid for 90 days, with Secure set under HTTPS.
 Only a SHA-256 hash is persisted in the schema-versioned, owner-only `browser-sessions.json` beside the access-token file; `WERDR_SESSION_FILE` overrides that location.
 Atomic serialized writes preserve revocations across restarts; invalid or future stores stop startup rather than resurrecting credentials from a backup.
-The SESSIONS panel lists signed-in browsers and lets the owner revoke one browser or all other browsers immediately, including their open terminal sockets.
-REVOKE ACCESS TOKEN invalidates the shared sign-in token and browsers issued from it; password-authenticated browsers stay signed in.
+The SESSIONS panel lists signed-in browsers and native devices and lets the owner revoke one session or all other sessions immediately, including their open terminal sockets.
+REVOKE ACCESS TOKEN invalidates the shared sign-in token and browser or device sessions issued from it; password-authenticated sessions stay signed in.
 Browser cookies survive reloads, browser restarts, and gateway deployments until expiry, revocation, or explicit sign-out.
 Restarting the gateway releases terminal controllers; herdr continues owning the running shells.
 Closing a pane explicitly terminates its process.
+
+### Native mobile clients
+
+Native apps such as werdr-mobile discover the gateway with the unauthenticated, Host-checked `GET /api/protocol`, which reports `NATIVE_PROTOCOL_VERSION` from `web/shared/native-protocol.ts`.
+They sign in with `POST /api/login` carrying `client: { kind: "native", name }` and no `Origin` header, and receive a device session secret in the response body instead of a cookie.
+Device sessions are the same persisted, hashed, 90-day records browsers use, labeled with the device name in SESSIONS, and expire, sign out, and revoke exactly like browser sessions, including access-token rotation.
+Every `/api/*` route accepts `Authorization: Bearer <session>` from requests without an `Origin` header, which also waives the POST Origin requirement.
+Browsers always send `Origin` cross-origin and cannot attach `Authorization` without a CORS preflight the gateway never grants, so this does not weaken CSRF protection; requests carrying both are rejected, and the Host allowlist still applies.
+Terminal WebViews never receive the device session.
+The app exchanges it with `POST /api/socket-ticket` for a random single-use ticket that expires after 30 seconds and is held only as a hash in gateway memory.
+`/ws/fleet` and `/ws/terminal` accept `?ticket=` in place of the cookie with an absent, `null`, or `file://` Origin, while any `http(s)` Origin must still match exactly.
+The upgrade consumes the ticket, and the socket stays bound to the issuing session, so revocation, sign-out, token rotation, and the 30-second session sweep close it like a browser socket.
 
 ## Development and upstream updates
 
