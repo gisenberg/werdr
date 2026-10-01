@@ -97,3 +97,19 @@ This is a scalar comparison per render, with row repainting only when cursor app
 Build and package from source as above with Node 22.22.2, TypeScript 5.9.3, Vite 4.5.14 and npm 11.18.0; do not edit generated bundles or rebuild WASM.
 Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
 Remove this patch when the adopted upstream package correctly erases cursor-only appearance changes and the painted-cursor regression passes.
+
+## Inverse video with default colors
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr6.tgz`, version `0.4.1-pr169.faf6fbd.werdr6`.
+Its SHA-256 is `fe5568edbdaf2a3ff232c6a7e6cea07c65d83ffe97e9136de73a9cb653c7c9f2`.
+Apply `wmux-inverse-default-colors.patch` after the nine patches above.
+The renderer previously skipped the inverse background whenever the swapped color was the theme default, and drew the text in the theme foreground.
+Inverse cells with default colors, in terminal panes and in the retro boot scenes alike, therefore painted as normal text.
+The patch paints the theme foreground behind such cells and draws their text in the theme background, leaving explicit RGB and palette colors unchanged.
+The browser regression in `web/test/terminal-inverse.spec.ts` samples painted pixels for plain, default inverse and explicit-color inverse cells.
+It fails against werdr5 and passes against werdr6.
+Rebuilding the werdr5 patch stack reproduced its library bundles byte-for-byte before this patch was applied.
+The patch only changes the color chosen for each painted inverse cell and adds no per-cell work for other cells.
+Build and package from source as above with Node 22.22.2, TypeScript 5.9.3, Vite 4.5.14 and npm 11.18.0; do not edit generated bundles or rebuild WASM.
+Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove this patch when the adopted upstream package paints inverse default colors and the painted-pixel regression passes.
