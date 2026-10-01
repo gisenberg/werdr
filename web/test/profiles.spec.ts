@@ -67,7 +67,9 @@ for (const id of ['amiga-workbench', 'amiga-guru-meditation', 'msx2']) {
 for (const profile of RETRO_BOOT_PROFILES.filter(candidate => candidate.graphicalShell)) {
   test(`${profile.id} steps through each graphical startup scene before its login`, async ({ page }) => {
     const index = RETRO_BOOT_PROFILES.indexOf(profile);
-    await page.clock.install();
+    // install() alone lets time flow; pausing first makes every scene wait for runFor().
+    await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+    await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
     await page.addInitScript(({ index, count }) => { localStorage.removeItem('werdr-last-boot'); Math.random = () => (index + .1) / count; }, { index, count: RETRO_BOOT_PROFILES.length });
     await page.goto(runtime.url);
     const frame = page.locator('#boot-frame');
