@@ -29,7 +29,7 @@ import { soundStore, SoundReferenceError } from './sound-store.ts';
 import { MAX_CUSTOM_SOUND_BYTES, validSoundId } from '../shared/custom-sounds.ts';
 import { NativeApiError } from './native-api.ts';
 import { loginMode, postAllowed, requestCredential, TicketStore, upgradeBinding, type TicketBinding } from './native-auth.ts';
-import { NATIVE_PROTOCOL_VERSION, SOCKET_TICKET_SECONDS, type NativeLoginResponse, type ProtocolResponse, type SocketTicketResponse } from '../shared/native-protocol.ts';
+import { NATIVE_PROTOCOL_VERSION, SOCKET_TICKET_SECONDS, type NativeLoginResponse, type ProtocolResponse, type SocketTicketResponse, type TerminalReleaseResponse } from '../shared/native-protocol.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
 import { noticeEndpointKey } from '../shared/fleet.ts';
 import { popupSession } from '../shared/popups.ts';
@@ -152,6 +152,13 @@ const handler: RequestListener = async (req, res) => {
       const secret = presented.kind === 'cookie' || presented.kind === 'bearer' ? presented.secret : undefined;
       const id = sessionFor(secret);
       if (!id || !secret) return reply(res, 401, { error: 'Sign in required' });
+      if (url.pathname === '/api/terminals/release' && req.method === 'POST') {
+        // A backgrounded app cannot rely on its suspended WebView to close its
+        // terminal sockets, so native code releases this session's controllers.
+        let released = 0;
+        for (const [ws, binding] of sockets) if (binding.session === id.id && terminalMachines.has(ws)) { closeSocket(ws, 1000, 'Released by this device'); released++; }
+        return reply(res, 200, { released } satisfies TerminalReleaseResponse);
+      }
       if (url.pathname === '/api/socket-ticket' && req.method === 'POST') {
         const ticket = tickets.issue({ session: id.id, secret });
         if (!ticket) return reply(res, 503, { error: 'Too many outstanding socket tickets. Try again shortly.' });

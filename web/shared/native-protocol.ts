@@ -36,6 +36,16 @@ export interface SocketTicketResponse {
   expiresInSeconds: number;
 }
 
+/**
+ * `POST /api/terminals/release`. Closes every terminal socket opened with this
+ * session's tickets, releasing their herdr controllers immediately. Native apps
+ * call it when backgrounded, because a suspended WebView cannot close its own
+ * sockets. Panes keep running and reattach normally.
+ */
+export interface TerminalReleaseResponse {
+  released: number;
+}
+
 export type SessionKind = 'browser' | 'native';
 
 /** One entry of `GET /api/sessions`. */

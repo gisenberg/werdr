@@ -223,6 +223,8 @@ Terminal WebViews never receive the device session.
 The app exchanges it with `POST /api/socket-ticket` for a random single-use ticket that expires after 30 seconds and is held only as a hash in gateway memory.
 `/ws/fleet` and `/ws/terminal` accept `?ticket=` in place of the cookie with an absent, `null`, or `file://` Origin, while any `http(s)` Origin must still match exactly.
 The upgrade consumes the ticket, and the socket stays bound to the issuing session, so revocation, sign-out, token rotation, and the 30-second session sweep close it like a browser socket.
+A backgrounded app cannot rely on its suspended WebView to close terminal sockets, so it calls `POST /api/terminals/release`, which closes every terminal socket opened with that session's tickets.
+Their herdr controllers are released at once, so a browser can attach without taking control; the panes keep running and the app reattaches when it returns.
 
 ## Development and upstream updates
 
