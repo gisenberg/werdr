@@ -1,4 +1,5 @@
 import type { Api } from './host-manager';
+import type { SessionSummary } from '../shared/native-protocol';
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export function initializeAccount(api: Api, refresh: () => Promise<void>) {
   const tokenDialog = element<HTMLDialogElement>('token-dialog');
@@ -20,23 +21,24 @@ export function initializeAccount(api: Api, refresh: () => Promise<void>) {
   };
   element('revoke-token').onclick = async () => {
     const button = element<HTMLButtonElement>('revoke-token'); button.disabled = true;
-    try { await api('/api/token/revoke', {}); element<HTMLInputElement>('generated-token').value = ''; element('generated-token-field').hidden = true; element('token-error').textContent = 'Access token revoked. Browsers signed in with it were disconnected.'; }
+    try { await api('/api/token/revoke', {}); element<HTMLInputElement>('generated-token').value = ''; element('generated-token-field').hidden = true; element('token-error').textContent = 'Access token revoked. Browsers and devices signed in with it were disconnected.'; }
     catch (error) { element('token-error').textContent = (error as Error).message; }
     finally { button.disabled = false; }
   };
   const sessionsDialog = element<HTMLDialogElement>('sessions-dialog');
   async function showSessions() {
-    const { sessions } = await api('/api/sessions');
+    const { sessions } = await api('/api/sessions') as { sessions: SessionSummary[] };
     element('session-list').replaceChildren();
     for (const session of sessions) {
       const row = document.createElement('div'); row.className = 'session-row';
-      const label = document.createElement('strong'); label.textContent = session.current ? '[THIS BROWSER]' : '[BROWSER]';
+      const native = session.kind === 'native';
+      const label = document.createElement('strong'); label.textContent = native ? (session.current ? '[THIS DEVICE]' : '[NATIVE DEVICE]') : session.current ? '[THIS BROWSER]' : '[BROWSER]';
       const client = document.createElement('div');
       const browser = /Edg\//.test(session.client) ? 'Edge' : /(?:Chrome|CriOS)\//.test(session.client) ? 'Chrome' : /(?:Firefox|FxiOS)\//.test(session.client) ? 'Firefox' : /Safari\//.test(session.client) ? 'Safari' : 'Browser';
       const platform = /Android/.test(session.client) ? 'Android' : /iPhone|iPad/.test(session.client) ? 'iOS' : /Windows/.test(session.client) ? 'Windows' : /Macintosh/.test(session.client) ? 'macOS' : /Linux/.test(session.client) ? 'Linux' : 'Unknown device';
-      client.textContent = `${browser} / ${platform}`; client.title = session.client;
+      client.textContent = native ? session.client : `${browser} / ${platform}`; client.title = session.client;
       const dates = document.createElement('div'); dates.textContent = `Signed in ${new Date(session.issued).toLocaleString()} / Expires ${new Date(session.expiry).toLocaleDateString()} / ${session.method}`;
-      const revoke = document.createElement('button'); revoke.textContent = session.current ? 'SIGN OUT THIS BROWSER' : 'REVOKE';
+      const revoke = document.createElement('button'); revoke.textContent = session.current ? `SIGN OUT THIS ${native ? 'DEVICE' : 'BROWSER'}` : 'REVOKE';
       revoke.onclick = async () => {
         revoke.disabled = true;
         try {

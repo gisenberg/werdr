@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { SessionKind, SessionSummary } from '../shared/native-protocol.ts';
 
 export const SESSION_SECONDS = 90 * 24 * 3600;
-interface Record { id: string; hash: string; issued: number; expiry: number; method: 'password' | 'token'; client: string; tokenVersion?: string }
+interface Record { id: string; hash: string; issued: number; expiry: number; method: 'password' | 'token'; client: string; kind?: SessionKind; tokenVersion?: string }
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const hex = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 // Corrupt or future stores fail closed. Never restore revoked credentials from a backup.
@@ -22,6 +23,7 @@ export async function sessionStore(path: string) {
         if (!record || !hex(record.id) || !hex(record.hash) || ids.has(record.id) || hashes.has(record.hash) ||
             !Number.isSafeInteger(record.issued) || !Number.isSafeInteger(record.expiry) || record.issued < 0 || record.expiry <= record.issued ||
             !['password', 'token'].includes(record.method) || typeof record.client !== 'string' || record.client.length > 256 ||
+            (record.kind !== undefined && !['browser', 'native'].includes(record.kind)) ||
             (record.method === 'token' && !hex(record.tokenVersion))) throw new Error('Invalid session record');
         ids.add(record.id); hashes.add(record.hash);
       }
@@ -53,18 +55,18 @@ export async function sessionStore(path: string) {
       const hash = digest(secret!);
       return records.find(record => record.hash === hash && record.expiry > now && (record.method !== 'token' || record.tokenVersion === tokenVersion));
     },
-    list(current: string, tokenVersion: string) {
+    list(current: string, tokenVersion: string): SessionSummary[] {
       return records.filter(record => record.expiry > Date.now() && (record.method !== 'token' || record.tokenVersion === tokenVersion))
-        .map(({ id, issued, expiry, method, client }) => ({ id, issued, expiry, method, client, current: id === current }));
+        .map(({ id, issued, expiry, method, client, kind }) => ({ id, issued, expiry, method, client, kind: kind ?? 'browser', current: id === current }));
     },
-    create(method: Record['method'], client: string, tokenVersion: string) {
+    create(method: Record['method'], client: string, tokenVersion: string, kind: SessionKind = 'browser') {
       const secret = randomBytes(32).toString('hex');
       return mutate(next => {
         // Rotated access tokens cannot retain slots in the bounded store.
         for (let i = next.length - 1; i >= 0; i--) if (next[i].method === 'token' && next[i].tokenVersion !== tokenVersion) next.splice(i, 1);
         if (next.length >= 64) throw new Error('Session limit reached');
         const issued = Date.now();
-        next.push({ id: randomBytes(32).toString('hex'), hash: digest(secret), issued, expiry: issued + SESSION_SECONDS * 1000, method, client: client.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 256), ...(method === 'token' ? { tokenVersion } : {}) });
+        next.push({ id: randomBytes(32).toString('hex'), hash: digest(secret), issued, expiry: issued + SESSION_SECONDS * 1000, method, client: client.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 256), ...(kind === 'native' ? { kind } : {}), ...(method === 'token' ? { tokenVersion } : {}) });
         return secret;
       });
     },

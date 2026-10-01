@@ -40,7 +40,7 @@ test('browser restart persistence, device revocation, sockets, and access-token 
     await page.reload(); await expect(page.locator('#boot')).toBeHidden();
     await page.getByRole('button', { name: 'SESSIONS', exact: true }).click();
     expect((await second.request.post(runtime.url + '/api/login', { headers, data: { username: runtime.username, password: runtime.password } })).ok()).toBe(true);
-    await page.getByRole('button', { name: 'REVOKE OTHER BROWSERS', exact: true }).click();
+    await page.getByRole('button', { name: 'REVOKE OTHER SESSIONS', exact: true }).click();
     await expect.poll(async () => (await second.request.get(runtime.url + '/api/session')).status()).toBe(401);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: 'test-results/sessions-mobile.png' });

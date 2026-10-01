@@ -28,6 +28,8 @@ import { SettingsValidationError, validatePreferences } from '../shared/settings
 import { soundStore, SoundReferenceError } from './sound-store.ts';
 import { MAX_CUSTOM_SOUND_BYTES, validSoundId } from '../shared/custom-sounds.ts';
 import { NativeApiError } from './native-api.ts';
+import { loginMode, postAllowed, requestCredential, TicketStore, upgradeBinding, type TicketBinding } from './native-auth.ts';
+import { NATIVE_PROTOCOL_VERSION, SOCKET_TICKET_SECONDS, type NativeLoginResponse, type ProtocolResponse, type SocketTicketResponse, type TerminalReleaseResponse } from '../shared/native-protocol.ts';
 import type { FleetEvent } from '../shared/fleet.ts';
 import { noticeEndpointKey } from '../shared/fleet.ts';
 import { popupSession } from '../shared/popups.ts';
@@ -54,14 +56,16 @@ const soundIds = (preferences = settings.read().preferences) => Object.values(pr
 const sounds = await soundStore(resolve(dirname(settingsPath), 'sounds'), () => soundIds());
 const cleanSounds = () => sounds.collect().catch(() => console.error('Custom sound cleanup failed; existing files were retained where possible.'));
 await cleanSounds(); setInterval(() => { void cleanSounds(); }, 60 * 60 * 1000).unref();
-const sessionTokens = new Map<string, string>();
+const tickets = new TicketStore();
 const fleet = new Fleet(() => management.catalog(), process.env.WERDR_NOTIFICATION_FILE || resolve(dirname(tokenPath), 'fleet-notifications.json'));
 const management = new MachineManagement(process.env.WERDR_MACHINE_PLATFORM_FILE || resolve(dirname(tokenPath), 'machine-platforms.json'), async () => { await fleet.reloadCatalog(); for (const host of fleet.state().hosts) if (host.machine.enabled) fleet.retry(host.machine.id); });
 const pluginInstallations = new PluginInstallations(machine => fleet.retry(machine));
 await management.start();
 fleet.on('diagnostic', error => console.error(error.message));
 await fleet.start();
-const sockets = new Map<WebSocket, string>();
+// Each socket keeps the session secret it authenticated with, so every
+// re-check (messages and the periodic sweep) resolves through sessionFor().
+const sockets = new Map<WebSocket, TicketBinding>();
 const terminalMachines = new Map<WebSocket, { id: string; target?: string; session?: string }>();
 const controllers = new Map<WebSocket, () => void>();
 const alive = new WeakSet<WebSocket>();
@@ -70,14 +74,23 @@ function closeSocket(ws: WebSocket, code: number, reason?: string) {
   ws.close(code, reason);
 }
 function disconnectSessions(ids: string[], reason: string) {
-  management.revoke(ids); pluginInstallations.revoke(ids);
-  for (const [ws, owner] of sockets) if (ids.includes(owner)) closeSocket(ws, 1008, reason);
+  management.revoke(ids); pluginInstallations.revoke(ids); tickets.revoke(ids);
+  for (const [ws, binding] of sockets) if (ids.includes(binding.session)) closeSocket(ws, 1008, reason);
 }
 const wsServer = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
 const terminalWsServer = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIPBOARD_IMAGE_BYTES, perMessageDeflate: false });
+// Cookie, bearer, and ticket-bound socket credentials all resolve here, so
+// expiry, revocation, and token rotation apply to every client identically.
+function sessionFor(secret: string | undefined, expected?: string) {
+  const record = sessions.get(secret, auth.tokenVersion);
+  return record && (expected === undefined || record.id === expected) ? record : undefined;
+}
+function credential(req: IncomingMessage) {
+  return requestCredential({ cookie: req.headers.cookie, authorization: req.headers.authorization, origin: req.headers.origin });
+}
 function session(req: IncomingMessage) {
-  const id = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6);
-  return sessions.get(id, auth.tokenVersion);
+  const presented = credential(req);
+  return presented.kind === 'cookie' || presented.kind === 'bearer' ? sessionFor(presented.secret) : undefined;
 }
 function reply(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -110,13 +123,18 @@ const handler: RequestListener = async (req, res) => {
   if (++requests > 16) { requests--; return reply(res, 503, { error: 'Busy' }); }
   try {
     const url = new URL(req.url || '/', browserOrigin);
-    if (req.method === 'POST' && req.headers.origin !== browserOrigin) return reply(res, 403, { error: 'Origin required' });
+    const presented = credential(req);
+    if (presented.kind === 'conflict') return reply(res, 400, { error: 'Bearer authentication cannot be combined with an Origin header' });
+    if (req.method === 'POST' && !postAllowed(req.headers.origin, browserOrigin, presented.kind, url.pathname)) return reply(res, 403, { error: 'Origin required' });
+    if (url.pathname === '/api/protocol' && req.method === 'GET') return reply(res, 200, { gateway: 'werdr', protocolVersion: NATIVE_PROTOCOL_VERSION, nativeClients: true } satisfies ProtocolResponse);
     if (url.pathname === '/api/auth' && req.method === 'GET') return reply(res, 200, { passwordEnabled: auth.passwordEnabled });
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (!loginLimiter.take(req.socket.remoteAddress || 'unknown')) {
         res.setHeader('Retry-After', '60'); return reply(res, 429, { error: 'Too many sign-in attempts. Try again in a minute.' });
       }
       const value = await body(req);
+      const mode = loginMode(value, req.headers.origin, browserOrigin);
+      if (mode.kind === 'rejected') return reply(res, mode.status, { error: mode.error });
       const method = value.token === undefined ? 'password' : 'token';
       let valid = false;
       if (method === 'password') {
@@ -125,13 +143,27 @@ const handler: RequestListener = async (req, res) => {
         try { valid = await auth.verifyPassword(value.username, value.password); } finally { passwordChecks--; }
       } else valid = auth.verifyToken(value.token);
       if (!valid) return reply(res, 401, { error: 'Invalid credentials' });
+      if (mode.kind === 'native') return reply(res, 200, { ok: true, session: await sessions.create(method, mode.name, auth.tokenVersion, 'native') } satisfies NativeLoginResponse);
       const id = await sessions.create(method, req.headers['user-agent'] || 'Unknown browser', auth.tokenVersion);
       res.setHeader('Set-Cookie', `werdr=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}${tls ? '; Secure' : ''}`);
       return reply(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/api/')) {
-      const id = session(req);
-      if (!id) return reply(res, 401, { error: 'Sign in required' });
+      const secret = presented.kind === 'cookie' || presented.kind === 'bearer' ? presented.secret : undefined;
+      const id = sessionFor(secret);
+      if (!id || !secret) return reply(res, 401, { error: 'Sign in required' });
+      if (url.pathname === '/api/terminals/release' && req.method === 'POST') {
+        // A backgrounded app cannot rely on its suspended WebView to close its
+        // terminal sockets, so native code releases this session's controllers.
+        let released = 0;
+        for (const [ws, binding] of sockets) if (binding.session === id.id && terminalMachines.has(ws)) { closeSocket(ws, 1000, 'Released by this device'); released++; }
+        return reply(res, 200, { released } satisfies TerminalReleaseResponse);
+      }
+      if (url.pathname === '/api/socket-ticket' && req.method === 'POST') {
+        const ticket = tickets.issue({ session: id.id, secret });
+        if (!ticket) return reply(res, 503, { error: 'Too many outstanding socket tickets. Try again shortly.' });
+        return reply(res, 200, { ticket, expiresInSeconds: SOCKET_TICKET_SECONDS } satisfies SocketTicketResponse);
+      }
       if (url.pathname === '/api/session' && req.method === 'GET') return reply(res, 200, { canGenerateToken: id.method === 'password' });
       if (url.pathname === '/api/sessions' && req.method === 'GET') return reply(res, 200, { sessions: sessions.list(id.id, auth.tokenVersion) });
       if (url.pathname === '/api/sessions/revoke' && req.method === 'POST') {
@@ -153,7 +185,7 @@ const handler: RequestListener = async (req, res) => {
       }
       if (url.pathname === '/api/logout' && req.method === 'POST') {
         disconnectSessions(await sessions.revoke(record => record.id === id.id), 'Signed out');
-        res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
+        if (presented.kind === 'cookie') res.setHeader('Set-Cookie', `werdr=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tls ? '; Secure' : ''}`);
         return reply(res, 200, { ok: true });
       }
       if (url.pathname === '/api/settings' && req.method === 'GET') return reply(res, 200, settings.read());
@@ -292,17 +324,20 @@ server.headersTimeout = 10_000;
 let upgrades = 0;
 server.on('upgrade', async (req, socket, head) => {
   socket.on('error', () => socket.destroy());
-  const id = session(req);
-  const browserOrigin = requestOrigin(req.headers.host, req.headers.origin, allowedOrigins, scheme);
-  if (!id || !browserOrigin || req.headers.origin !== browserOrigin || sockets.size + upgrades >= 64) { socket.destroy(); return; }
+  let url: URL;
+  try { url = new URL(req.url || '/', origin); } catch { socket.destroy(); return; }
+  const bound = upgradeBinding({
+    ticket: url.searchParams.get('ticket'), origin: req.headers.origin, credential: credential(req),
+    hostOrigin: requestOrigin(req.headers.host, undefined, allowedOrigins, scheme),
+  }, tickets, (secret, expected) => sessionFor(secret, expected)?.id);
+  if (!bound || sockets.size + upgrades >= 64) { socket.destroy(); return; }
+  const current = () => sessionFor(bound.secret, bound.session);
   upgrades++;
   try {
-    const url = new URL(req.url || '/', origin);
     if (url.pathname === '/ws/fleet') {
-      if (socket.destroyed || !session(req)) { socket.destroy(); return; }
+      if (socket.destroyed || !current()) { socket.destroy(); return; }
       wsServer.handleUpgrade(req, socket, head, ws => {
-        sockets.set(ws, id.id);
-        sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
+        sockets.set(ws, bound);
         alive.add(ws); ws.on('pong', () => alive.add(ws));
         const send = (event: FleetEvent) => {
           if (ws.readyState !== WebSocket.OPEN) return;
@@ -312,12 +347,12 @@ server.on('upgrade', async (req, socket, head) => {
         const snapshot = () => send({ type: 'fleet.snapshot', state: fleet.state() });
         fleet.on('event', send); snapshot();
         ws.on('message', (data, binary) => {
-          try { if (binary || !session(req) || JSON.parse(data.toString()).type !== 'fleet.resync') throw new Error(); snapshot(); }
+          try { if (binary || !current() || JSON.parse(data.toString()).type !== 'fleet.resync') throw new Error(); snapshot(); }
           catch { closeSocket(ws, 1008, 'Invalid fleet command'); }
         });
         controllers.set(ws, () => fleet.off('event', send));
         ws.on('error', () => ws.terminate());
-        ws.on('close', () => { fleet.off('event', send); controllers.delete(ws); sockets.delete(ws); if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id); });
+        ws.on('close', () => { fleet.off('event', send); controllers.delete(ws); sockets.delete(ws); });
       });
       return;
     }
@@ -333,11 +368,10 @@ server.on('upgrade', async (req, socket, head) => {
       if (!popup || popup.terminal_id !== pane || popup.owner_tab_id !== publicId(url.searchParams.get('owner_tab_id'))) throw new Error('Popup session changed');
     }
     const cols = dimension(Number(url.searchParams.get('cols'))), rows = dimension(Number(url.searchParams.get('rows')));
-    if (socket.destroyed || !session(req) || terminalMachines.size >= 16) { socket.destroy(); return; }
+    if (socket.destroyed || !current() || terminalMachines.size >= 16) { socket.destroy(); return; }
     terminalWsServer.handleUpgrade(req, socket, head, ws => {
-      sockets.set(ws, id.id);
+      sockets.set(ws, bound);
       terminalMachines.set(ws, { id: machine.id, target: machine.target, session: machine.session });
-      sessionTokens.set(id.id, req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('werdr='))?.slice(6) || '');
       alive.add(ws); ws.on('pong', () => alive.add(ws));
       const child = terminalProcess(machine, pane, cols, rows, url.searchParams.get('takeover') === '1');
       const decoder = new NdjsonDecoder();
@@ -382,7 +416,7 @@ server.on('upgrade', async (req, socket, head) => {
       child.on('exit', code => { ended = true; clearTimeout(startup); send({ type: 'terminal.closed', reason: code ? 'Controller unavailable or terminal already owned. Use Take control to replace its owner.' : 'Terminal detached' }); closeSocket(ws, 1000); });
       ws.on('message', (data, binary) => {
         try {
-          if (!session(req) || released || ended) throw new Error('Invalid input');
+          if (!current() || released || ended) throw new Error('Invalid input');
           if (binary) {
             if (!terminalReady) { send({ type: 'terminal.image', status: 'error', message: 'Terminal is not ready for image paste.' }); return; }
             const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
@@ -399,7 +433,6 @@ server.on('upgrade', async (req, socket, head) => {
       ws.on('close', () => {
         stopScroll(); input.dispose();
         sockets.delete(ws); terminalMachines.delete(ws);
-        if (![...sockets.values()].includes(id.id)) sessionTokens.delete(id.id);
         controllers.get(ws)?.(); controllers.delete(ws);
       });
     });
@@ -414,7 +447,8 @@ fleet.on('event', (event: FleetEvent) => {
   }
 });
 const cleanup = setInterval(() => {
-  for (const [ws, owner] of sockets) if (!sessions.get(sessionTokens.get(owner), auth.tokenVersion)) closeSocket(ws, 1008, 'Session expired or revoked');
+  tickets.sweep();
+  for (const [ws, binding] of sockets) if (!sessionFor(binding.secret, binding.session)) closeSocket(ws, 1008, 'Session expired or revoked');
   for (const ws of sockets.keys()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (!alive.has(ws)) { controllers.get(ws)?.(); ws.terminate(); }
