@@ -195,6 +195,8 @@ Windows setup checks the existing named runtime, asks before installing the pinn
 Setup jobs belong to the initiating browser session; revoking that session cancels its active setup.
 Closing the setup dialog leaves a running job available to reopen; **CANCEL SETUP** cancels it explicitly.
 Disable or remove disconnects browser access without deleting remote workspaces or stopping their processes.
+Background commands on Linux and macOS hosts find Herdr on the remote `PATH` first, then in the locations Herdr installs to, such as `~/.local/bin`, so a shell that adds that directory only for interactive sessions still works.
+An offline host names the cause, such as an untrusted host key, refused key login, an unreachable or unresolvable name, or a missing Herdr, without forwarding remote output to the browser.
 See [Windows and terminal compatibility](werdr/WINDOWS.md) for the managed installation and remaining terminal acceptance criteria.
 
 Only loopback and private-network IPs may be bound.
