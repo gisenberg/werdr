@@ -13,6 +13,7 @@ import { terminalSelectionColors } from './terminal-selection';
 import { initialPaneScroll } from './initial-pane-scroll';
 import { TerminalClipboardRequests } from './terminal-osc52';
 import { characterTap, legacyChord, type KeyModifiers, type KeyTap } from './terminal-keys';
+import { watchDeviceScale } from './device-scale';
 type Colors = ReturnType<typeof palette>;
 export class TerminalController {
   readonly element = document.createElement('section');
@@ -194,6 +195,8 @@ export class TerminalController {
     });
     const resize = term.onResize(({ cols, rows }) => { this.scrollbar?.sync(); this.links?.cancel(); this.selectionMode?.clear(); this.copyMode?.afterFrame(); if (!applyingFrame && this.visible) { desired = { cols, rows }; sendSize(); } });
     const observer = new ResizeObserver(fitVisible); observer.observe(this.content);
+    // Re-measure cells at the new device scale; the cell grid may change with it.
+    const deviceScale = watchDeviceScale(ratio => { if (term.setDevicePixelRatio(ratio)) fitVisible(); });
     // AttachScroll uses crossterm modifier bits, unlike SGR mouse reports.
     const scrollPoint = (event: { clientX: number; clientY: number; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean }) => {
       const point = this.mouse.point(event);
@@ -242,6 +245,6 @@ export class TerminalController {
       this.shield.textContent = this.failure || 'Connection lost. Reattaching...'; this.changed();
       this.timer = setTimeout(() => { this.timer = undefined; if (epoch === this.epoch) void this.connect(false, true); }, Math.min(1000 * 2 ** this.attempt++, 10000));
     };
-    this.cleanup = () => { clearTimeout(scrollTimeout); keyboard.dispose(); boot.removeEventListener('close', reveal); observer.disconnect(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
+    this.cleanup = () => { clearTimeout(scrollTimeout); keyboard.dispose(); boot.removeEventListener('close', reveal); observer.disconnect(); deviceScale(); input.dispose(); resize.dispose(); this.content.removeEventListener('wheel', wheel, true); this.content.removeEventListener('touchstart', touchStart, true); this.content.removeEventListener('touchmove', touchMove, true); term.dispose(); };
   }
 }
