@@ -113,3 +113,21 @@ The patch only changes the color chosen for each painted inverse cell and adds n
 Build and package from source as above with Node 22.22.2, TypeScript 5.9.3, Vite 4.5.14 and npm 11.18.0; do not edit generated bundles or rebuild WASM.
 Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
 Remove this patch when the adopted upstream package paints inverse default colors and the painted-pixel regression passes.
+
+## Upstream fixes
+
+Werdr now uses `ghostty-web-0.4.1-pr169.faf6fbd.werdr7.tgz`, version `0.4.1-pr169.faf6fbd.werdr7`.
+Its SHA-256 is `26f050e969ac4d0d3820e5eeb35a386e2d6e4d07f63082cc2d58bcf7587600c2`.
+Apply `wmux-paste-control-characters.patch`, `wmux-fractional-dpr-backing-store.patch`, `wmux-empty-write.patch` and `wmux-fractional-viewport-rows.patch` in that order after the ten patches above.
+They carry fixes that upstream `coder/ghostty-web` has reported or proposed but not released; upstream `main` and its published 0.4.0 package predate this pin's Ghostty 1.3 WASM and lack APIs werdr uses, so moving to upstream is not yet possible.
+
+- The paste patch ports [coder/ghostty-web#193](https://github.com/coder/ghostty-web/pull/193) for CVE-2026-26982: pasted control bytes become spaces, so clipboard text cannot end a bracketed paste early with `ESC[201~` or reach the line discipline as Ctrl characters.
+- The backing-store patch fixes [coder/ghostty-web#198](https://github.com/coder/ghostty-web/issues/198): at fractional device scales every frame resized and repainted the terminal because the truncated canvas size never equalled the unrounded product, and `Terminal.resize()` overwrote the device-scaled backing store with an unscaled size.
+- The empty-write patch fixes [coder/ghostty-web#199](https://github.com/coder/ghostty-web/issues/199): `write('')` threw from a zero-length WASM allocation and skipped its callback.
+- The viewport patch ports [coder/ghostty-web#171](https://github.com/coder/ghostty-web/pull/171): smooth scrolling compared rows with a fractional offset but indexed with its floor, dropping the top screen row.
+
+Each patch includes Bun regression tests, and the fork's full Bun suite passes with all fourteen patches (456 tests, Bun 1.3.14).
+The browser regression in `web/test/terminal-device-scale.spec.ts` checks idle rendering at a 1.1 device scale, empty writes and paste sanitizing against the packaged bundle, and that native panes re-measure their cells after a device-scale change.
+Build and package from source as above with Node 22.22.2, TypeScript 5.9.3, Vite 4.5.14 and npm 11.18.0; do not edit generated bundles or rebuild WASM.
+Both WASM copies retain SHA-256 `ca95fbfc59133aa2ab76c03add4ea7e321a42fffe4d9127076279dae4372010e`.
+Remove each patch when an adopted upstream package contains the corresponding fix and its regression passes.
