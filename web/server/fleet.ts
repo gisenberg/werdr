@@ -8,6 +8,7 @@ import { noticeEndpointKey, type Agent, type FleetEvent, type FleetState, type H
 import { readNotices, semanticNotice } from './notices.ts';
 import { nativeEndpoint, NativeApiError, type NativeEndpoint, type NativeEvent, type Subscription } from './native-api.ts';
 import { readPrivateJson, writePrivateJson } from './private-json.ts';
+import { offlineDetail } from './host-diagnostics.ts';
 
 const lifecycle: Subscription[] = ['workspace.focused', 'tab.focused', 'pane.focused', 'workspace.created', 'workspace.updated', 'workspace.metadata_updated', 'workspace.renamed', 'workspace.moved', 'workspace.reordered', 'workspace.closed', 'tab.created', 'tab.closed', 'tab.renamed', 'tab.moved', 'pane.created', 'pane.closed', 'pane.updated', 'pane.moved', 'pane.exited', 'pane.agent_detected', 'layout.updated'].map(type => ({ type }));
 const identity = (machine: Machine) => JSON.stringify([machine.target, machine.session, machine.enabled, machine.platform]);
@@ -84,7 +85,7 @@ export class Fleet extends EventEmitter {
     if (this.stopped || !host.view.machine.enabled) return;
     this.retire(host);
     const incompatible = error instanceof NativeApiError && error.code === 'incompatible';
-    host.view = { ...host.view, connection: incompatible ? 'incompatible' : 'offline', detail: incompatible ? error.message : 'SSH or native server unavailable. Existing sessions are left running.' };
+    host.view = { ...host.view, connection: incompatible ? 'incompatible' : 'offline', detail: incompatible ? error.message : offlineDetail(error) };
     this.schedule(host, Math.min(1000 * 2 ** Math.min(host.attempts++, 5), 30_000)); this.publishHost(host);
     this.emit('diagnostic', new Error(`${host.view.machine.label}: ${error.message}`));
   }

@@ -49,10 +49,12 @@ async function unixRemoteTransport(machine: Machine, remotePath: string): Promis
   const directory = await mkdtemp(join(tmpdir(), 'werdr-api-'));
   const path = join(directory, 'api.sock');
   const child = spawn('ssh', [...sshArgs(machine), '-N', '-o', 'ExitOnForwardFailure=yes', '-L', `${path}:${remotePath}`, '--', machine.target!], { env: environment });
-  child.stderr.resume(); child.stdout.resume();
+  // Keep a bounded stderr tail so the fleet can classify the failure without forwarding it.
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4096); }); child.stdout.resume();
   let error: Error | undefined;
   child.on('error', value => { error = value; });
-  child.on('exit', () => { error ||= new Error('SSH API tunnel closed'); });
+  child.on('exit', () => { error ||= Object.assign(new Error('SSH API tunnel closed'), { stderr }); });
   const dispose = () => { terminate(child); void rm(directory, { recursive: true, force: true }); };
   try {
     for (let attempt = 0; attempt < 100; attempt++) {

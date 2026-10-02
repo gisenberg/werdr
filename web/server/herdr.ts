@@ -15,6 +15,22 @@ for (const key of ['HERDR_SOCKET_PATH', 'HERDR_CLIENT_SOCKET_PATH', 'HERDR_SESSI
 if (process.env.WERDR_SOCKET_PATH) environment.HERDR_SOCKET_PATH = process.env.WERDR_SOCKET_PATH;
 
 export function quotePosix(value: string): string { return "'" + value.replaceAll("'", "'\\''") + "'"; }
+/**
+ * Herdr's own SSH client installs to ~/.local/bin/herdr and finds it there even
+ * when a login shell adds that directory to PATH only for interactive sessions
+ * (zsh's .zshrc, for example). Background commands resolve the executable the
+ * same way: PATH first, then the locations Herdr and its package managers install
+ * to, mirroring src/remote/attach.rs. `sh -c` keeps the probe POSIX regardless
+ * of the login shell, and the arguments stay positional, so nothing is re-parsed.
+ */
+export const POSIX_HERDR_NOT_FOUND = 'herdr: no Herdr executable on PATH or in its install locations';
+export const posixHerdrLauncher = [
+  'for candidate in "$(command -v herdr 2>/dev/null)" "${HOME:+$HOME/.local/bin/herdr}" /opt/homebrew/bin/herdr /usr/local/bin/herdr /home/linuxbrew/.linuxbrew/bin/herdr "${HOME:+$HOME/.nix-profile/bin/herdr}" "${USER:+/etc/profiles/per-user/$USER/bin/herdr}" /nix/var/nix/profiles/default/bin/herdr /run/current-system/sw/bin/herdr; do',
+  '  if [ -n "$candidate" ] && [ -f "$candidate" ] && [ -x "$candidate" ]; then exec "$candidate" "$@"; fi',
+  'done',
+  `printf '%s\\n' '${POSIX_HERDR_NOT_FOUND}' >&2`,
+  'exit 127',
+].join('\n');
 export function invocation(machine: Machine, args: string[], role: 'runtime' | 'terminal-client' = 'runtime'): [string, string[]] {
   const scoped = machine.session ? ['--session', machine.session, ...args] : args;
   if (!machine.target) return [role === 'terminal-client' ? process.env.WERDR_TERMINAL_CLIENT_BIN || binary : binary, scoped];
@@ -24,13 +40,14 @@ export function invocation(machine: Machine, args: string[], role: 'runtime' | '
   const windows = isWindows(machine);
   const quotePowerShell = (value: string) => "'" + value.replaceAll("'", "''") + "'";
   const windowsBinary = (role === 'terminal-client' ? process.env.WERDR_WINDOWS_TERMINAL_CLIENT_BIN : undefined) || process.env.WERDR_WINDOWS_HERDR_BIN || (machine.platform === 'windows' ? managedWindowsBinary : undefined);
-  const posixBinary = (role === 'terminal-client' ? process.env.WERDR_POSIX_TERMINAL_CLIENT_BIN : undefined) || 'herdr';
-  if (!windows && (posixBinary.length > 4096 || /[\r\n\0]/.test(posixBinary))) throw new Error('Invalid POSIX Herdr executable path');
+  // An explicit deployment path is used as given; otherwise the launcher finds Herdr.
+  const posixBinary = (role === 'terminal-client' ? process.env.WERDR_POSIX_TERMINAL_CLIENT_BIN : undefined) || undefined;
+  if (!windows && posixBinary !== undefined && (posixBinary.length > 4096 || /[\r\n\0]/.test(posixBinary))) throw new Error('Invalid POSIX Herdr executable path');
   if (windows && windowsBinary && (windowsBinary.length > 4096 || /[\r\n\0]/.test(windowsBinary))) throw new Error('Invalid Windows Herdr executable path');
   const executable = windowsBinary ? `([Environment]::ExpandEnvironmentVariables(${quotePowerShell(windowsBinary)}))` : quotePowerShell('herdr');
   const remoteCommand = windows
     ? 'pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from('& ' + [executable, ...scoped.map(quotePowerShell)].join(' ') + '; exit $LASTEXITCODE', 'utf16le').toString('base64')
-    : [posixBinary, ...scoped].map(quotePosix).join(' ');
+    : (posixBinary === undefined ? ['sh', '-c', posixHerdrLauncher, 'herdr', ...scoped] : [posixBinary, ...scoped]).map(quotePosix).join(' ');
   return ['ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '--', machine.target, remoteCommand]];
 }
 export async function command(machine: Machine, args: string[]): Promise<any> {

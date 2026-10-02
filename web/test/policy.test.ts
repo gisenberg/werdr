@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { allowedBind, allowedHttpOrigins, requestOrigin, equalToken, terminalInput } from '../server/policy.ts';
-import { actionArgs, invocation, quotePosix } from '../server/herdr.ts';
+import { actionArgs, invocation, posixHerdrLauncher, POSIX_HERDR_NOT_FOUND, quotePosix } from '../server/herdr.ts';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 test('bind boundary admits private literals and rejects public, wildcard and DNS binds', () => {
   for (const host of ['127.0.0.1', '10.2.3.4', '172.16.0.1', '192.168.1.4', '100.64.0.1', '100.127.255.254', '::1', 'fd12::1']) assert.equal(allowedBind(host), true, host);
@@ -34,7 +38,7 @@ test('POSIX remote argument quoting preserves shell metacharacters literally', (
     assert.equal(execFileSync('/bin/sh', ['-c', 'printf %s ' + quotePosix(value)], { encoding: 'utf8' }), value);
   }
   const [file, args] = invocation({ id: 'ssh-test', label: 'Test', target: 'test-host', session: 'build', enabled: true }, ['api', 'snapshot']);
-  assert.equal(file, 'ssh'); assert.ok(args.includes('BatchMode=yes')); assert.equal(args.at(-1), "'herdr' '--session' 'build' 'api' 'snapshot'");
+  assert.equal(file, 'ssh'); assert.ok(args.includes('BatchMode=yes')); assert.equal(args.at(-1), ['sh', '-c', posixHerdrLauncher, 'herdr', '--session', 'build', 'api', 'snapshot'].map(quotePosix).join(' '));
   assert.throws(() => invocation({ id: 'bad', label: 'Bad', target: '-oProxyCommand=bad', enabled: true }, []));
 });
 test('Windows adapter encodes explicit argv without loading a PowerShell profile', () => {
@@ -107,4 +111,29 @@ test('scroll positions and native modifier bits survive validation', () => {
   assert.deepEqual(terminalInput({ ...base, column: 499, row: 0, modifiers: 15, ignored: true }), { ...base, column: 499, row: 0, modifiers: 15 });
   for (const field of ['column', 'row', 'modifiers']) for (const value of [-1, 1.5, '1', null, 500]) assert.throws(() => terminalInput({ ...base, [field]: value }));
   assert.throws(() => terminalInput({ ...base, modifiers: 16 }));
+});
+
+test('remote Herdr resolves from PATH first, then its install locations, with arguments intact', () => {
+  const home = mkdtempSync(join(tmpdir(), 'werdr-launcher-'));
+  try {
+    const fake = (path: string, name: string) => {
+      mkdirSync(join(path, '..'), { recursive: true });
+      writeFileSync(path, `#!/bin/sh\nprintf '%s' ${name}; for arg in "$@"; do printf '|%s' "$arg"; done\n`); chmodSync(path, 0o755);
+    };
+    const args = ['--session', "it's $(werdr)", 'status', '--json'];
+    // The remote side receives exactly the quoted command line werdr sends over SSH.
+    const remote = (path: string) => spawnSync('/bin/sh', ['-c', ['sh', '-c', posixHerdrLauncher, 'herdr', ...args].map(quotePosix).join(' ')], { encoding: 'utf8', env: { HOME: home, PATH: path, USER: 'nobody' } });
+    // A login shell whose interactive profile alone adds ~/.local/bin still finds the managed install.
+    fake(join(home, '.local/bin/herdr'), 'managed');
+    let result = remote('/usr/bin:/bin');
+    assert.equal(result.status, 0); assert.equal(result.stdout, "managed|--session|it's $(werdr)|status|--json");
+    // An executable on PATH wins, like Herdr's own SSH client.
+    fake(join(home, 'path-bin/herdr'), 'onpath');
+    result = remote(`${join(home, 'path-bin')}:/usr/bin:/bin`);
+    assert.equal(result.stdout.split('|')[0], 'onpath');
+    rmSync(join(home, '.local'), { recursive: true }); rmSync(join(home, 'path-bin'), { recursive: true });
+    result = remote('/usr/bin:/bin');
+    if (result.status === 0) return; // This test host has Herdr in a system location.
+    assert.equal(result.status, 127); assert.equal(result.stderr.trim(), POSIX_HERDR_NOT_FOUND);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
